@@ -1,0 +1,39 @@
+name: CI and security
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+      - run: pip install -r requirements.txt pip-audit bandit
+      - run: DEBUG=true python manage.py test
+      - run: DEBUG=true python manage.py makemigrations --check --dry-run
+      - run: SECRET_KEY='ci-only-long-secret-key-that-is-never-used-outside-this-check-123456' ALLOWED_HOSTS=example.com REDIS_URL=redis://localhost:6379/0 CLAMAV_HOST=clamav python manage.py check --deploy
+      - run: pip-audit -r requirements.txt
+      - run: bandit -q -r config core -x core/tests.py,core/migrations
+      - run: pip-audit -r requirements.txt --format cyclonedx-json --output sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sbom
+          path: sbom.json
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker compose config -q
+      - run: docker build -t tscm:${{ github.sha }} .
+      - uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: tscm:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
