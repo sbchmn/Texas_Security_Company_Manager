@@ -57,10 +57,27 @@ the production database configuration.
 ```bash
 cp .env.example .env
 # Edit every secret/password in .env before starting.
-docker compose up --build -d
-docker compose exec web python manage.py bootstrap_admin
-docker compose exec web python manage.py test
+docker compose -f compose.yaml up --build -d
+docker compose -f compose.yaml exec web python manage.py bootstrap_admin
+docker compose -f compose.yaml exec web python manage.py test
 ```
+
+Use `-f compose.yaml` explicitly if the checkout also contains a legacy
+`docker-compose.yml`; Docker Compose otherwise warns and selects one file by precedence.
+Remove or archive the legacy file once any local-only settings have been reconciled.
+
+Compose enables ClamAV scanning for the web service and relies on the official image's
+built-in `clamdcheck.sh` health check. Initial signature loading can take several minutes;
+inspect it with `docker compose -f compose.yaml logs -f clamav` if `web` remains pending.
+Do not replace that health check with `clamdscan --ping 1`: the separated optional
+argument may be interpreted as a scan target instead of a ping-attempt count.
+
+The bundled MySQL service enables `log_bin_trust_function_creators` because application
+migrations create deterministic tenant-integrity and append-only audit triggers. Without
+that server option, MySQL with binary logging rejects the migration user with error 1419.
+This setting applies only to the bundled database; managed MySQL deployments must allow
+the migration principal to create triggers or run migrations with a separate privileged
+schema account.
 
 The production image is shared by Compose and DigitalOcean App Platform. The example App
 Platform specification is located at `.do/app.yaml`; production deployments must supply
