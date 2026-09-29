@@ -182,6 +182,32 @@ class ProductionConfigurationTest(SimpleTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SECRET_KEY is required", result.stderr)
 
+    def test_proxy_ssl_header_trusted_only_when_configured(self):
+        import os
+        import pathlib
+        import subprocess
+        import sys
+
+        def resolve(header_value):
+            env = os.environ.copy()
+            # Explicit assignment (even empty) beats a developer .env via load_dotenv.
+            env["DEBUG"] = "true"
+            env["TRUST_PROXY_SSL_HEADER"] = header_value
+            result = subprocess.run(
+                [sys.executable, "-c", "import config.settings as s; print(s.SECURE_PROXY_SSL_HEADER)"],
+                cwd=str(pathlib.Path(__file__).resolve().parent.parent),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+
+        self.assertEqual(resolve(""), "None")
+        self.assertEqual(resolve("false"), "None")
+        self.assertEqual(resolve("true"), "('HTTP_X_FORWARDED_PROTO', 'https')")
+
 class AuthenticationSecurityTest(TestCase):
     def test_login_attempts_are_rate_limited(self):
         from django.core.cache import cache

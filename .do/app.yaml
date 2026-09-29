@@ -12,6 +12,8 @@ services:
     envs:
       - key: SECRET_KEY
         type: SECRET
+      - key: TRUST_PROXY_SSL_HEADER
+        value: "true"
       - key: ALLOWED_HOSTS
         value: ${APP_DOMAIN}
       - key: MYSQL_HOST

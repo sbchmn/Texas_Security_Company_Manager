@@ -66,6 +66,19 @@ Use `-f compose.yaml` explicitly if the checkout also contains a legacy
 `docker-compose.yml`; Docker Compose otherwise warns and selects one file by precedence.
 Remove or archive the legacy file once any local-only settings have been reconciled.
 
+Compose exposes the application only through Caddy, which terminates TLS on ports 80
+and 443 (overridable with `TSCM_HTTP_PORT`/`TSCM_HTTPS_PORT` when the host ports are
+taken) and forwards `X-Forwarded-Proto` to gunicorn; the web service publishes no port
+of its own. Open <https://localhost> — or the host configured by `TSCM_SITE_ADDRESS`
+and `TSCM_HTTPS_PORT` in `.env` — after startup. A public domain gets an automatic Let's Encrypt certificate;
+a LAN host name or IP address is served with a certificate from Caddy's internal CA,
+whose root clients must trust:
+`docker compose -f compose.yaml exec caddy cat /data/caddy/pki/authorities/local/root.crt`.
+The web container sets `TRUST_PROXY_SSL_HEADER=true` because Caddy overwrites
+client-supplied `X-Forwarded-Proto` values; any deployment topology where gunicorn is
+reachable without such a proxy must leave that variable unset, in which case Django
+ignores the header instead of trusting spoofable values.
+
 Compose enables ClamAV scanning for the web service and relies on the official image's
 built-in `clamdcheck.sh` health check. Initial signature loading can take several minutes;
 inspect it with `docker compose -f compose.yaml logs -f clamav` if `web` remains pending.
