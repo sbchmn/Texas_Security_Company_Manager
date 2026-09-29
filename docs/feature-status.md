@@ -2,6 +2,44 @@
 
 **Status date:** 2026-09-29
 
+## First vertical slice
+
+The recommended foundation slice is implemented end to end: idempotent bootstrap creates
+an organization, immutable slug, owner, and branch; owners and administrators can issue
+audited, single-use, 72-hour invitations; branding supports safe image processing,
+contrast validation, preview, publication history, and rollback; branches and personnel
+are tenant-scoped; custom personnel documents are validated, malware-scanned, stored
+through Django's storage abstraction, and audited; audit records are append-only and
+hash-chained; the responsive shell is installable and includes keyboard/reduced-motion
+accessibility safeguards; and the same image/configuration contract is represented in
+Compose and the DigitalOcean App Platform specification.
+
+This is completion of the deliberately thin foundation slice, not completion of every
+first-release workflow or any external production certification. The acceptance gates
+below remain in force.
+
+## Confirmed first-release outcomes
+
+The seven confirmed software outcomes are now represented end to end:
+
+1. HCRM includes personnel, custom fields, employment history, private records,
+   acknowledgments, retention/disposition, credentials, and training.
+2. Time and attendance includes online/offline capture, multiple geofenced sites,
+   immutable correction evidence, configurable workweeks and rounding, approval/lock,
+   and CSV, XLSX, and PDF payroll exports.
+3. Management and worker workflows share a responsive, keyboard-accessible web shell.
+4. The installable PWA uses an encrypted offline queue and the same server authorization
+   and compliance enforcement as online punches.
+5. Texas compliance configuration retains jurisdiction, primary-source URL/reference,
+   effective dates, owner-approved interpretation, evidence policy, warning window, and
+   separate scheduling/clock enforcement controls. Actual Texas rules must still be
+   entered and approved under the legal gate below; the product does not invent them.
+6. Transactional delivery supports Mailjet, Amazon SES, and Postmark for email and Amazon
+   SNS or Twilio for SMS. Invitations are queued through the same durable notification
+   path, including recipients who do not have an account yet.
+7. Bulk setup supports downloadable templates, dry-run validation, downloadable row
+   errors, duplicate-safe application, and all accepted entity types.
+
 ## Completed foundation capabilities
 
 | Area | Implemented capability |
