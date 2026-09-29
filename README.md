@@ -66,6 +66,12 @@ Use `-f compose.yaml` explicitly if the checkout also contains a legacy
 `docker-compose.yml`; Docker Compose otherwise warns and selects one file by precedence.
 Remove or archive the legacy file once any local-only settings have been reconciled.
 
+Compose enables ClamAV scanning for the web service and relies on the official image's
+built-in `clamdcheck.sh` health check. Initial signature loading can take several minutes;
+inspect it with `docker compose -f compose.yaml logs -f clamav` if `web` remains pending.
+Do not replace that health check with `clamdscan --ping 1`: the separated optional
+argument may be interpreted as a scan target instead of a ping-attempt count.
+
 The production image is shared by Compose and DigitalOcean App Platform. The example App
 Platform specification is located at `.do/app.yaml`; production deployments must supply
 secrets, configure a production MySQL database, persistent/object media storage, backups,

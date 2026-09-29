@@ -8,7 +8,9 @@ services:
       MYSQL_HOST: db
       MYSQL_PORT: 3306
       REDIS_URL: redis://cache:6379/0
+      MALWARE_SCAN_MODE: clamav
       CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
     volumes: ["media:/app/media"]
     depends_on:
       db:
@@ -37,11 +39,6 @@ services:
     volumes: ["redis:/data"]
   clamav:
     image: clamav/clamav:stable
-    healthcheck:
-      test: ["CMD", "clamdscan", "--ping", "1"]
-      interval: 15s
-      timeout: 10s
-      retries: 20
   db:
     image: mysql:8.4
     environment:
