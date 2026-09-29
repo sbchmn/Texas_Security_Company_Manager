@@ -1,4 +1,5 @@
 import csv
+import uuid
 import math
 from collections import defaultdict
 from datetime import timedelta
@@ -192,11 +193,11 @@ def deliver_notification(notification):
             sender=notification.organization.email_from or settings.DEFAULT_FROM_EMAIL
             provider=notification.organization.email_provider
             if provider==Organization.EmailProvider.MAILJET:
-                response=requests.post("https://api.mailjet.com/v3.1/send",auth=(_provider_secret("MAILJET_API_KEY"),_provider_secret("MAILJET_SECRET_KEY")),json={"Messages":[{"From":{"Email":sender,"Name":notification.organization.display_name},"To":[{"Email":recipient}],"Subject":notification.subject,"TextPart":notification.body,"HTMLPart":f"<p>{__import__('html').escape(notification.body)}</p>"}]},timeout=15); response.raise_for_status()
+                response=requests.post("https://api.mailjet.com/v3.1/send",auth=(_provider_secret("MAILJET_API_KEY"),_provider_secret("MAILJET_SECRET_KEY")),json={"Messages":[{"From":{"Email":sender,"Name":notification.organization.display_name},"To":[{"Email":recipient}],"Subject":notification.subject,"TextPart":notification.body,"HTMLPart":branded_email_html(notification)}]},timeout=15); response.raise_for_status()
             elif provider==Organization.EmailProvider.POSTMARK:
-                response=requests.post("https://api.postmarkapp.com/email",headers={"X-Postmark-Server-Token":_provider_secret("POSTMARK_SERVER_TOKEN")},json={"From":sender,"To":recipient,"Subject":notification.subject,"TextBody":notification.body,"HtmlBody":f"<p>{__import__('html').escape(notification.body)}</p>"},timeout=15); response.raise_for_status()
+                response=requests.post("https://api.postmarkapp.com/email",headers={"X-Postmark-Server-Token":_provider_secret("POSTMARK_SERVER_TOKEN")},json={"From":sender,"To":recipient,"Subject":notification.subject,"TextBody":notification.body,"HtmlBody":branded_email_html(notification)},timeout=15); response.raise_for_status()
             elif provider==Organization.EmailProvider.SES:
-                boto3.client("ses",region_name=settings.AWS_REGION).send_email(Source=sender,Destination={"ToAddresses":[recipient]},Message={"Subject":{"Data":notification.subject},"Body":{"Text":{"Data":notification.body},"Html":{"Data":f"<p>{__import__('html').escape(notification.body)}</p>"}}})
+                boto3.client("ses",region_name=settings.AWS_REGION).send_email(Source=sender,Destination={"ToAddresses":[recipient]},Message={"Subject":{"Data":notification.subject},"Body":{"Text":{"Data":notification.body},"Html":{"Data":branded_email_html(notification)}}})
         elif notification.channel == Notification.Channel.SMS:
             person=notification.organization.people.filter(user=notification.recipient).first()
             destination=getattr(person,"mobile_phone","")
@@ -278,7 +279,10 @@ def apply_csv_import(batch,actor):
             Branch.objects.update_or_create(organization=org,name=row["name"],defaults={"city":row.get("city","")})
         elif batch.entity==ImportBatch.Entity.PEOPLE:
             branch=org.branches.filter(name=row.get("branch","")).first()
-            Person.objects.update_or_create(organization=org,email=row["email"],defaults={"first_name":row["first_name"],"last_name":row["last_name"],"branch":branch,"status":row.get("status") or Person.Status.ONBOARDING,"is_unarmed_officer":_bool(row.get("is_unarmed_officer")),"is_commissioned_officer":_bool(row.get("is_commissioned_officer")),"is_ppo":_bool(row.get("is_ppo")),"is_private_investigator":_bool(row.get("is_private_investigator")),"is_shareholder":_bool(row.get("is_shareholder"))})
+            defaults={"first_name":row["first_name"],"last_name":row["last_name"],"branch":branch,"status":row.get("status") or Person.Status.ONBOARDING,"is_unarmed_officer":_bool(row.get("is_unarmed_officer")),"is_commissioned_officer":_bool(row.get("is_commissioned_officer")),"is_ppo":_bool(row.get("is_ppo")),"is_private_investigator":_bool(row.get("is_private_investigator")),"is_shareholder":_bool(row.get("is_shareholder"))}
+            for field in ("employee_id","job_title","mobile_phone","address_line1","address_line2","city","state","postal_code","emergency_contact_name","emergency_contact_phone","hourly_rate","hire_date","termination_date","date_of_birth"):
+                if row.get(field):defaults[field]=row[field]
+            Person.objects.update_or_create(organization=org,email=row["email"],defaults=defaults)
         elif batch.entity==ImportBatch.Entity.CLIENTS:
             Client.objects.update_or_create(organization=org,name=row["name"],defaults={"contact_name":row.get("contact_name", ""),"contact_email":row.get("contact_email","")})
         elif batch.entity==ImportBatch.Entity.SITES:
@@ -314,3 +318,68 @@ def execute_disposition(request,actor):
     request.status=DispositionRequest.Status.EXECUTED;request.approved_by=actor;request.executed_at=now;request.save(update_fields=["status","approved_by","executed_at"])
     AuditEvent.objects.create(organization=request.organization,actor=actor,action=f"document.{request.action}d",target_type="person_document_tombstone",target_id=str(document.pk),metadata={"request":str(request.pk),"reason":request.reason,"original_name":document.original_name,"sha256":document.sha256,"person":str(document.person_id),"document_type":str(document.document_type_id)})
     return document
+
+def process_brand_image(upload):
+    from io import BytesIO
+    from django.core.files.base import ContentFile
+    from PIL import Image,ImageOps,UnidentifiedImageError
+    if upload.size>5*1024*1024: raise ValidationError("Brand images must be 5 MiB or smaller.")
+    clean,_=malware_scan(upload)
+    if not clean: raise ValidationError("The brand image failed malware scanning.")
+    try:
+        image=Image.open(upload);image.verify();upload.seek(0);image=Image.open(upload);image=ImageOps.exif_transpose(image).convert("RGBA")
+    except (UnidentifiedImageError,Image.DecompressionBombError,Image.DecompressionBombWarning) as exc: raise ValidationError("Upload a safe PNG, JPEG, or WebP image.") from exc
+    image.thumbnail((2048,2048));output=BytesIO();image.save(output,format="PNG",optimize=True)
+    return ContentFile(output.getvalue(),name=f"brand-{uuid.uuid4().hex}.png")
+
+def brand_snapshot(organization):
+    return {"display_name":organization.display_name,"primary_color":organization.primary_color,"accent_color":organization.accent_color,"dark_primary_color":organization.dark_primary_color,"dark_accent_color":organization.dark_accent_color,"dark_mode_enabled":organization.dark_mode_enabled,"logo":organization.logo.name if organization.logo else "","support_email":organization.support_email,"support_phone":organization.support_phone,"timezone":organization.timezone}
+
+@transaction.atomic
+def create_brand_version(organization,actor):
+    from django.db.models import Max
+    from .models import BrandVersion
+    version=(organization.brand_versions.aggregate(value=Max("version"))["value"] or 0)+1
+    return BrandVersion.objects.create(organization=organization,version=version,snapshot=brand_snapshot(organization),created_by=actor)
+
+def branded_email_html(notification):
+    import html
+    org=notification.organization
+    logo=f'<img src="{html.escape(org.logo.url)}" alt="{html.escape(org.display_name)}" style="max-height:56px">' if org.logo else ""
+    return f'<div style="font-family:Arial,sans-serif;color:#172033"><div style="border-bottom:4px solid {org.accent_color};padding:16px 0">{logo}<strong>{html.escape(org.display_name)}</strong></div><h1 style="color:{org.primary_color};font-size:22px">{html.escape(notification.subject)}</h1><p>{html.escape(notification.body).replace(chr(10),"<br>")}</p></div>'
+
+def person_snapshot(person):
+    fields=("employee_id","first_name","last_name","email","mobile_phone","job_title","hire_date","termination_date","date_of_birth","address_line1","address_line2","city","state","postal_code","emergency_contact_name","emergency_contact_phone","hourly_rate","status","is_unarmed_officer","is_commissioned_officer","is_ppo","is_private_investigator","is_shareholder","branch_id")
+    return {field:str(getattr(person,field)) if getattr(person,field) is not None else None for field in fields}
+
+def record_person_history(person,before,actor):
+    from .models import AuditEvent,PersonHistory
+    after=person_snapshot(person);changes={key:{"before":before.get(key),"after":value} for key,value in after.items() if before.get(key)!=value}
+    if changes:
+        PersonHistory.objects.create(person=person,organization=person.organization,changed_by=actor,changes=changes,snapshot=after)
+        AuditEvent.objects.create(organization=person.organization,actor=actor,action="person.updated",target_type="person",target_id=str(person.pk),metadata={"fields":sorted(changes)})
+    return changes
+
+def coerce_custom_value(definition,raw):
+    from .models import CustomFieldDefinition
+    if raw in (None,""):
+        if definition.required: raise ValidationError(f"{definition.name} is required.")
+        return None
+    if definition.kind==CustomFieldDefinition.Kind.NUMBER:
+        try:return str(Decimal(raw))
+        except Exception as exc:raise ValidationError(f"{definition.name} must be a number.") from exc
+    if definition.kind==CustomFieldDefinition.Kind.DATE:
+        try:return __import__("datetime").date.fromisoformat(raw).isoformat()
+        except ValueError as exc:raise ValidationError(f"{definition.name} must be a date.") from exc
+    if definition.kind==CustomFieldDefinition.Kind.BOOLEAN:return str(raw).casefold() in ("1","true","yes","on")
+    return str(raw)[:2000]
+
+def verify_audit_chain(organization):
+    import hashlib,json
+    previous="";errors=[]
+    for event in organization.audit_events.order_by("occurred_at","id"):
+        payload=json.dumps({"id":str(event.pk),"organization":str(event.organization_id),"actor":event.actor_id,"action":event.action,"target_type":event.target_type,"target_id":event.target_id,"metadata":event.metadata,"previous_hash":previous},sort_keys=True,separators=(",",":"),default=str)
+        expected=hashlib.sha256(payload.encode()).hexdigest()
+        if event.previous_hash!=previous or event.event_hash!=expected:errors.append(str(event.pk))
+        previous=event.event_hash
+    return errors

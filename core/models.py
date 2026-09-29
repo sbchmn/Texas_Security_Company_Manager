@@ -1,10 +1,12 @@
 import uuid
+import json
+import hashlib
 from pathlib import Path
 from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
-from django.db import models
+from django.db import models, transaction
 
 hex_color = RegexValidator(r"^#[0-9A-Fa-f]{6}$", "Use a six-digit hex color, such as #16324F.")
 slug_validator = RegexValidator(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", "Use lowercase letters, numbers, and single hyphens.")
@@ -27,6 +29,9 @@ class Organization(models.Model):
     slug = models.SlugField(max_length=63, unique=True, validators=[slug_validator])
     primary_color = models.CharField(max_length=7, default="#16324F", validators=[hex_color])
     accent_color = models.CharField(max_length=7, default="#14B8A6", validators=[hex_color])
+    dark_primary_color = models.CharField(max_length=7, default="#0B1F33", validators=[hex_color])
+    dark_accent_color = models.CharField(max_length=7, default="#5EEAD4", validators=[hex_color])
+    dark_mode_enabled = models.BooleanField(default=True)
     logo = models.ImageField(upload_to="brands/%Y/%m/", blank=True, validators=[validate_brand_image_size])
     support_email = models.EmailField(blank=True)
     support_phone = models.CharField(max_length=30, blank=True)
@@ -36,11 +41,22 @@ class Organization(models.Model):
     sms_provider = models.CharField(max_length=20, choices=SmsProvider.choices, default=SmsProvider.SNS)
     sms_from = models.CharField(max_length=30, blank=True)
     mfa_required_roles = models.JSONField(default=list, blank=True)
+    audit_retention_days = models.PositiveIntegerField(default=2555)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.display_name
+
+class BrandVersion(models.Model):
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="brand_versions")
+    version=models.PositiveIntegerField()
+    snapshot=models.JSONField()
+    created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name="brand_versions")
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        ordering=["-version"]
+        constraints=[models.UniqueConstraint(fields=["organization","version"],name="unique_brand_version_in_org")]
 
 class Membership(models.Model):
     class Role(models.TextChoices):
@@ -83,6 +99,19 @@ class Person(models.Model):
     last_name = models.CharField(max_length=80)
     email = models.EmailField(blank=True)
     mobile_phone = models.CharField(max_length=30, blank=True)
+    employee_id = models.CharField(max_length=60, blank=True)
+    job_title = models.CharField(max_length=120, blank=True)
+    hire_date = models.DateField(null=True,blank=True)
+    termination_date = models.DateField(null=True,blank=True)
+    date_of_birth = models.DateField(null=True,blank=True)
+    address_line1 = models.CharField(max_length=180,blank=True)
+    address_line2 = models.CharField(max_length=180,blank=True)
+    city = models.CharField(max_length=100,blank=True)
+    state = models.CharField(max_length=2,default="TX")
+    postal_code = models.CharField(max_length=12,blank=True)
+    emergency_contact_name = models.CharField(max_length=160,blank=True)
+    emergency_contact_phone = models.CharField(max_length=30,blank=True)
+    hourly_rate = models.DecimalField(max_digits=9,decimal_places=2,null=True,blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ONBOARDING)
     is_unarmed_officer = models.BooleanField(default=False)
     is_commissioned_officer = models.BooleanField(default=False)
@@ -92,8 +121,46 @@ class Person(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         ordering = ["last_name", "first_name"]
+        constraints=[models.UniqueConstraint(fields=["organization","employee_id"],condition=~models.Q(employee_id=""),name="unique_employee_id_in_org")]
     @property
     def full_name(self): return f"{self.first_name} {self.last_name}"
+
+class PersonHistory(models.Model):
+    person=models.ForeignKey(Person,on_delete=models.CASCADE,related_name="history")
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="person_history")
+    changed_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True)
+    changes=models.JSONField(default=dict)
+    snapshot=models.JSONField(default=dict)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta: ordering=["-created_at"]
+
+class CustomFieldDefinition(models.Model):
+    class Kind(models.TextChoices):
+        TEXT="text","Text"
+        NUMBER="number","Number"
+        DATE="date","Date"
+        BOOLEAN="boolean","Yes / no"
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="custom_field_definitions")
+    name=models.CharField(max_length=120)
+    key=models.SlugField(max_length=60)
+    kind=models.CharField(max_length=20,choices=Kind.choices,default=Kind.TEXT)
+    required=models.BooleanField(default=False)
+    sensitive=models.BooleanField(default=False)
+    active=models.BooleanField(default=True)
+    class Meta:
+        ordering=["name"]
+        constraints=[models.UniqueConstraint(fields=["organization","key"],name="unique_custom_field_key_in_org")]
+    def __str__(self):return self.name
+
+class PersonCustomValue(models.Model):
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="person_custom_values")
+    person=models.ForeignKey(Person,on_delete=models.CASCADE,related_name="custom_values")
+    definition=models.ForeignKey(CustomFieldDefinition,on_delete=models.CASCADE,related_name="values")
+    value=models.JSONField(null=True,blank=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["person","definition"],name="unique_custom_value")]
+    def clean(self):
+        if self.person_id and self.person.organization_id!=self.organization_id:raise ValidationError("Person must belong to the same organization.")
+        if self.definition_id and self.definition.organization_id!=self.organization_id:raise ValidationError("Field definition must belong to the same organization.")
 
 class Client(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -240,6 +307,18 @@ class PersonDocument(models.Model):
         if self.person_id and self.person.organization_id != self.organization_id: raise ValidationError("Person must belong to the same organization.")
         if self.document_type_id and self.document_type.organization_id != self.organization_id: raise ValidationError("Document type must belong to the same organization.")
 
+class DocumentAcknowledgment(models.Model):
+    document=models.ForeignKey(PersonDocument,on_delete=models.PROTECT,related_name="acknowledgments")
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="document_acknowledgments")
+    person=models.ForeignKey(Person,on_delete=models.PROTECT,related_name="document_acknowledgments")
+    user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name="document_acknowledgments")
+    signature_name=models.CharField(max_length=160,blank=True)
+    statement=models.CharField(max_length=255)
+    document_sha256=models.CharField(max_length=64)
+    ip_hash=models.CharField(max_length=64)
+    acknowledged_at=models.DateTimeField(auto_now_add=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["document","person"],name="unique_document_acknowledgment")]
+
 class DispositionRequest(models.Model):
     class Action(models.TextChoices):
         ARCHIVE="archive","Archive"
@@ -385,6 +464,9 @@ class Punch(models.Model):
     review_status = models.CharField(max_length=20, choices=Review.choices, default=Review.ACCEPTED)
     exception_reason = models.CharField(max_length=255, blank=True)
     source = models.CharField(max_length=30, default="web")
+    device_id = models.UUIDField(null=True, blank=True)
+    device_sequence = models.PositiveBigIntegerField(null=True, blank=True)
+    checkpoint = models.ForeignKey("Checkpoint",on_delete=models.SET_NULL,null=True,blank=True,related_name="punches")
     class Meta:
         ordering = ["occurred_at"]
         indexes = [models.Index(fields=["organization", "person", "occurred_at"])]
@@ -393,6 +475,34 @@ class Punch(models.Model):
             raise ValidationError("Person must belong to the same organization.")
         if self.shift_id and self.shift.organization_id != self.organization_id:
             raise ValidationError("Shift must belong to the same organization.")
+
+class OfflineClockDevice(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="clock_devices")
+    person=models.ForeignKey(Person,on_delete=models.CASCADE,related_name="clock_devices")
+    user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name="clock_devices")
+    label=models.CharField(max_length=120,blank=True)
+    last_sequence=models.PositiveBigIntegerField(default=0)
+    active=models.BooleanField(default=True)
+    enrolled_at=models.DateTimeField(auto_now_add=True)
+    last_seen_at=models.DateTimeField(null=True,blank=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=["organization","user","id"],name="unique_clock_device_in_org")]
+
+class Checkpoint(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="checkpoints")
+    site=models.ForeignKey(Site,on_delete=models.CASCADE,related_name="checkpoints")
+    name=models.CharField(max_length=120)
+    scan_code=models.UUIDField(default=uuid.uuid4,unique=True,editable=False)
+    latitude=models.DecimalField(max_digits=9,decimal_places=6,null=True,blank=True)
+    longitude=models.DecimalField(max_digits=9,decimal_places=6,null=True,blank=True)
+    radius_meters=models.PositiveIntegerField(default=100)
+    active=models.BooleanField(default=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["site","name"],name="unique_checkpoint_name_at_site")]
+
+    def clean(self):
+        if self.site_id and self.site.organization_id != self.organization_id: raise ValidationError("Checkpoint must belong to the same organization.")
 
 class PunchAdjustment(models.Model):
     class Status(models.TextChoices):
@@ -436,9 +546,17 @@ class PayrollRun(models.Model):
         constraints=[models.UniqueConstraint(fields=["organization","period_start","period_end"],name="unique_payroll_period_in_org")]
 
 class OrganizationDomain(models.Model):
+    class Status(models.TextChoices):
+        PENDING="pending","Pending verification"
+        VERIFIED="verified","Verified"
+        FAILED="failed","Verification failed"
+        SUSPENDED="suspended","Suspended"
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="domains")
     hostname = models.CharField(max_length=253, unique=True)
     verified = models.BooleanField(default=False)
+    status = models.CharField(max_length=20,choices=Status.choices,default=Status.PENDING)
+    verification_token = models.CharField(max_length=64,default="")
+    verified_at = models.DateTimeField(null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 class AppendOnlyAuditQuerySet(models.QuerySet):
@@ -456,13 +574,37 @@ class AuditEvent(models.Model):
     target_type = models.CharField(max_length=80)
     target_id = models.CharField(max_length=100)
     metadata = models.JSONField(default=dict, blank=True)
+    previous_hash = models.CharField(max_length=64,blank=True)
+    event_hash = models.CharField(max_length=64,blank=True)
     occurred_at = models.DateTimeField(auto_now_add=True, db_index=True)
     objects = AppendOnlyAuditQuerySet.as_manager()
     class Meta:
         ordering = ["-occurred_at"]
+        constraints=[models.UniqueConstraint(fields=["organization","event_hash"],condition=~models.Q(event_hash=""),name="unique_audit_hash_in_org")]
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValueError("Audit events are append-only")
+        if self.event_hash or self.previous_hash: raise ValueError("Audit hashes are generated by the append-only writer")
+        with transaction.atomic():
+            Organization.objects.select_for_update().get(pk=self.organization_id)
+            previous=type(self).objects.filter(organization_id=self.organization_id).order_by("-occurred_at","-id").first()
+            self.previous_hash=previous.event_hash if previous else ""
+            payload=json.dumps({"id":str(self.pk),"organization":str(self.organization_id),"actor":self.actor_id,"action":self.action,"target_type":self.target_type,"target_id":self.target_id,"metadata":self.metadata,"previous_hash":self.previous_hash},sort_keys=True,separators=(",",":"),default=str)
+            self.event_hash=hashlib.sha256(payload.encode()).hexdigest()
+            return super().save(*args, **kwargs)
         return super().save(*args, **kwargs)
     def delete(self, *args, **kwargs):
         raise ValueError("Audit events cannot be deleted")
+
+class AuditRedaction(models.Model):
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name="audit_redactions")
+    event=models.ForeignKey(AuditEvent,on_delete=models.PROTECT,related_name="redactions")
+    fields=models.JSONField(default=list)
+    reason=models.TextField()
+    legal_basis=models.CharField(max_length=255)
+    requested_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name="requested_audit_redactions")
+    approved_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name="approved_audit_redactions")
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        ordering=["-created_at"]
+        constraints=[models.UniqueConstraint(fields=["event"],name="one_redaction_per_audit_event")]

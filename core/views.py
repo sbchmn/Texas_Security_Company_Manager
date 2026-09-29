@@ -2,17 +2,20 @@ import json
 import uuid
 from datetime import datetime, timedelta
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
+from django.core import signing
 from django.db import transaction
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
+from django.views.decorators.csrf import csrf_exempt
 from .auth import membership_required
-from .forms import BrandForm, BranchForm, ClientForm, CredentialForm, CredentialTypeForm, CsvImportForm, DispositionRequestForm, DocumentTypeForm, DocumentUploadForm, OrganizationSecurityForm, PayrollPeriodForm, PersonForm, PunchAdjustmentForm, ShiftForm, SiteForm, TimePolicyForm, TrainingRecordForm
-from .models import AuditEvent, Client, Credential, CredentialType, DispositionRequest, DocumentType, ImportBatch, Membership, Notification, PayrollRun, Person, PersonDocument, Punch, PunchAdjustment, Shift, Site, TimePolicy, TrainingRecord
-from .services import apply_csv_import, approve_payroll_run, create_payroll_run, execute_disposition, payroll_csv, preview_csv_import, record_punch, shift_eligibility, store_person_document
+from .forms import AuditRedactionForm, BrandForm, BranchForm, ClientForm, CredentialForm, CredentialTypeForm, CsvImportForm, CustomFieldDefinitionForm, DispositionRequestForm, DocumentAcknowledgmentForm, DocumentTypeForm, DocumentUploadForm, DomainForm, OrganizationSecurityForm, PayrollPeriodForm, PersonForm, PunchAdjustmentForm, ShiftForm, SiteForm, TimePolicyForm, TrainingRecordForm
+from .models import AuditEvent, AuditRedaction, BrandVersion, Checkpoint, Client, Credential, CredentialType, CustomFieldDefinition, DispositionRequest, DocumentAcknowledgment, DocumentType, ImportBatch, Membership, Notification, OfflineClockDevice, Organization, OrganizationDomain, PayrollRun, Person, PersonCustomValue, PersonDocument, Punch, PunchAdjustment, Shift, Site, TimePolicy, TrainingRecord
+from .services import apply_csv_import, approve_payroll_run, coerce_custom_value, create_brand_version, create_payroll_run, execute_disposition, payroll_csv, person_snapshot, preview_csv_import, process_brand_image, record_person_history, record_punch, shift_eligibility, store_person_document, verify_audit_chain
 
 PRIVILEGED = (Membership.Role.OWNER, Membership.Role.ADMIN)
 MANAGERS = PRIVILEGED + (Membership.Role.HR, Membership.Role.SCHEDULER, Membership.Role.SUPERVISOR)
@@ -33,7 +36,10 @@ def ready(request):
 
 @membership_required()
 def theme_css(request):
-    css=f":root{{--brand:{request.organization.primary_color};--accent:{request.organization.accent_color}}}"
+    org=request.organization
+    css=f":root{{--brand:{org.primary_color};--accent:{org.accent_color}}}"
+    if org.dark_mode_enabled:
+        css+=f"@media(prefers-color-scheme:dark){{:root{{--brand:{org.dark_primary_color};--accent:{org.dark_accent_color};--canvas:#0b1220;--surface:#111c2d;--ink:#f5f7fa;--muted:#aab6c7;--line:#2b3a50}}}}"
     return HttpResponse(css,content_type="text/css",headers={"Cache-Control":"private, max-age=300","X-Content-Type-Options":"nosniff"})
 
 @membership_required()
@@ -64,6 +70,46 @@ def person_create(request):
         return redirect("people")
     return render(request, "core/form.html", {"form": form, "title": "Add person", "eyebrow": "Personnel directory"})
 
+@membership_required()
+def person_detail(request,person_id):
+    person=request.organization.people.select_related("branch","user").filter(pk=person_id).first()
+    if not person:raise Http404
+    manager=request.membership.role in MANAGERS
+    if not manager and person.user_id!=request.user.id:raise Http404
+    values={item.definition_id:item for item in person.custom_values.select_related("definition")}
+    custom=[]
+    for definition in request.organization.custom_field_definitions.filter(active=True):
+        if definition.sensitive and not manager:continue
+        custom.append((definition,values.get(definition.id)))
+    return render(request,"core/person_detail.html",{"person":person,"custom":custom,"manager":manager})
+
+@membership_required(*MANAGERS)
+@transaction.atomic
+def person_edit(request,person_id):
+    person=request.organization.people.filter(pk=person_id).first()
+    if not person:raise Http404
+    before=person_snapshot(person);definitions=request.organization.custom_field_definitions.filter(active=True)
+    form=PersonForm(request.POST or None,instance=person);form.fields["branch"].queryset=request.organization.branches.filter(active=True)
+    custom_errors=[]
+    if request.method=="POST" and form.is_valid():
+        values={}
+        for definition in definitions:
+            try:values[definition]=coerce_custom_value(definition,request.POST.get(f"custom_{definition.key}"))
+            except ValidationError as exc:custom_errors.append(str(exc))
+        if not custom_errors:
+            person=form.save();record_person_history(person,before,request.user)
+            for definition,value in values.items():PersonCustomValue.objects.update_or_create(organization=request.organization,person=person,definition=definition,defaults={"value":value})
+            messages.success(request,"Personnel profile updated.");return redirect("person_detail",person_id=person.pk)
+    current={item.definition.key:item.value for item in person.custom_values.select_related("definition")}
+    return render(request,"core/person_edit.html",{"form":form,"person":person,"definitions":definitions,"current":current,"custom_errors":custom_errors})
+
+@membership_required(Membership.Role.OWNER,Membership.Role.ADMIN,Membership.Role.HR)
+def custom_field_create(request):
+    form=CustomFieldDefinitionForm(request.POST or None)
+    if request.method=="POST" and form.is_valid():
+        item=form.save(commit=False);item.organization=request.organization;item.save();AuditEvent.objects.create(organization=request.organization,actor=request.user,action="custom_field.created",target_type="custom_field_definition",target_id=str(item.pk),metadata={"key":item.key});messages.success(request,"Custom field created.");return redirect("people")
+    return render(request,"core/form.html",{"form":form,"title":"Add personnel field","eyebrow":"HCRM configuration"})
+
 @membership_required(*PRIVILEGED)
 @transaction.atomic
 def branch_create(request):
@@ -82,12 +128,33 @@ def branding(request):
     before = {"display_name": org.display_name, "primary_color": org.primary_color, "accent_color": org.accent_color}
     form = BrandForm(request.POST or None, request.FILES or None, instance=org)
     if request.method == "POST" and form.is_valid():
-        form.save()
+        item=form.save(commit=False)
+        if request.FILES.get("logo"):
+            try: item.logo=process_brand_image(request.FILES["logo"])
+            except ValidationError as exc:
+                form.add_error("logo",exc)
+                return render(request,"core/branding.html",{"form":form,"versions":org.brand_versions.all()[:10]})
+        item.save();create_brand_version(org,request.user)
         after = {"display_name": org.display_name, "primary_color": org.primary_color, "accent_color": org.accent_color}
         AuditEvent.objects.create(organization=org, actor=request.user, action="branding.updated", target_type="organization", target_id=str(org.pk), metadata={"before": before, "after": after})
         messages.success(request, "Brand settings published.")
         return redirect("branding")
-    return render(request, "core/branding.html", {"form": form})
+    return render(request, "core/branding.html", {"form": form,"versions":org.brand_versions.all()[:10]})
+
+@require_POST
+@membership_required(*PRIVILEGED)
+@transaction.atomic
+def brand_rollback(request,version_id):
+    version=request.organization.brand_versions.filter(pk=version_id).first()
+    if not version: raise Http404
+    org=request.organization
+    for field in ("display_name","primary_color","accent_color","dark_primary_color","dark_accent_color","dark_mode_enabled","support_email","support_phone","timezone"):
+        if field in version.snapshot: setattr(org,field,version.snapshot[field])
+    if "logo" in version.snapshot: org.logo=version.snapshot["logo"]
+    org.save();new_version=create_brand_version(org,request.user)
+    AuditEvent.objects.create(organization=org,actor=request.user,action="branding.rolled_back",target_type="brand_version",target_id=str(new_version.pk),metadata={"source_version":version.version})
+    messages.success(request,f"Brand restored from version {version.version}.")
+    return redirect("branding")
 
 def _scoped_form(form_class, organization, *args, **kwargs):
     form=form_class(*args, **kwargs)
@@ -175,6 +242,46 @@ def clock(request):
 
 @require_POST
 @membership_required()
+def clock_device_enroll(request):
+    person=request.organization.people.filter(user=request.user).first()
+    if not person:return JsonResponse({"error":"Your login is not linked to a personnel record."},status=403)
+    device=OfflineClockDevice.objects.create(organization=request.organization,person=person,user=request.user,label=request.headers.get("User-Agent","")[:120])
+    token=signing.dumps({"device":str(device.pk),"organization":str(request.organization.pk),"user":request.user.pk},salt="offline-clock")
+    AuditEvent.objects.create(organization=request.organization,actor=request.user,action="clock_device.enrolled",target_type="offline_clock_device",target_id=str(device.pk))
+    return JsonResponse({"device_id":str(device.pk),"token":token,"sequence":0})
+
+@csrf_exempt
+@require_POST
+@transaction.atomic
+def offline_punch_sync(request):
+    try:
+        data=json.loads(request.body); claims=signing.loads(data.pop("device_token"),salt="offline-clock",max_age=60*60*24*30)
+        device=OfflineClockDevice.objects.select_for_update().select_related("organization","person","user").get(pk=claims["device"],organization_id=claims["organization"],user_id=claims["user"],active=True)
+        sequence=int(data["device_sequence"])
+        existing=Punch.objects.filter(client_event_id=data.get("client_event_id"),organization=device.organization,person=device.person,device_id=device.id,device_sequence=sequence).first()
+        if existing:return JsonResponse({"id":str(existing.pk),"created":False,"review_status":existing.review_status,"exception":existing.exception_reason})
+        if sequence<=device.last_sequence: raise ValidationError("This device sequence was already processed.")
+        shift=None
+        if data.get("shift_id"):shift=device.organization.shifts.select_related("site").get(pk=data["shift_id"])
+        checkpoint=None
+        if data.get("checkpoint_code"):
+            checkpoint=Checkpoint.objects.select_related("site").get(organization=device.organization,scan_code=data["checkpoint_code"],active=True)
+            if not shift or shift.site_id!=checkpoint.site_id:raise ValidationError("Checkpoint does not belong to the selected shift site.")
+            if data.get("kind")!=Punch.Kind.CHECKPOINT:raise ValidationError("A checkpoint code requires a checkpoint punch.")
+            if checkpoint.latitude is not None and (data.get("latitude") is None or data.get("longitude") is None):raise ValidationError("Checkpoint location is required.")
+            from .services import haversine_meters
+            if checkpoint.latitude is not None and haversine_meters(data["latitude"],data["longitude"],checkpoint.latitude,checkpoint.longitude)>checkpoint.radius_meters:raise ValidationError("Checkpoint scan was outside its geofence.")
+        occurred_at=datetime.fromisoformat(data["occurred_at"].replace("Z","+00:00"))
+        punch,created=record_punch(organization=device.organization,person=device.person,shift=shift,client_event_id=uuid.UUID(data["client_event_id"]),kind=data["kind"],occurred_at=occurred_at,latitude=data.get("latitude"),longitude=data.get("longitude"),offline=bool(data.get("offline")),source="offline-pwa",actor=device.user)
+        if created:
+            punch.device_id=device.id;punch.device_sequence=sequence;punch.checkpoint=checkpoint;punch.save(update_fields=["device_id","device_sequence","checkpoint"])
+        device.last_sequence=sequence;device.last_seen_at=timezone.now();device.save(update_fields=["last_sequence","last_seen_at"])
+        return JsonResponse({"id":str(punch.pk),"created":created,"review_status":punch.review_status,"exception":punch.exception_reason},status=201 if created else 200)
+    except (KeyError,ValueError,ValidationError,signing.BadSignature,OfflineClockDevice.DoesNotExist,Shift.DoesNotExist,Checkpoint.DoesNotExist) as exc:
+        return JsonResponse({"error":str(exc)},status=400)
+
+@require_POST
+@membership_required()
 def punch_api(request):
     person=request.organization.people.filter(user=request.user).first()
     if not person: return JsonResponse({"error":"Your login is not linked to a personnel record."},status=403)
@@ -234,13 +341,38 @@ def document_upload(request):
         else: messages.success(request,"Document uploaded and scanned."); return redirect("documents")
     return render(request,"core/form.html",{"form":form,"title":"Upload personnel document","eyebrow":"HCRM records"})
 
-@membership_required(Membership.Role.OWNER,Membership.Role.ADMIN,Membership.Role.HR,Membership.Role.AUDITOR)
+@membership_required()
 def document_download(request,document_id):
-    document=request.organization.person_documents.filter(pk=document_id,deleted_at__isnull=True,scan_status=PersonDocument.ScanStatus.CLEAN).first()
+    document=request.organization.person_documents.select_related("person").filter(pk=document_id,deleted_at__isnull=True,scan_status=PersonDocument.ScanStatus.CLEAN).first()
     if not document: raise Http404
+    privileged=request.membership.role in (Membership.Role.OWNER,Membership.Role.ADMIN,Membership.Role.HR,Membership.Role.AUDITOR)
+    if not privileged and document.person.user_id!=request.user.id: raise Http404
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="document.downloaded",target_type="person_document",target_id=str(document.pk))
     response=FileResponse(document.file.open("rb"),as_attachment=True,filename=document.original_name,content_type="application/octet-stream")
     response["X-Content-Type-Options"]="nosniff"; response["Cache-Control"]="private, no-store"; return response
+
+@membership_required()
+def my_documents(request):
+    person=request.organization.people.filter(user=request.user).first()
+    records=person.documents.filter(deleted_at__isnull=True,scan_status=PersonDocument.ScanStatus.CLEAN).select_related("document_type") if person else []
+    return render(request,"core/my_documents.html",{"person":person,"documents":records})
+
+@membership_required()
+@transaction.atomic
+def document_acknowledge(request,document_id):
+    import hashlib,hmac
+    from django.conf import settings
+    person=request.organization.people.filter(user=request.user).first();document=request.organization.person_documents.select_related("document_type").filter(pk=document_id,person=person,deleted_at__isnull=True,scan_status=PersonDocument.ScanStatus.CLEAN).first()
+    if not document:raise Http404
+    form=DocumentAcknowledgmentForm(request.POST or None)
+    if request.method=="POST" and form.is_valid():
+        signature=form.cleaned_data["signature_name"].strip()
+        if document.document_type.signature_required and not signature:form.add_error("signature_name","A typed signature is required.")
+        else:
+            ip=request.META.get("REMOTE_ADDR","");ip_hash=hmac.new(settings.SECRET_KEY.encode(),ip.encode(),hashlib.sha256).hexdigest()
+            item,_=DocumentAcknowledgment.objects.update_or_create(document=document,person=person,defaults={"organization":request.organization,"user":request.user,"signature_name":signature,"statement":"I reviewed and acknowledge this document.","document_sha256":document.sha256,"ip_hash":ip_hash})
+            document.acknowledged_at=item.acknowledged_at;document.save(update_fields=["acknowledged_at"]);AuditEvent.objects.create(organization=request.organization,actor=request.user,action="document.acknowledged",target_type="person_document",target_id=str(document.pk),metadata={"sha256":document.sha256,"signed":bool(signature)});messages.success(request,"Acknowledgment recorded.");return redirect("my_documents")
+    return render(request,"core/document_acknowledge.html",{"form":form,"document":document})
 
 @membership_required(Membership.Role.OWNER,Membership.Role.ADMIN)
 def retention_review(request):
@@ -411,6 +543,83 @@ def security_settings(request):
         AuditEvent.objects.create(organization=request.organization,actor=request.user,action="security.mfa_policy_updated",target_type="organization",target_id=str(request.organization.pk),metadata={"before":before,"after":request.organization.mfa_required_roles})
         messages.success(request,"MFA policy updated.");return redirect("security_settings")
     return render(request,"core/security_settings.html",{"form":form})
+
+@membership_required()
+def tenant_select(request):
+    memberships=request.user.organization_memberships.filter(active=True).select_related("organization")
+    if request.method=="POST":
+        membership=memberships.filter(organization_id=request.POST.get("organization_id")).first()
+        if not membership: raise Http404
+        request.session.cycle_key();request.session["active_organization_id"]=str(membership.organization_id)
+        AuditEvent.objects.create(organization=membership.organization,actor=request.user,action="tenant.selected",target_type="organization",target_id=str(membership.organization_id))
+        return redirect("dashboard")
+    return render(request,"core/tenant_select.html",{"memberships":memberships})
+
+@membership_required(Membership.Role.OWNER,Membership.Role.ADMIN)
+def domains(request):
+    import secrets
+    form=DomainForm(request.POST or None)
+    if request.method=="POST" and form.is_valid():
+        item,created=OrganizationDomain.objects.get_or_create(hostname=form.cleaned_data["hostname"],defaults={"organization":request.organization,"verification_token":secrets.token_hex(24)})
+        if not created and item.organization_id!=request.organization.id: form.add_error("hostname","This hostname is already claimed.")
+        else:
+            AuditEvent.objects.create(organization=request.organization,actor=request.user,action="domain.requested",target_type="organization_domain",target_id=str(item.pk),metadata={"hostname":item.hostname})
+            messages.success(request,"Domain added. Publish the displayed DNS TXT record, then verify.");return redirect("domains")
+    return render(request,"core/domains.html",{"form":form,"domains":request.organization.domains.all()})
+
+@require_POST
+@membership_required(Membership.Role.OWNER,Membership.Role.ADMIN)
+def domain_verify(request,domain_id):
+    import dns.resolver
+    item=request.organization.domains.filter(pk=domain_id).first()
+    if not item: raise Http404
+    try:
+        answers=dns.resolver.resolve(f"_tscm-verification.{item.hostname}","TXT")
+        values={part.decode() for answer in answers for part in answer.strings}
+        if item.verification_token not in values: raise ValueError("Verification token was not found.")
+    except Exception:
+        item.status=OrganizationDomain.Status.FAILED;item.save(update_fields=["status"]);messages.error(request,"DNS verification failed. Confirm the TXT record and try again.")
+    else:
+        item.verified=True;item.status=OrganizationDomain.Status.VERIFIED;item.verified_at=timezone.now();item.save(update_fields=["verified","status","verified_at"])
+        AuditEvent.objects.create(organization=request.organization,actor=request.user,action="domain.verified",target_type="organization_domain",target_id=str(item.pk),metadata={"hostname":item.hostname});messages.success(request,"Domain verified. Configure it in the deployment platform to provision TLS.")
+    return redirect("domains")
+
+@login_required
+def platform_admin(request):
+    if not request.user.is_superuser: raise Http404
+    organizations=Organization.objects.annotate(member_count=__import__("django.db.models",fromlist=["Count"]).Count("memberships"),people_count=__import__("django.db.models",fromlist=["Count"]).Count("people",distinct=True)).order_by("display_name")
+    return render(request,"core/platform_admin.html",{"organizations":organizations})
+
+@membership_required(Membership.Role.OWNER,Membership.Role.ADMIN,Membership.Role.AUDITOR)
+def audit_log(request):
+    events=request.organization.audit_events.select_related("actor").prefetch_related("redactions")[:500]
+    return render(request,"core/audit_log.html",{"events":events,"chain_errors":verify_audit_chain(request.organization)})
+
+@membership_required(Membership.Role.OWNER,Membership.Role.ADMIN,Membership.Role.AUDITOR)
+def audit_export(request):
+    import json
+    errors=verify_audit_chain(request.organization)
+    response=HttpResponse(content_type="application/x-ndjson");response["Content-Disposition"]='attachment; filename="audit-export.ndjson"'
+    for event in request.organization.audit_events.order_by("occurred_at","id").prefetch_related("redactions"):
+        metadata=dict(event.metadata);redaction=event.redactions.first()
+        if redaction:
+            for field in redaction.fields:
+                if field in metadata:metadata[field]="[REDACTED]"
+        row={"id":str(event.pk),"occurred_at":event.occurred_at.isoformat(),"actor_id":event.actor_id,"action":event.action,"target_type":event.target_type,"target_id":event.target_id,"metadata":metadata,"previous_hash":event.previous_hash,"event_hash":event.event_hash,"redacted":bool(redaction),"chain_verified":str(event.pk) not in errors}
+        response.write(json.dumps(row,sort_keys=True,default=str)+"\n")
+    AuditEvent.objects.create(organization=request.organization,actor=request.user,action="audit.exported",target_type="organization",target_id=str(request.organization.pk),metadata={"event_count":request.organization.audit_events.count(),"chain_errors":len(errors)})
+    response["Cache-Control"]="private, no-store";return response
+
+@membership_required(Membership.Role.OWNER,Membership.Role.ADMIN)
+def audit_redact(request,event_id):
+    event=request.organization.audit_events.filter(pk=event_id).first()
+    if not event:raise Http404
+    form=AuditRedactionForm(request.POST or None)
+    if request.method=="POST" and form.is_valid():
+        redaction=AuditRedaction.objects.create(organization=request.organization,event=event,fields=form.cleaned_data["fields"],reason=form.cleaned_data["reason"],legal_basis=form.cleaned_data["legal_basis"],requested_by=request.user,approved_by=request.user)
+        AuditEvent.objects.create(organization=request.organization,actor=request.user,action="audit.redaction_recorded",target_type="audit_redaction",target_id=str(redaction.pk),metadata={"event_id":str(event.pk),"fields":redaction.fields,"reason":redaction.reason,"legal_basis":redaction.legal_basis})
+        messages.success(request,"Export redaction tombstone recorded.");return redirect("audit_log")
+    return render(request,"core/form.html",{"form":form,"title":"Redact audit export fields","eyebrow":"Audit governance"})
 
 @never_cache
 def manifest(request):

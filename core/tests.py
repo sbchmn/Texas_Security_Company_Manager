@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
-from .models import AuditEvent, Branch, Membership, Organization, PayrollRun, Person, Punch, PunchAdjustment
+from .models import AuditEvent, Branch, Checkpoint, Client, CustomFieldDefinition, Membership, OfflineClockDevice, Organization, PayrollRun, Person, PersonCustomValue, Punch, PunchAdjustment, Shift, Site
 
 class AppTestCase(TestCase):
     def setUp(self):
@@ -70,6 +70,49 @@ class UploadValidationTest(TestCase):
         form = BrandForm(data={"display_name":"Acme", "primary_color":"#112233", "accent_color":"#22AA99", "support_email":"", "support_phone":"", "timezone":"America/Chicago"}, files={"logo": upload})
         self.assertFalse(form.is_valid())
         self.assertIn("5 MiB", str(form.errors["logo"]))
+
+class CompletedMvpSecurityTest(TestCase):
+    def setUp(self):
+        User=get_user_model();self.user=User.objects.create_user(username="guard",password="secret")
+        self.org=Organization.objects.create(legal_name="Secure",display_name="Secure",slug="secure")
+        Membership.objects.create(organization=self.org,user=self.user,role=Membership.Role.OFFICER)
+        self.person=Person.objects.create(organization=self.org,user=self.user,first_name="G",last_name="One")
+
+    def test_audit_hash_chain_detects_raw_tampering(self):
+        from django.db import connection
+        from .services import verify_audit_chain
+        event=AuditEvent.objects.create(organization=self.org,actor=self.user,action="created",target_type="person",target_id=str(self.person.pk),metadata={"safe":"yes"})
+        self.assertEqual(verify_audit_chain(self.org),[])
+        with connection.cursor() as cursor:cursor.execute("UPDATE core_auditevent SET metadata=%s WHERE id=%s",['{\"safe\":\"no\"}',event.pk.hex])
+        self.assertEqual(verify_audit_chain(self.org),[str(event.pk)])
+
+    def test_offline_token_is_tenant_bound_replay_safe_and_idempotent(self):
+        from django.core import signing
+        from django.utils import timezone
+        device=OfflineClockDevice.objects.create(organization=self.org,person=self.person,user=self.user)
+        token=signing.dumps({"device":str(device.pk),"organization":str(self.org.pk),"user":self.user.pk},salt="offline-clock")
+        payload={"device_token":token,"device_sequence":1,"client_event_id":str(__import__('uuid').uuid4()),"kind":"in","occurred_at":timezone.now().isoformat(),"offline":True}
+        response=self.client.post(reverse("offline_punch_sync"),data=__import__('json').dumps(payload),content_type="application/json")
+        self.assertEqual(response.status_code,201)
+        self.assertEqual(self.client.post(reverse("offline_punch_sync"),data=__import__('json').dumps(payload),content_type="application/json").status_code,200)
+        payload["client_event_id"]=str(__import__('uuid').uuid4())
+        self.assertEqual(self.client.post(reverse("offline_punch_sync"),data=__import__('json').dumps(payload),content_type="application/json").status_code,400)
+
+    def test_checkpoint_rejects_wrong_site(self):
+        from django.core import signing
+        from django.utils import timezone
+        client=Client.objects.create(organization=self.org,name="Client");site=Site.objects.create(organization=self.org,client=client,name="A",address="A");other=Site.objects.create(organization=self.org,client=client,name="B",address="B")
+        shift=Shift.objects.create(organization=self.org,site=site,officer=self.person,starts_at=timezone.now(),ends_at=timezone.now()+__import__('datetime').timedelta(hours=8))
+        checkpoint=Checkpoint.objects.create(organization=self.org,site=other,name="Door")
+        device=OfflineClockDevice.objects.create(organization=self.org,person=self.person,user=self.user);token=signing.dumps({"device":str(device.pk),"organization":str(self.org.pk),"user":self.user.pk},salt="offline-clock")
+        payload={"device_token":token,"device_sequence":1,"client_event_id":str(__import__('uuid').uuid4()),"kind":"checkpoint","occurred_at":timezone.now().isoformat(),"offline":True,"shift_id":str(shift.pk),"checkpoint_code":str(checkpoint.scan_code)}
+        self.assertEqual(self.client.post(reverse("offline_punch_sync"),data=__import__('json').dumps(payload),content_type="application/json").status_code,400)
+
+    def test_custom_person_values_cannot_cross_tenants(self):
+        other=Organization.objects.create(legal_name="Other",display_name="Other",slug="secure-other")
+        definition=CustomFieldDefinition.objects.create(organization=other,name="Secret",key="secret")
+        value=PersonCustomValue(organization=self.org,person=self.person,definition=definition,value="x")
+        with self.assertRaises(ValidationError):value.full_clean()
 
 
 class ProductionConfigurationTest(SimpleTestCase):
@@ -351,3 +394,33 @@ class ProductionReadinessTest(TestCase):
         self.assertEqual(self.client.get(reverse("theme_css")).status_code,302)
         self.client.force_login(user);response=self.client.get(reverse("theme_css"));self.assertContains(response,"--brand:#112233");self.assertEqual(response["Content-Type"],"text/css")
         self.assertNotIn("'unsafe-inline'",self.client.get(reverse("health")).headers["Content-Security-Policy"])
+
+class MultiTenantIsolationTest(TestCase):
+    def setUp(self):
+        User=get_user_model();self.user=User.objects.create_user(username="multi@example.com",password="correct horse battery staple")
+        self.first=Organization.objects.create(legal_name="First LLC",display_name="First",slug="first")
+        self.second=Organization.objects.create(legal_name="Second LLC",display_name="Second",slug="second")
+        Membership.objects.create(user=self.user,organization=self.first,role=Membership.Role.ADMIN)
+        Membership.objects.create(user=self.user,organization=self.second,role=Membership.Role.ADMIN)
+        Person.objects.create(organization=self.first,first_name="First",last_name="Only")
+        Person.objects.create(organization=self.second,first_name="Second",last_name="Only")
+        self.client.force_login(self.user)
+    def test_explicit_tenant_selection_scopes_following_requests(self):
+        response=self.client.post(reverse("tenant_select"),{"organization_id":self.second.pk})
+        self.assertRedirects(response,reverse("dashboard"));directory=self.client.get(reverse("people"))
+        self.assertContains(directory,"Second Only");self.assertNotContains(directory,"First Only")
+    def test_verified_host_overrides_stale_session_selection(self):
+        from .models import OrganizationDomain
+        session=self.client.session;session["active_organization_id"]=str(self.first.pk);session.save()
+        OrganizationDomain.objects.create(organization=self.second,hostname="portal.second.example",verified=True,status=OrganizationDomain.Status.VERIFIED)
+        response=self.client.get(reverse("people"),HTTP_HOST="portal.second.example")
+        self.assertContains(response,"Second Only");self.assertNotContains(response,"First Only")
+    def test_unknown_host_is_rejected_before_tenant_resolution(self):
+        response=self.client.get(reverse("dashboard"),HTTP_HOST="attacker.example")
+        self.assertEqual(response.status_code,400)
+    def test_cross_tenant_form_choices_are_not_exposed(self):
+        response=self.client.post(reverse("tenant_select"),{"organization_id":self.first.pk});self.assertEqual(response.status_code,302)
+        page=self.client.get(reverse("credential_create"));self.assertNotContains(page,"Second Only")
+    def test_nonmember_cannot_select_tenant(self):
+        third=Organization.objects.create(legal_name="Third LLC",display_name="Third",slug="third")
+        self.assertEqual(self.client.post(reverse("tenant_select"),{"organization_id":third.pk}).status_code,404)

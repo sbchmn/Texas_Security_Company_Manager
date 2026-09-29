@@ -18,8 +18,9 @@ if not SECRET_KEY:
         raise ImproperlyConfigured("SECRET_KEY is required when DEBUG is false")
 
 default_hosts = "localhost,127.0.0.1,testserver" if DEBUG or IS_TEST else ""
-ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", default_hosts).split(",") if h.strip()]
-if not ALLOWED_HOSTS:
+PLATFORM_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", default_hosts).split(",") if h.strip()]
+ALLOWED_HOSTS = ["*"]
+if not PLATFORM_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS is required when DEBUG is false")
 CSRF_TRUSTED_ORIGINS = [u.strip() for u in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if u.strip()]
 
@@ -32,6 +33,7 @@ INSTALLED_APPS = [
     "core",
 ]
 MIDDLEWARE = [
+    "core.middleware.VerifiedHostMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "core.middleware.ResponseSecurityHeadersMiddleware",
@@ -41,6 +43,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    "core.middleware.TenantContextMiddleware",
     "core.middleware.RequiredMfaMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
