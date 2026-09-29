@@ -72,6 +72,13 @@ inspect it with `docker compose -f compose.yaml logs -f clamav` if `web` remains
 Do not replace that health check with `clamdscan --ping 1`: the separated optional
 argument may be interpreted as a scan target instead of a ping-attempt count.
 
+The bundled MySQL service enables `log_bin_trust_function_creators` because application
+migrations create deterministic tenant-integrity and append-only audit triggers. Without
+that server option, MySQL with binary logging rejects the migration user with error 1419.
+This setting applies only to the bundled database; managed MySQL deployments must allow
+the migration principal to create triggers or run migrations with a separate privileged
+schema account.
+
 The production image is shared by Compose and DigitalOcean App Platform. The example App
 Platform specification is located at `.do/app.yaml`; production deployments must supply
 secrets, configure a production MySQL database, persistent/object media storage, backups,

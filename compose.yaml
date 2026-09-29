@@ -41,6 +41,10 @@ services:
     image: clamav/clamav:stable
   db:
     image: mysql:8.4
+    # Django migrations install deterministic tenant-integrity and audit triggers.
+    # MySQL otherwise rejects CREATE TRIGGER for the application migration user
+    # whenever binary logging is enabled (error 1419).
+    command: ["--log-bin-trust-function-creators=1"]
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-tscm}
       MYSQL_USER: ${MYSQL_USER:-tscm}
