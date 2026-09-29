@@ -1,5 +1,27 @@
 from django import forms
+from django.contrib.auth.password_validation import validate_password
 from .models import Client, Credential, CredentialType, CustomFieldDefinition, DispositionRequest, DocumentType, Branch, ImportBatch, Membership, Organization, Person, Shift, Site, TimePolicy, TrainingRecord
+
+class MembershipInvitationForm(forms.Form):
+    email = forms.EmailField(help_text="The invitation is valid for 72 hours.")
+    role = forms.ChoiceField(choices=((Membership.Role.OWNER, "Owner"), (Membership.Role.ADMIN, "Administrator")))
+
+    def clean_email(self):
+        return self.cleaned_data["email"].strip().casefold()
+
+class InvitationAcceptanceForm(forms.Form):
+    first_name = forms.CharField(max_length=150)
+    last_name = forms.CharField(max_length=150)
+    password = forms.CharField(widget=forms.PasswordInput, min_length=12, help_text="Use at least 12 characters.")
+    password_confirmation = forms.CharField(widget=forms.PasswordInput, label="Confirm password")
+
+    def clean(self):
+        data = super().clean()
+        if data.get("password") != data.get("password_confirmation"):
+            self.add_error("password_confirmation", "Passwords do not match.")
+        elif data.get("password"):
+            validate_password(data["password"])
+        return data
 
 class BrandForm(forms.ModelForm):
     def __init__(self,*args,**kwargs):
@@ -61,7 +83,13 @@ class SiteForm(forms.ModelForm):
 class CredentialTypeForm(forms.ModelForm):
     class Meta:
         model = CredentialType
-        fields = ["name", "code", "blocks_scheduling", "blocks_clock_in", "warning_days", "evidence_required", "active"]
+        fields = ["name", "code", "jurisdiction", "authority_url", "authority_reference", "interpretation", "effective_from", "effective_until", "blocks_scheduling", "blocks_clock_in", "warning_days", "evidence_required", "active"]
+        widgets = {"effective_from": forms.DateInput(attrs={"type":"date"}), "effective_until": forms.DateInput(attrs={"type":"date"}), "interpretation": forms.Textarea(attrs={"rows":4})}
+    def clean(self):
+        data=super().clean()
+        if data.get("effective_from") and data.get("effective_until") and data["effective_until"] < data["effective_from"]:
+            self.add_error("effective_until", "End date must not precede the effective date.")
+        return data
 
 class CredentialForm(forms.ModelForm):
     class Meta:

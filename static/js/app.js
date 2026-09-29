@@ -1,5 +1,5 @@
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js'));
-document.querySelector('[data-menu]')?.addEventListener('click', () => document.body.classList.toggle('menu-open'));
+document.querySelector('[data-menu]')?.addEventListener('click', event => { const open=document.body.classList.toggle('menu-open'); event.currentTarget.setAttribute('aria-expanded', String(open)); });
 const search = document.querySelector('[data-table-search]');
 search?.addEventListener('input', () => { const q=search.value.toLowerCase(); document.querySelectorAll('[data-search-row]').forEach(row => row.hidden=!row.textContent.toLowerCase().includes(q)); });
 
