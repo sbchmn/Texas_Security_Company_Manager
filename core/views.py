@@ -2,20 +2,22 @@ import json
 import uuid
 from datetime import datetime, timedelta
 from django.contrib import messages
+from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.core import signing
 from django.db import transaction
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
 from .auth import membership_required
-from .forms import AuditRedactionForm, BrandForm, BranchForm, ClientForm, CredentialForm, CredentialTypeForm, CsvImportForm, CustomFieldDefinitionForm, DispositionRequestForm, DocumentAcknowledgmentForm, DocumentTypeForm, DocumentUploadForm, DomainForm, OrganizationSecurityForm, PayrollPeriodForm, PersonForm, PunchAdjustmentForm, ShiftForm, SiteForm, TimePolicyForm, TrainingRecordForm
-from .models import AuditEvent, AuditRedaction, BrandVersion, Checkpoint, Client, Credential, CredentialType, CustomFieldDefinition, DispositionRequest, DocumentAcknowledgment, DocumentType, ImportBatch, Membership, Notification, OfflineClockDevice, Organization, OrganizationDomain, PayrollRun, Person, PersonCustomValue, PersonDocument, Punch, PunchAdjustment, Shift, Site, TimePolicy, TrainingRecord
-from .services import apply_csv_import, approve_payroll_run, coerce_custom_value, create_brand_version, create_payroll_run, execute_disposition, payroll_csv, person_snapshot, preview_csv_import, process_brand_image, record_person_history, record_punch, shift_eligibility, store_person_document, verify_audit_chain
+from .forms import AuditRedactionForm, BrandForm, BranchForm, ClientForm, CredentialForm, CredentialTypeForm, CsvImportForm, CustomFieldDefinitionForm, DispositionRequestForm, DocumentAcknowledgmentForm, DocumentTypeForm, DocumentUploadForm, DomainForm, InvitationAcceptanceForm, MembershipInvitationForm, OrganizationSecurityForm, PayrollPeriodForm, PersonForm, PunchAdjustmentForm, ShiftForm, SiteForm, TimePolicyForm, TrainingRecordForm
+from .models import AuditEvent, AuditRedaction, BrandVersion, Checkpoint, Client, Credential, CredentialType, CustomFieldDefinition, DispositionRequest, DocumentAcknowledgment, DocumentType, ImportBatch, Membership, MembershipInvitation, Notification, OfflineClockDevice, Organization, OrganizationDomain, PayrollRun, Person, PersonCustomValue, PersonDocument, Punch, PunchAdjustment, Shift, Site, TimePolicy, TrainingRecord
+from .services import apply_csv_import, approve_payroll_run, coerce_custom_value, create_brand_version, create_payroll_run, execute_disposition, payroll_csv, payroll_snapshot_csv, payroll_snapshot_pdf, payroll_snapshot_xlsx, person_snapshot, preview_csv_import, process_brand_image, record_person_history, record_punch, shift_eligibility, store_person_document, verify_audit_chain
 
 PRIVILEGED = (Membership.Role.OWNER, Membership.Role.ADMIN)
 MANAGERS = PRIVILEGED + (Membership.Role.HR, Membership.Role.SCHEDULER, Membership.Role.SUPERVISOR)
@@ -52,6 +54,55 @@ def dashboard(request):
         "recent_events": org.audit_events.select_related("actor")[:6],
     }
     return render(request, "core/dashboard.html", context)
+
+@membership_required(*PRIVILEGED)
+@transaction.atomic
+def team(request):
+    form = MembershipInvitationForm(request.POST or None)
+    invitation_url = request.session.pop("new_invitation_url", None)
+    if request.method == "POST" and form.is_valid():
+        email = form.cleaned_data["email"]
+        if request.organization.memberships.filter(user__email__iexact=email, active=True).exists():
+            form.add_error("email", "This person is already an active member.")
+        else:
+            replaced = list(MembershipInvitation.objects.filter(organization=request.organization, email__iexact=email, accepted_at__isnull=True))
+            for previous in replaced:
+                AuditEvent.objects.create(organization=request.organization, actor=request.user, action="membership.invitation_replaced", target_type="membership_invitation", target_id=str(previous.pk), metadata={"email": email})
+                previous.delete()
+            invitation, token = MembershipInvitation.issue(organization=request.organization, email=email, role=form.cleaned_data["role"], invited_by=request.user, expires_at=timezone.now() + timedelta(hours=72))
+            AuditEvent.objects.create(organization=request.organization, actor=request.user, action="membership.invited", target_type="membership_invitation", target_id=str(invitation.pk), metadata={"email": email, "role": invitation.role})
+            invitation_url=request.build_absolute_uri(reverse("invitation_accept", args=[token]))
+            Notification.objects.create(organization=request.organization,destination=email,channel=Notification.Channel.EMAIL,event_type="membership.invitation",subject=f"Join {request.organization.display_name}",body=f"You were invited as {invitation.get_role_display()}. Accept this single-use invitation within 72 hours: {invitation_url}",deduplication_key=f"membership-invitation:{invitation.pk}")
+            request.session["new_invitation_url"] = invitation_url
+            messages.success(request, "Invitation queued for delivery. The single-use link is also shown below once.")
+            return redirect("team")
+    return render(request, "core/team.html", {"form": form, "invitation_url": invitation_url, "memberships": request.organization.memberships.select_related("user"), "invitations": request.organization.membership_invitations.filter(accepted_at__isnull=True)})
+
+@transaction.atomic
+def invitation_accept(request, token):
+    invitation = MembershipInvitation.objects.select_for_update().select_related("organization").filter(token_hash=MembershipInvitation.digest_token(token)).first()
+    if not invitation or invitation.accepted_at or invitation.expires_at <= timezone.now():
+        return render(request, "core/invitation_accept.html", {"invalid": True}, status=410)
+    User = get_user_model()
+    existing = User.objects.filter(email__iexact=invitation.email).first() or User.objects.filter(username__iexact=invitation.email).first()
+    if existing and (not request.user.is_authenticated or request.user.pk != existing.pk):
+        messages.info(request, "Sign in to the invited account before accepting this invitation.")
+        return redirect(f'{reverse("account_login")}?next={request.path}')
+    form = None if existing else InvitationAcceptanceForm(request.POST or None)
+    if request.method == "POST" and (existing or form.is_valid()):
+        user = existing
+        if user is None:
+            user = User(username=invitation.email, email=invitation.email, first_name=form.cleaned_data["first_name"], last_name=form.cleaned_data["last_name"])
+            user.set_password(form.cleaned_data["password"])
+            user.save()
+        membership, _ = Membership.objects.update_or_create(organization=invitation.organization, user=user, defaults={"role": invitation.role, "active": True})
+        invitation.accepted_at = timezone.now(); invitation.save(update_fields=["accepted_at"])
+        AuditEvent.objects.create(organization=invitation.organization, actor=user, action="membership.invitation_accepted", target_type="membership", target_id=str(membership.pk), metadata={"role": membership.role})
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+        request.session["active_organization_id"] = str(invitation.organization_id)
+        messages.success(request, f"Welcome to {invitation.organization.display_name}.")
+        return redirect("dashboard")
+    return render(request, "core/invitation_accept.html", {"invitation": invitation, "form": form})
 
 @membership_required(*MANAGERS)
 def people(request):
@@ -197,10 +248,12 @@ def compliance(request):
 def credential_type_create(request):
     form=CredentialTypeForm(request.POST or None)
     if request.method=="POST" and form.is_valid():
-        item=form.save(commit=False); item.organization=request.organization; item.save()
-        AuditEvent.objects.create(organization=request.organization,actor=request.user,action="credential_type.created",target_type="credential_type",target_id=str(item.pk),metadata={"name":item.name})
+        item=form.save(commit=False); item.organization=request.organization
+        if request.POST.get("approve") == "yes": item.approved_by=request.user;item.approved_at=timezone.now()
+        item.save()
+        AuditEvent.objects.create(organization=request.organization,actor=request.user,action="credential_type.created",target_type="credential_type",target_id=str(item.pk),metadata={"name":item.name,"approved":item.is_approved,"authority":item.authority_reference})
         messages.success(request,"Credential type created."); return redirect("compliance")
-    return render(request,"core/form.html",{"form":form,"title":"Add credential type","eyebrow":"Compliance"})
+    return render(request,"core/form.html",{"form":form,"title":"Add credential type","eyebrow":"Compliance","approval_control":True})
 
 @membership_required(*MANAGERS)
 @transaction.atomic
@@ -434,6 +487,25 @@ def imports(request):
         except ValidationError as exc: form.add_error("file",exc)
     return render(request,"core/imports.html",{"form":form,"batch":batch,"batches":request.organization.import_batches.all()[:20]})
 
+@membership_required(*MANAGERS)
+def import_template(request,entity):
+    from .services import IMPORT_COLUMNS
+    columns=IMPORT_COLUMNS.get(entity)
+    if not columns: raise Http404
+    response=HttpResponse(",".join(sorted(columns))+"\n",content_type="text/csv")
+    response["Content-Disposition"]=f'attachment; filename="{entity}-import-template.csv"'
+    return response
+
+@membership_required(*MANAGERS)
+def import_errors(request,batch_id):
+    import csv
+    from io import StringIO
+    batch=request.organization.import_batches.filter(pk=batch_id).first()
+    if not batch: raise Http404
+    output=StringIO();writer=csv.writer(output);writer.writerow(["row","errors"])
+    for item in batch.errors:writer.writerow([item.get("row"),"; ".join(item.get("errors",[]))])
+    response=HttpResponse(output.getvalue(),content_type="text/csv");response["Content-Disposition"]=f'attachment; filename="{batch.entity}-import-errors.csv"';return response
+
 @require_POST
 @membership_required(Membership.Role.OWNER,Membership.Role.ADMIN,Membership.Role.HR)
 def import_apply(request,batch_id):
@@ -526,14 +598,15 @@ def payroll_approve(request,run_id):
 @membership_required(Membership.Role.OWNER,Membership.Role.ADMIN,Membership.Role.PAYROLL)
 @transaction.atomic
 def payroll_run_export(request,run_id):
-    import csv
-    from io import StringIO
     run=request.organization.payroll_runs.filter(pk=run_id,status__in=[PayrollRun.Status.APPROVED,PayrollRun.Status.EXPORTED]).first()
     if not run: raise Http404
-    fields=["employee_id","employee","regular_hours","overtime_hours","total_hours","exception"]; output=StringIO();writer=csv.DictWriter(output,fieldnames=fields);writer.writeheader();writer.writerows(run.snapshot)
+    format=request.GET.get("format","csv").lower()
+    exporters={"csv":(payroll_snapshot_csv,"text/csv"),"xlsx":(payroll_snapshot_xlsx,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),"pdf":(payroll_snapshot_pdf,"application/pdf")}
+    if format not in exporters: raise Http404
+    exporter,content_type=exporters[format];output=exporter(run.snapshot)
     run.status=PayrollRun.Status.EXPORTED;run.exported_at=timezone.now();run.save(update_fields=["status","exported_at"])
-    AuditEvent.objects.create(organization=request.organization,actor=request.user,action="payroll.exported",target_type="payroll_run",target_id=str(run.pk),metadata={"rows":len(run.snapshot)})
-    response=HttpResponse(output.getvalue(),content_type="text/csv");response["Content-Disposition"]=f'attachment; filename="payroll-{run.period_start.date()}-{run.period_end.date()}.csv"';return response
+    AuditEvent.objects.create(organization=request.organization,actor=request.user,action="payroll.exported",target_type="payroll_run",target_id=str(run.pk),metadata={"rows":len(run.snapshot),"format":format})
+    response=HttpResponse(output,content_type=content_type);response["Content-Disposition"]=f'attachment; filename="payroll-{run.period_start.date()}-{run.period_end.date()}.{format}"';return response
 
 @membership_required(Membership.Role.OWNER,Membership.Role.ADMIN)
 def security_settings(request):

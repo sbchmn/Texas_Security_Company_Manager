@@ -12,7 +12,7 @@ from .models import AuditEvent, Credential, Punch, Shift, TimePolicy
 
 INVALID_CREDENTIAL_STATES = {"missing", "pending", "unverified", "expired", "suspended", "revoked"}
 
-def shift_eligibility(shift, officer=None):
+def shift_eligibility(shift, officer=None, purpose="schedule"):
     officer = officer or shift.officer
     reasons=[]
     if not officer:
@@ -21,6 +21,8 @@ def shift_eligibility(shift, officer=None):
         return False,["Officer belongs to another organization."]
     credentials={c.credential_type_id:c for c in officer.credentials.select_related("credential_type")}
     for required in shift.required_credentials.all():
+        if purpose == "schedule" and not required.blocks_scheduling: continue
+        if purpose == "clock" and not required.blocks_clock_in: continue
         credential=credentials.get(required.id)
         state=credential.effective_status if credential else "missing"
         if state in INVALID_CREDENTIAL_STATES:
@@ -53,7 +55,7 @@ def record_punch(*, organization, person, client_event_id, kind, occurred_at, ac
     policy,_=TimePolicy.objects.get_or_create(organization=organization,defaults={"timezone":organization.timezone})
     review=Punch.Review.ACCEPTED; reason=""
     if kind == Punch.Kind.IN and shift:
-        allowed,reasons=shift_eligibility(shift,person)
+        allowed,reasons=shift_eligibility(shift,person,purpose="clock")
         if not allowed: raise ValidationError("Clock-in blocked: "+" ".join(reasons))
     if policy.require_geofence and shift and shift.site.latitude is not None and shift.site.longitude is not None:
         if latitude is None or longitude is None:
@@ -72,13 +74,14 @@ def round_minutes(minutes, policy):
     return int(value.quantize(Decimal("1"),rounding=modes[policy.rounding_mode])*interval)
 
 def payroll_rows(organization, start, end):
+    from zoneinfo import ZoneInfo
     policy,_=TimePolicy.objects.get_or_create(organization=organization,defaults={"timezone":organization.timezone})
     punches=organization.punches.filter(occurred_at__gte=start,occurred_at__lt=end,review_status=Punch.Review.ACCEPTED).select_related("person","shift__site__client").prefetch_related("adjustments")
     grouped=defaultdict(list)
     for punch in punches: grouped[punch.person].append(punch)
     rows=[]
     for person,events in grouped.items():
-        total=0; open_in=None
+        weekly=defaultdict(int);open_in=None
         for event in events:
             approved=next((item for item in event.adjustments.all() if item.status=="approved"),None)
             event_time=approved.proposed_at if approved else event.occurred_at
@@ -86,8 +89,14 @@ def payroll_rows(organization, start, end):
             elif event.kind==Punch.Kind.OUT and open_in:
                 in_adjustment=next((item for item in open_in.adjustments.all() if item.status=="approved"),None)
                 in_time=in_adjustment.proposed_at if in_adjustment else open_in.occurred_at
-                if event_time>=in_time: total += int((event_time-in_time).total_seconds()//60); open_in=None
-        rounded=round_minutes(total,policy); hours=Decimal(rounded)/Decimal(60); regular=min(hours,policy.overtime_after_hours); overtime=max(Decimal(0),hours-policy.overtime_after_hours)
+                if event_time>=in_time:
+                    minutes=round_minutes(int((event_time-in_time).total_seconds()//60),policy)
+                    local_day=in_time.astimezone(ZoneInfo(policy.timezone)).date();days_since_start=(local_day.weekday()-policy.workweek_start)%7
+                    weekly[local_day-timedelta(days=days_since_start)] += minutes;open_in=None
+        regular=Decimal(0);overtime=Decimal(0)
+        for minutes in weekly.values():
+            hours=Decimal(minutes)/Decimal(60);regular+=min(hours,policy.overtime_after_hours);overtime+=max(Decimal(0),hours-policy.overtime_after_hours)
+        hours=regular+overtime
         rows.append({"employee_id":str(person.pk),"employee":person.full_name,"regular_hours":regular.quantize(Decimal("0.01")),"overtime_hours":overtime.quantize(Decimal("0.01")),"total_hours":hours.quantize(Decimal("0.01")),"exception":"Open punch" if open_in else ""})
     return rows
 
@@ -117,6 +126,47 @@ def approve_payroll_run(run,actor):
 def payroll_csv(organization,start,end):
     output=StringIO(); fields=["employee_id","employee","regular_hours","overtime_hours","total_hours","exception"]
     writer=csv.DictWriter(output,fieldnames=fields); writer.writeheader(); writer.writerows(payroll_rows(organization,start,end)); return output.getvalue()
+
+PAYROLL_EXPORT_FIELDS=["employee_id","employee","regular_hours","overtime_hours","total_hours","exception"]
+
+def payroll_snapshot_csv(rows):
+    output=StringIO();writer=csv.DictWriter(output,fieldnames=PAYROLL_EXPORT_FIELDS);writer.writeheader();writer.writerows(rows);return output.getvalue().encode("utf-8")
+
+def payroll_snapshot_xlsx(rows):
+    """Create a small standards-compliant XLSX without adding a report dependency."""
+    import zipfile
+    from io import BytesIO
+    from xml.sax.saxutils import escape
+    values=[PAYROLL_EXPORT_FIELDS]+[[str(row.get(field,"")) for field in PAYROLL_EXPORT_FIELDS] for row in rows]
+    xml_rows=[]
+    for number,row in enumerate(values,1):
+        cells=[]
+        for column,value in enumerate(row,1):
+            letters="";n=column
+            while n:n,remainder=divmod(n-1,26);letters=chr(65+remainder)+letters
+            cells.append(f'<c r="{letters}{number}" t="inlineStr"><is><t>{escape(value)}</t></is></c>')
+        xml_rows.append(f'<row r="{number}">{"".join(cells)}</row>')
+    sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'+"".join(xml_rows)+"</sheetData></worksheet>"
+    files={"[Content_Types].xml":'<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',"_rels/.rels":'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',"xl/workbook.xml":'<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Payroll" sheetId="1" r:id="rId1"/></sheets></workbook>',"xl/_rels/workbook.xml.rels":'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',"xl/worksheets/sheet1.xml":sheet}
+    output=BytesIO()
+    with zipfile.ZipFile(output,"w",zipfile.ZIP_DEFLATED) as archive:
+        for name,content in files.items():archive.writestr(name,content)
+    return output.getvalue()
+
+def payroll_snapshot_pdf(rows):
+    """Render a portable, dependency-free text PDF for payroll handoff."""
+    lines=["Payroll report"," | ".join(PAYROLL_EXPORT_FIELDS)]
+    lines.extend(" | ".join(str(row.get(field,"")) for field in PAYROLL_EXPORT_FIELDS) for row in rows)
+    def pdf_escape(value): return value.replace("\\","\\\\").replace("(","\\(").replace(")","\\)")
+    commands=["BT /F1 9 Tf 36 756 Td"]
+    for index,line in enumerate(lines): commands.append(f"{'0 -14 Td ' if index else ''}({pdf_escape(line[:150])}) Tj")
+    commands.append("ET");stream="\n".join(commands).encode()
+    objects=[b"<< /Type /Catalog /Pages 2 0 R >>",b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",f"<< /Length {len(stream)} >>\nstream\n".encode()+stream+b"\nendstream",b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    output=bytearray(b"%PDF-1.4\n");offsets=[0]
+    for number,obj in enumerate(objects,1):offsets.append(len(output));output.extend(f"{number} 0 obj\n".encode()+obj+b"\nendobj\n")
+    xref=len(output);output.extend(f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode());return bytes(output)
 
 ALLOWED_DOCUMENT_SIGNATURES = {
     ".pdf": (b"%PDF-",), ".png": (b"\x89PNG\r\n\x1a\n",),
@@ -188,7 +238,7 @@ def deliver_notification(notification):
         if notification.channel == Notification.Channel.IN_APP:
             pass
         elif notification.channel == Notification.Channel.EMAIL:
-            recipient=notification.recipient.email
+            recipient=notification.destination or (notification.recipient.email if notification.recipient else "")
             if not recipient: raise RuntimeError("Recipient has no email address")
             sender=notification.organization.email_from or settings.DEFAULT_FROM_EMAIL
             provider=notification.organization.email_provider
@@ -199,8 +249,8 @@ def deliver_notification(notification):
             elif provider==Organization.EmailProvider.SES:
                 boto3.client("ses",region_name=settings.AWS_REGION).send_email(Source=sender,Destination={"ToAddresses":[recipient]},Message={"Subject":{"Data":notification.subject},"Body":{"Text":{"Data":notification.body},"Html":{"Data":branded_email_html(notification)}}})
         elif notification.channel == Notification.Channel.SMS:
-            person=notification.organization.people.filter(user=notification.recipient).first()
-            destination=getattr(person,"mobile_phone","")
+            person=notification.organization.people.filter(user=notification.recipient).first() if notification.recipient else None
+            destination=notification.destination or getattr(person,"mobile_phone","")
             if not destination: raise RuntimeError("Recipient has no mobile phone")
             if notification.organization.sms_provider==Organization.SmsProvider.SNS:
                 boto3.client("sns",region_name=settings.AWS_REGION).publish(PhoneNumber=destination,Message=notification.body)
