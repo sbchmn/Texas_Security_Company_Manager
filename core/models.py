@@ -1,6 +1,7 @@
 import uuid
 import json
 import hashlib
+import secrets
 from pathlib import Path
 from decimal import Decimal
 from django.conf import settings
@@ -75,6 +76,31 @@ class Membership(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["organization", "user"], name="one_membership_per_org")]
+
+class MembershipInvitation(models.Model):
+    """Single-use invitation for an organization owner or administrator."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="membership_invitations")
+    email = models.EmailField()
+    role = models.CharField(max_length=30, choices=[(Membership.Role.OWNER, "Owner"), (Membership.Role.ADMIN, "Administrator")])
+    token_hash = models.CharField(max_length=64, unique=True)
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="sent_membership_invitations")
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [models.UniqueConstraint(fields=["organization", "email"], condition=models.Q(accepted_at__isnull=True), name="one_pending_invitation_per_org_email")]
+
+    @staticmethod
+    def digest_token(token):
+        return hashlib.sha256(token.encode()).hexdigest()
+
+    @classmethod
+    def issue(cls, *, organization, email, role, invited_by, expires_at):
+        token = secrets.token_urlsafe(32)
+        invitation = cls.objects.create(organization=organization, email=email.casefold(), role=role, token_hash=cls.digest_token(token), invited_by=invited_by, expires_at=expires_at)
+        return invitation, token
 
 class Branch(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="branches")
@@ -204,11 +230,22 @@ class CredentialType(models.Model):
     blocks_clock_in = models.BooleanField(default=True)
     warning_days = models.PositiveIntegerField(default=60)
     evidence_required = models.BooleanField(default=True)
+    jurisdiction = models.CharField(max_length=80, default="Texas")
+    authority_url = models.URLField(blank=True)
+    authority_reference = models.CharField(max_length=180, blank=True)
+    interpretation = models.TextField(blank=True)
+    effective_from = models.DateField(null=True, blank=True)
+    effective_until = models.DateField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="approved_credential_rules")
     active = models.BooleanField(default=True)
     class Meta:
         ordering = ["name"]
         constraints = [models.UniqueConstraint(fields=["organization", "code"], name="unique_credential_code_in_org")]
     def __str__(self): return self.name
+    @property
+    def is_approved(self):
+        return bool(self.approved_at and self.approved_by_id and self.authority_url and self.authority_reference and self.interpretation)
 
 class Credential(models.Model):
     class Status(models.TextChoices):
@@ -351,7 +388,8 @@ class Notification(models.Model):
         READ="read","Read"
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
     organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name="notifications")
-    recipient=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name="workforce_notifications")
+    recipient=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,null=True,blank=True,related_name="workforce_notifications")
+    destination=models.CharField(max_length=320,blank=True,help_text="Explicit email address or phone number for recipients without an account.")
     channel=models.CharField(max_length=20,choices=Channel.choices,default=Channel.IN_APP)
     event_type=models.CharField(max_length=100)
     subject=models.CharField(max_length=200)

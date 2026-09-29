@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
-from .models import AuditEvent, Branch, Checkpoint, Client, CustomFieldDefinition, Membership, OfflineClockDevice, Organization, PayrollRun, Person, PersonCustomValue, Punch, PunchAdjustment, Shift, Site
+from .models import AuditEvent, Branch, Checkpoint, Client, CustomFieldDefinition, ImportBatch, Membership, MembershipInvitation, Notification, OfflineClockDevice, Organization, PayrollRun, Person, PersonCustomValue, Punch, PunchAdjustment, Shift, Site
 
 class AppTestCase(TestCase):
     def setUp(self):
@@ -26,6 +26,10 @@ class AppTestCase(TestCase):
     def test_dashboard_requires_login(self):
         response=self.client.get(reverse("dashboard"))
         self.assertRedirects(response, "/accounts/login/?next=/")
+
+    def test_login_without_next_redirects_to_dashboard(self):
+        response=self.client.post(reverse("account_login"),{"login":"owner@example.com","password":"correct horse battery staple"})
+        self.assertRedirects(response,reverse("dashboard"))
 
     def test_people_are_tenant_scoped(self):
         Person.objects.create(organization=self.org, first_name="Visible", last_name="Officer", branch=self.branch)
@@ -57,6 +61,50 @@ class AppTestCase(TestCase):
         with self.assertRaises(ValueError): event.delete()
         with self.assertRaises(ValueError): AuditEvent.objects.filter(pk=event.pk).update(action="changed")
         with self.assertRaises(ValueError): AuditEvent.objects.filter(pk=event.pk).delete()
+
+class FirstVerticalSliceTest(TestCase):
+    def setUp(self):
+        User=get_user_model()
+        self.owner=User.objects.create_user(username="owner@example.com",email="owner@example.com",password="correct horse battery staple")
+        self.officer=User.objects.create_user(username="officer@example.com",email="officer@example.com",password="correct horse battery staple")
+        self.org=Organization.objects.create(legal_name="Pilot Security LLC",display_name="Pilot Security",slug="pilot-security")
+        Membership.objects.create(user=self.owner,organization=self.org,role=Membership.Role.OWNER)
+        Membership.objects.create(user=self.officer,organization=self.org,role=Membership.Role.OFFICER)
+
+    def test_owner_can_invite_and_new_admin_can_accept_once(self):
+        self.client.force_login(self.owner)
+        response=self.client.post(reverse("team"),{"email":"New.Admin@Example.com","role":Membership.Role.ADMIN},follow=True)
+        self.assertEqual(response.status_code,200)
+        invitation=MembershipInvitation.objects.get()
+        self.assertEqual(invitation.email,"new.admin@example.com")
+        self.assertContains(response,"Invitation ready")
+        invitation_url=response.context["invitation_url"]
+        token=invitation_url.rstrip("/").rsplit("/",1)[-1]
+        self.assertNotEqual(invitation.token_hash,token)
+        notice=Notification.objects.get(event_type="membership.invitation")
+        self.assertEqual(notice.destination,"new.admin@example.com")
+        self.assertIn(token,notice.body)
+        self.client.logout()
+        accepted=self.client.post(reverse("invitation_accept",args=[token]),{"first_name":"New","last_name":"Admin","password":"long secure password","password_confirmation":"long secure password"})
+        self.assertRedirects(accepted,reverse("dashboard"))
+        invitation.refresh_from_db()
+        self.assertIsNotNone(invitation.accepted_at)
+        membership=Membership.objects.get(organization=self.org,user__email="new.admin@example.com")
+        self.assertEqual(membership.role,Membership.Role.ADMIN)
+        self.assertTrue(AuditEvent.objects.filter(organization=self.org,action="membership.invited").exists())
+        self.assertTrue(AuditEvent.objects.filter(organization=self.org,action="membership.invitation_accepted").exists())
+        self.assertEqual(self.client.get(reverse("invitation_accept",args=[token])).status_code,410)
+
+    def test_officer_cannot_manage_team_access(self):
+        self.client.force_login(self.officer)
+        self.assertEqual(self.client.get(reverse("team")).status_code,403)
+
+    def test_authenticated_shell_has_accessibility_landmarks(self):
+        self.client.force_login(self.owner)
+        response=self.client.get(reverse("dashboard"))
+        self.assertContains(response,'href="#main-content"')
+        self.assertContains(response,'<main id="main-content"')
+        self.assertContains(response,'aria-label="Main navigation"')
 
 class UploadValidationTest(TestCase):
     def test_oversized_brand_logo_is_rejected(self):
@@ -165,6 +213,12 @@ class WorkforceServiceTest(TestCase):
         from .services import shift_eligibility
         allowed,reasons=shift_eligibility(self.shift)
         self.assertFalse(allowed); self.assertIn("missing", reasons[0])
+
+    def test_enforcement_respects_schedule_and_clock_controls(self):
+        from .services import shift_eligibility
+        self.credential_type.blocks_scheduling=False;self.credential_type.blocks_clock_in=True;self.credential_type.save(update_fields=["blocks_scheduling","blocks_clock_in"])
+        self.assertTrue(shift_eligibility(self.shift,purpose="schedule")[0])
+        self.assertFalse(shift_eligibility(self.shift,purpose="clock")[0])
 
     def test_expired_credential_blocks_clock_in(self):
         import uuid
@@ -310,6 +364,11 @@ class CsvImportTest(TestCase):
         from .models import ImportBatch
         response=self.client.post(reverse("imports"),{"entity":"people","file":SimpleUploadedFile("people.csv",b"first_name,last_name,email\nMissing,Email,\n",content_type="text/csv")})
         self.assertEqual(response.status_code,200); self.assertEqual(ImportBatch.objects.get().status,ImportBatch.Status.INVALID); self.assertFalse(self.org.people.exists())
+    def test_templates_and_error_reports_are_downloadable(self):
+        template=self.client.get(reverse("import_template",args=["people"]));self.assertEqual(template.status_code,200);self.assertIn("first_name",template.content.decode())
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.post(reverse("imports"),{"entity":"people","file":SimpleUploadedFile("people.csv",b"first_name,last_name,email\nMissing,Email,\n",content_type="text/csv")})
+        batch=ImportBatch.objects.get();errors=self.client.get(reverse("import_errors",args=[batch.pk]));self.assertEqual(errors.status_code,200);self.assertIn("email is required",errors.content.decode())
 
 class PayrollWorkflowTest(TestCase):
     def setUp(self):
@@ -336,6 +395,8 @@ class PayrollWorkflowTest(TestCase):
         run=create_payroll_run(organization=self.org,start=self.start,end=self.end,actor=self.manager)
         self.client.force_login(self.manager); response=self.client.post(reverse("payroll_approve",args=[run.pk])); self.assertRedirects(response,reverse("payroll"));run.refresh_from_db();self.assertEqual(run.status,PayrollRun.Status.APPROVED)
         export=self.client.get(reverse("payroll_run_export",args=[run.pk]));self.assertEqual(export.status_code,200);self.assertIn("Jamie Fox",export.content.decode())
+        xlsx=self.client.get(reverse("payroll_run_export",args=[run.pk])+"?format=xlsx");self.assertEqual(xlsx.status_code,200);self.assertTrue(xlsx.content.startswith(b"PK"))
+        pdf=self.client.get(reverse("payroll_run_export",args=[run.pk])+"?format=pdf");self.assertEqual(pdf.status_code,200);self.assertTrue(pdf.content.startswith(b"%PDF-1.4"))
     def test_pending_punch_blocks_payroll_approval(self):
         self.punch_in.review_status=Punch.Review.PENDING;self.punch_in.save(update_fields=["review_status"])
         from .services import create_payroll_run
