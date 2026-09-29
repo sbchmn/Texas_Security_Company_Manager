@@ -1,0 +1,61 @@
+services:
+  web:
+    build: .
+    command: sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --access-logfile -"
+    ports: ["8000:8000"]
+    env_file: [.env]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      REDIS_URL: redis://cache:6379/0
+      CLAMAV_HOST: clamav
+    volumes: ["media:/app/media"]
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_started
+      clamav:
+        condition: service_healthy
+  worker:
+    build: .
+    command: sh -c "while true; do python manage.py compliance_reminders && python manage.py process_notifications; sleep 60; done"
+    env_file: [.env]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      REDIS_URL: redis://cache:6379/0
+    volumes: ["media:/app/media"]
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_started
+  cache:
+    image: redis:7.4-alpine
+    command: redis-server --save 60 1 --appendonly yes
+    volumes: ["redis:/data"]
+  clamav:
+    image: clamav/clamav:stable
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping", "1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tscm}
+      MYSQL_USER: ${MYSQL_USER:-tscm}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-root-me}
+    volumes: ["mysql:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-change-root-me}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  mysql:
+  media:
+  redis:
