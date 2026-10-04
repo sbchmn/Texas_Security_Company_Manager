@@ -1,0 +1,9 @@
+{% load static %}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block head_title %}Account{% endblock %} · {% if current_organization %}{{ current_organization.display_name }}{% else %}Texas Security Company Manager{% endif %}</title>
+<meta name="theme-color" content="{% if current_organization %}{{ current_organization.primary_color }}{% else %}#16324F{% endif %}">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="{% static 'icon.svg' %}"><link rel="stylesheet" href="{% static 'css/app.css' %}">{% if current_organization %}<link rel="stylesheet" href="{% url 'theme_css' %}">{% endif %}{% block extra_head %}{% endblock %}</head>
+<body><a class="skip-link" href="#main-content">Skip to main content</a>{% block body %}{% if user.is_authenticated %}{% include '_sidebar.html' %}{% endif %}
+<main id="main-content" tabindex="-1" class="{% if not user.is_authenticated %}auth-main{% endif %}">{% if user.is_authenticated %}<header class="topbar"><button type="button" class="menu-button" data-menu aria-label="Open menu" aria-expanded="false">☰</button><div><span class="status-dot" aria-hidden="true"></span> System operational</div></header>{% endif %}
+<div class="allauth-page{% if user.is_authenticated %} page narrow{% else %} entrance{% endif %}">{% if user.is_authenticated %}<p class="eyebrow">Account</p>{% endif %}{% if messages %}<div class="allauth-messages">{% for message in messages %}<div class="message {{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</div></main>{% endblock body %}
+<script src="{% static 'js/app.js' %}" defer></script>{% block extra_body %}{% endblock %}</body></html>

@@ -1,5 +1,77 @@
+{
+	# Log rotation is left to the Docker json-file driver configured in compose.yaml.
+	admin off
+	skip_install_trust
+	# Set CADDY_ACME_EMAIL_LINE to a full directive line, e.g.
+	#   CADDY_ACME_EMAIL_LINE=email ops@example.com
+	# to register the ACME account contact. Left unset, Caddy still issues certificates.
+	{$CADDY_ACME_EMAIL_LINE:}
+}
+
 {$TSCM_SITE_ADDRESS:localhost} {
+	# Set CADDY_TLS_MODE to a full directive line to override the automatic issuer, e.g.
+	#   CADDY_TLS_MODE=tls internal
+	# which makes Caddy use its own local CA for a host name public ACME cannot reach.
+	{$CADDY_TLS_MODE:}
+
+	# Only the loopback/docker network may reach this listener, so the forwarded headers
+	# Caddy derives are the ones Django is allowed to trust (see TRUSTED_PROXIES in settings).
+	encode zstd gzip
+
+	header {
+		# The application also sets these; the edge guarantees they survive a misbehaving
+		# upstream and that HSTS is present on the very first response of a session.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Caddy preserves Host and adds X-Forwarded-Proto/For, which is what tenant routing and
+	# the login throttle depend on.
 	reverse_proxy web:8000 {
-		header_up Host {host}
+		trusted_proxies private_ranges
+	}
+
+	# Access log to stdout: a rejected TLS handshake logs nothing in the error log, so without
+	# this the failure was invisible from the container side.
+	log {
+		output stderr
+		format console
+	}
+}
+
+# The signing host, served by the same listener and the same automatic TLS as the application.
+# A second hostname is the only way to dual-host DocuSeal: it has no relative-url-root setting in
+# config/application.rb or config/environments/production.rb, so stripping a /sign prefix at the
+# proxy would leave the app generating asset, redirect and file URLs without that prefix.
+# TSCM_SIGN_ADDRESS defaults to a name that resolves nowhere, so this block costs nothing until
+# the signing profile is actually started (docs/development-roadmap.md §13) — and it stays a
+# distinct name, because Caddy cannot serve two site blocks off one address.
+{$TSCM_SIGN_ADDRESS:sign.localhost} {
+	{$CADDY_TLS_MODE:}
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		# SAMEORIGIN rather than a copy of the application's DENY: this page belongs to a third-party
+		# application whose own framing has not been audited here. SAMEORIGIN still refuses cross-site
+		# framing, which is the threat this edge header exists to stop, without assuming anything about
+		# DocuSeal's internal structure. Revisit only if the embedded signing form (a Pro feature) is
+		# adopted — that needs a frame-ancestors rule naming this site, not a weaker blanket.
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	reverse_proxy docuseal:3000 {
+		trusted_proxies private_ranges
+	}
+
+	log {
+		output stderr
+		format console
 	}
 }

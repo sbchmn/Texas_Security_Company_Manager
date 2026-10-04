@@ -4,19 +4,38 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  # The suite is hermetic by default: no MySQL, Redis, or ClamAV is reachable from config/settings.py
+  # unless TEST_LIVE_SERVICES=true opts in (see the mysql job).
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
           cache: pip
-      - run: pip install -r requirements.txt pip-audit bandit
-      - run: DEBUG=true python manage.py test
-      - run: DEBUG=true python manage.py makemigrations --check --dry-run
-      - run: SECRET_KEY='ci-only-long-secret-key-that-is-never-used-outside-this-check-123456' ALLOWED_HOSTS=example.com REDIS_URL=redis://localhost:6379/0 CLAMAV_HOST=clamav python manage.py check --deploy
+      - run: pip install -r requirements.txt -r requirements-ci.txt
+      - run: python manage.py test
+      - run: python manage.py makemigrations --check --dry-run
+      - name: Deployment check (warnings are errors)
+        env:
+          DOTENV_PATH: /nonexistent
+          SECRET_KEY: ci-only-long-secret-key-that-is-never-used-outside-this-check-123456
+          ALLOWED_HOSTS: example.com
+          REDIS_URL: redis://localhost:6379/0
+          CSRF_TRUSTED_ORIGINS: https://example.com
+        run: python manage.py check --deploy --fail-level WARNING
+      - name: Shell scripts must be LF (a carriage return breaks the container shebang)
+        run: |
+          set -e
+          for f in entrypoint.sh docker/*.sh; do
+            if grep -q $'\r' "$f"; then echo "::error::$f contains CRLF line endings"; exit 1; fi
+          done
       - run: pip-audit -r requirements.txt
       - run: bandit -q -r config core -x core/tests.py,core/migrations
       - run: pip-audit -r requirements.txt --format cyclonedx-json --output sbom.json
@@ -24,13 +43,77 @@ jobs:
         with:
           name: python-sbom
           path: sbom.json
+          if-no-files-found: error
+  # Exercises the MySQL-only path: the tenant-integrity and audit-immutability triggers in
+  # migrations 0012/0018/0019 are skipped on sqlite, so without this leg nothing proves they
+  # install or that the database itself refuses audit mutation.
+  mysql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: tscm
+        # Django migrations install triggers; MySQL rejects CREATE TRIGGER for a non-SUPER
+        # user while binary logging is on (error 1419) unless this is set.
+        command: --log-bin-trust-function-creators=1
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval 10s --health-timeout 5s --health-retries 30 --health-start-period 40s
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 3s --health-retries 10
+    env:
+      TEST_LIVE_SERVICES: "true"
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: tscm
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ci-root-password
+      REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python manage.py migrate --noinput
+      - run: python manage.py test
   container:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
-      - run: docker compose config -q
+      - run: docker compose -f compose.yaml config -q
       - run: docker build -t tscm:${{ github.sha }} .
+      - name: Built image serves the health endpoint
+        run: |
+          set -eu
+          docker run -d --name smoke -p 8000:8000 \
+            -e DEBUG=true \
+            -e SECRET_KEY=smoke-only-long-secret-key-never-used-outside-this-check-1234 \
+            -e ALLOWED_HOSTS=localhost,127.0.0.1 \
+            tscm:${{ github.sha }}
+          for attempt in $(seq 1 30); do
+            if docker exec smoke python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=3)" >/dev/null 2>&1; then
+              echo "healthz responded"; exit 0
+            fi
+            sleep 2
+          done
+          docker logs smoke
+          exit 1
+      - name: Remove the smoke container before scanning
+        run: docker rm -f smoke
       - uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: tscm:${{ github.sha }}

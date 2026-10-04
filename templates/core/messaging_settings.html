@@ -1,0 +1,79 @@
+{% extends 'base.html' %}{% block title %}Messaging{% endblock %}{% block content %}
+<div class="page"><div class="page-heading"><div><p class="eyebrow">Settings</p><h1>Messaging delivery</h1>
+<p>What the email and text providers have told us back, who is blocked from receiving anything, and every consent decision on record. DD requires these events to be <em>processed and retained</em>, which means both a table you can read and a send path that consults it.</p></div><div class="actions"><a class="button secondary" href="{% url 'settings' %}">Company settings</a><a class="button secondary" href="{% url 'notifications' %}">Notifications</a></div></div>
+
+<section class="panel">
+<h2>Callback address</h2>
+<p class="muted">Give the provider the URL for the channel it posts about. The address is a secret: it is what identifies the company to the endpoint, so it belongs in a provider's configuration and not in a shared screenshot.</p>
+{% if webhook_token %}<div class="invite-link"><p><code>/webhooks/twilio/&lt;token&gt;/</code> — text status and inbound STOP/HELP<br>
+<code>/webhooks/mailjet/&lt;token&gt;/</code> · <code>/webhooks/postmark/&lt;token&gt;/</code> · <code>/webhooks/sns/&lt;token&gt;/</code> — email delivery events</p>
+<p><strong>{{ request.scheme }}://{{ request.get_host }}{% url 'provider_callback' provider='twilio' token=webhook_token %}</strong></p>
+<form method="post" action="{% url 'messaging_rotate_token' %}">{% csrf_token %}<button class="button secondary button-small">Issue a new address</button></form></div>
+{% else %}<p class="muted">No address has been issued yet — it is created the first time a consent decision or a callback needs it, or press the button below.</p>
+<form method="post" action="{% url 'messaging_rotate_token' %}">{% csrf_token %}<button class="button button-small">Create the callback address</button></form>{% endif %}
+<p class="helptext"><strong>What proves a callback came from the provider.</strong> Twilio signs its posts, and when <code>TWILIO_AUTH_TOKEN</code> is configured an unsigned or wrongly signed post is refused outright. Amazon SNS and Mailjet document nothing equivalent on this path, so a post from them is accepted on the strength of the address and TLS, and the retained event is marked <em>unverified</em>. That difference is recorded per event rather than averaged into a general claim about the endpoint.</p>
+<p class="helptext">An SNS subscription also has to be confirmed before AWS will publish anything to it. The confirmation request goes to a URL inside the payload, so this build does not follow it automatically — a pending one is listed below and needs a human who can see the topic it came from.</p>
+</section>
+
+<section class="panel">
+<h2>Who hears what ({{ rules|length }} rule{% if rules|length != 1 %}s{% endif %})</h2>
+<p>DD asks for delivery channels to be configurable per audience. A notice reaches several kinds of person at once — the officer it is about, the dispatcher who can act on it, the payroll approver whose number it changes — and without a rule every one of them gets the same in-app copy plus the same email.</p>
+<p class="helptext"><strong>A rule chooses, it does not permit.</strong> Text still requires the number's own consent below, and a STOP still ends it for everything. That is deliberate: consent belongs to the person and their phone, channel preference belongs to this company, and neither one gets to overrule the other. <strong>In-app always arrives</strong> whatever you pick here, because it is the durable copy of "we told you" — a text a carrier dropped leaves no evidence at all.</p>
+<div class="table-wrap"><table><thead><tr><th>Audience</th><th>Notices</th><th>Sent on</th><th>Could reach</th><th>Set by</th><th></th></tr></thead><tbody>
+{% for rule in rules %}<tr><td>{{ rule.get_audience_display }}</td><td><code>{{ rule.scope_label }}</code>{% if not rule.active %}<small>paused</small>{% endif %}</td>
+<td>{% if rule.channels %}{{ rule.channels|join:", " }}{% else %}<span class="muted">app only</span>{% endif %}</td>
+<td>{% if rule.text_reach is None %}<span class="muted">—</span>{% else %}{{ rule.text_reach }} opted-in number{% if rule.text_reach != 1 %}s{% endif %}{% endif %}</td>
+<td>{{ rule.created_by.get_full_name|default:rule.created_by.username|default:'—' }}<small>{{ rule.updated_at|date:'M j, Y' }}</small></td>
+<td><div class="actions"><a href="{% url 'messaging_settings' %}?edit={{ rule.pk }}"{% if editing.pk == rule.pk %} class="active"{% endif %}>{% if editing.pk == rule.pk %}Editing{% else %}Edit{% endif %}</a><form method="post" action="{% url 'messaging_rule_remove' rule.pk %}" class="inline-form">{% csrf_token %}<button class="button secondary button-small">Remove</button></form></div></td></tr>
+{% empty %}<tr><td colspan="6" class="empty-cell">No rules yet, so every notice goes where the screen that sent it says — in-app and email for almost all of them, which is why nothing has ever been texted.</td></tr>{% endfor %}</tbody></table></div>
+<form method="post" action="{% if editing %}{% url 'messaging_rule_edit' editing.pk %}{% else %}{% url 'messaging_rule_add' %}{% endif %}" class="form-grid">
+{% csrf_token %}
+<div>{{ rule_form.audience.label_tag }}{{ rule_form.audience }}</div>
+<div>{{ rule_form.family.label_tag }}{{ rule_form.family }}<small>{{ rule_form.family.help_text }}</small></div>
+<div>{{ rule_form.event_type.label_tag }}{{ rule_form.event_type }}<small>{{ rule_form.event_type.help_text|safe }}</small></div>
+<div>{{ rule_form.channels.label_tag }}{{ rule_form.channels }}<small>{{ rule_form.channels.help_text }}</small></div>
+<div>{{ rule_form.active.label_tag }}{{ rule_form.active }}<small>{{ rule_form.active.help_text }}</small></div>
+<div><button class="button">Add the rule</button></div>
+<p class="helptext">Start with the notice an officer has to act on and nobody else can: a licence about to lapse. Audience <em>The person the notice is about</em>, family <em>Credentials and compliance</em>, tick <em>SMS</em> — and read the count in the fourth column before you decide whether the number of opted-in officers makes that worth a second channel at all.</p>
+</form>
+</section>
+
+<section class="panel">
+<h2>Suppressed destinations ({{ suppressions|length }})</h2>
+<p class="muted">A block stops the next message, not the one that produced it: a notice that bounced stays in the history as sent, because that is what happened. Opting in again clears an unsubscribe block and nothing else — a number the carrier rejects is not made reachable by asking again.</p>
+<div class="table-wrap"><table><thead><tr><th>Destination</th><th>Channel</th><th>Why</th><th>Since</th><th>Source</th></tr></thead><tbody>
+{% for row in suppressions %}<tr><td>••••{{ row.destination|slice:'-4:' }}</td><td>{{ row.get_channel_display }}</td>
+<td>{{ row.get_kind_display }}{% if row.reason %}<small>{{ row.reason|truncatechars:120 }}</small>{% endif %}</td>
+<td>{{ row.since|date:'M j, Y H:i' }}</td><td>{{ row.provider|default:'—' }}{% if row.source_reference %}<small>{{ row.source_reference|truncatechars:40 }}</small>{% endif %}</td></tr>
+{% empty %}<tr><td colspan="5" class="empty-cell">Nothing is blocked.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+
+<section class="panel">
+<h2>Notices held back from sending ({{ blocked|length }})</h2>
+<p class="muted">These never reached a provider, so they are not delivery failures and are not retried. They wait for a decision — an opt-in, a corrected number, or an owner lifting a block.</p>
+{% for item in blocked %}<div class="person-row"><div><strong>{{ item.subject }}</strong><small>{{ item.get_channel_display }} · {{ item.event_type }} · {{ item.created_at|date:'M j, Y H:i' }}{% if item.mandatory %} · required notice{% endif %}</small><small>{{ item.last_error }}</small></div>
+<span class="pill blocked">not sent</span></div>
+{% empty %}<p class="muted">Nothing is being held back.</p>{% endfor %}
+</section>
+
+<section class="panel">
+<h2>Provider callbacks, most recent first</h2>
+<div class="table-wrap"><table><thead><tr><th>When</th><th>Provider</th><th>Event</th><th>Destination</th><th>Detail</th><th>Acted on</th></tr></thead><tbody>
+{% for event in events %}<tr><td>{{ event.created_at|date:'M j, Y H:i' }}</td><td>{{ event.provider }}</td>
+<td>{{ event.get_kind_display }}</td><td>••••{{ event.destination|slice:'-4:' }}</td>
+<td>{{ event.detail|default:'—'|truncatechars:90 }}{% if event.occurred_at %}<small>provider time {{ event.occurred_at|date:'M j, Y H:i' }}</small>{% endif %}</td>
+<td>{% if event.applied %}yes{% else %}<span class="muted">recorded only</span>{% endif %}<small>{% if not event.verified %}unverified source{% else %}signed{% endif %}</small></td></tr>
+{% empty %}<tr><td colspan="6" class="empty-cell">No callback has arrived yet. Until one does, nothing here proves the endpoint is reachable — that first post is the test.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+
+<section class="panel">
+<h2>Consent ledger, most recent first</h2>
+<p class="muted">Numbers are shown by their last four characters. The full value is in the row itself, because a consent proof that cannot name the number it is about is not a proof; it is kept here and in this ledger rather than in the audit chain, which cannot be scrubbed and should not hold contact details.</p>
+<div class="table-wrap"><table><thead><tr><th>Decided</th><th>Officer</th><th>Number</th><th>Answer</th><th>How</th><th>Wording</th></tr></thead><tbody>
+{% for row in consents %}<tr><td>{{ row.decided_at|date:'M j, Y H:i' }}</td><td>{{ row.person.full_name|default:'—' }}</td>
+<td>••••{{ row.destination|slice:'-4:' }}</td><td><span class="pill {{ row.state }}">{{ row.get_state_display }}</span></td>
+<td>{{ row.get_source_display }}{% if row.recorded_by %}<small>{{ row.recorded_by.get_full_name|default:row.recorded_by.username }}</small>{% endif %}</td>
+<td>{{ row.wording|truncatechars:80|default:'—' }}</td></tr>
+{% empty %}<tr><td colspan="6" class="empty-cell">No decisions recorded. Nothing may be sent by text to anyone in this company.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+</div>{% endblock %}

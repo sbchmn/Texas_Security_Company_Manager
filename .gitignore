@@ -1,4 +1,8 @@
 .env
+# Any sidecar env file, e.g. docuseal.env next to compose.yaml: it holds the signing container's
+# SECRET_KEY_BASE and SMTP credentials, which are exactly as secret as .env. .env.example stays
+# tracked on purpose — it is the template, and it contains no real values.
+*.env
 .venv/
 __pycache__/
 *.py[cod]

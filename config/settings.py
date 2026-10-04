@@ -7,9 +7,14 @@ from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
+# DOTENV_PATH lets CI or a container point at a different env file; the test runner uses it
+# to avoid importing a developer's deployment values.
+load_dotenv(os.getenv("DOTENV_PATH") or BASE_DIR / ".env")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 IS_TEST = "test" in sys.argv
+# A test run must not depend on the live Redis/MySQL/ClamAV named in whatever .env happens to
+# be present. Set TEST_LIVE_SERVICES=true (CI does) to exercise the real services instead.
+HERMETIC_TEST = IS_TEST and os.getenv("TEST_LIVE_SERVICES", "").lower() != "true"
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 if not SECRET_KEY:
     if DEBUG or IS_TEST:
@@ -19,6 +24,10 @@ if not SECRET_KEY:
 
 default_hosts = "localhost,127.0.0.1,testserver" if DEBUG or IS_TEST else ""
 PLATFORM_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", default_hosts).split(",") if h.strip()]
+# Django's test client always presents the "testserver" host; the project allowlist has to
+# agree with it even when ALLOWED_HOSTS was supplied explicitly.
+if IS_TEST and "testserver" not in PLATFORM_HOSTS:
+    PLATFORM_HOSTS.append("testserver")
 ALLOWED_HOSTS = ["*"]
 if not PLATFORM_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS is required when DEBUG is false")
@@ -37,6 +46,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "core.middleware.ResponseSecurityHeadersMiddleware",
+    "core.middleware.AdminAccessMiddleware",
     "core.middleware.LoginRateLimitMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -58,11 +68,12 @@ TEMPLATES = [{
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
         "core.context_processors.organization_brand",
+        "core.context_processors.navigation",
     ]},
 }]
 WSGI_APPLICATION = "config.wsgi.application"
 
-if os.getenv("MYSQL_DATABASE"):
+if os.getenv("MYSQL_DATABASE") and not HERMETIC_TEST:
     DATABASES = {"default": {
         "ENGINE": "django.db.backends.mysql",
         "NAME": os.environ["MYSQL_DATABASE"],
@@ -71,7 +82,9 @@ if os.getenv("MYSQL_DATABASE"):
         "HOST": os.getenv("MYSQL_HOST", "db"),
         "PORT": os.getenv("MYSQL_PORT", "3306"),
         "OPTIONS": {"charset": "utf8mb4"},
-        "CONN_MAX_AGE": 60,
+        # A test run wraps each case in a transaction; an idle-connection expiry then closes
+        # the connection from request_finished inside that transaction and poisons it.
+        "CONN_MAX_AGE": 0 if IS_TEST else int(os.getenv("CONN_MAX_AGE", "60")),
     }}
 else:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
@@ -111,16 +124,23 @@ SECURE_PROXY_SSL_HEADER = (
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_SSL_REDIRECT = not DEBUG and not IS_TEST
-SECURE_HSTS_SECONDS = 0 if DEBUG else int(os.getenv("SECURE_HSTS_SECONDS", "3600"))
+SECURE_HSTS_SECONDS = 0 if DEBUG else int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
 SECURE_HSTS_PRELOAD = not DEBUG
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 AUTH_RATE_LIMIT_MAX = int(os.getenv("AUTH_RATE_LIMIT_MAX", "5"))
 AUTH_RATE_LIMIT_WINDOW = int(os.getenv("AUTH_RATE_LIMIT_WINDOW", "900"))
+# Peer CIDRs allowed to supply X-Forwarded-For (the deployment's TLS proxy or app edge).
+# Left empty, no forwarded header is trusted and every client shares one rate-limit bucket,
+# so a public deployment behind a proxy must set this.
+TRUSTED_PROXIES = [item.strip() for item in os.getenv("TRUSTED_PROXIES", "").split(",") if item.strip()]
+# Source ranges permitted to reach /admin/. With DEBUG=false and no entries the admin is
+# closed to every address; with DEBUG=true the restriction is off for local development.
+ADMIN_ALLOWED_IPS = [item.strip() for item in os.getenv("ADMIN_ALLOWED_IPS", "").split(",") if item.strip()]
 
-MALWARE_SCAN_MODE = os.getenv("MALWARE_SCAN_MODE", "basic" if DEBUG or IS_TEST else "clamav")
-CLAMAV_HOST = os.getenv("CLAMAV_HOST", "")
+MALWARE_SCAN_MODE = "basic" if HERMETIC_TEST else os.getenv("MALWARE_SCAN_MODE", "basic" if DEBUG or IS_TEST else "clamav")
+CLAMAV_HOST = "" if HERMETIC_TEST else os.getenv("CLAMAV_HOST", "")
 CLAMAV_PORT = int(os.getenv("CLAMAV_PORT", "3310"))
 
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "")
@@ -145,10 +165,22 @@ SOCIALACCOUNT_PROVIDERS = {
     "microsoft": {"APP": {"client_id": os.getenv("MICROSOFT_OIDC_CLIENT_ID", ""), "secret": os.getenv("MICROSOFT_OIDC_CLIENT_SECRET", ""), "key": ""}, "TENANT": os.getenv("MICROSOFT_OIDC_TENANT", "common")},
 }
 
-REDIS_URL = os.getenv("REDIS_URL", "")
+REDIS_URL = "" if HERMETIC_TEST else os.getenv("REDIS_URL", "")
 if not REDIS_URL and not (DEBUG or IS_TEST):
     raise ImproperlyConfigured("REDIS_URL is required in production for shared rate limiting and coordination")
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": REDIS_URL}} if REDIS_URL else {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 AWS_QUERYSTRING_EXPIRE = 300
 AWS_S3_FILE_OVERWRITE = False
 AWS_DEFAULT_ACL = None
+
+# Object storage renders brand logos from the bucket host, so the CSP has to name it or the
+# image is blocked; path-style and virtual-host-style addressing are both allowed.
+def _storage_img_src():
+    bucket = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
+    if not bucket:
+        return []
+    endpoint = os.getenv("AWS_S3_ENDPOINT_URL") or f"https://s3.{os.getenv('AWS_S3_REGION_NAME', 'us-east-1')}.amazonaws.com"
+    host = endpoint.split("://", 1)[-1].split("/")[0]
+    return [f"https://{host}", f"https://{bucket}.{host}"]
+
+MEDIA_IMG_SRC = _storage_img_src()

@@ -1,0 +1,30 @@
+{% extends 'base.html' %}{% block title %}Clock PIN{% endblock %}{% block content %}
+<div class="page narrow"><div class="page-heading"><div><p class="eyebrow">My work</p>
+<h1>{% if has_pin %}Change your clock PIN{% else %}Set your clock PIN{% endif %}</h1>
+<p>The PIN is how a shared clock station knows which officer is standing in front of it. It is also what stops anyone else from clocking time in your name.</p></div></div>
+
+{% if locked_minutes %}<p class="message warning">Your PIN is paused after too many failed attempts. It unlocks again in {{ locked_minutes }} minute{{ locked_minutes|pluralize }}; you can still set a new one below.</p>{% endif %}
+
+<section class="panel">
+<form method="post" class="stacked-form">{% csrf_token %}
+{% if has_pin %}<label>Your current PIN{{ form.current_pin }}<small class="helptext">Five wrong tries in a row pauses the PIN for fifteen minutes, everywhere, not just at one station.</small>{% for error in form.current_pin.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>{% endif %}
+<label>{{ form.pin.label_tag }}{{ form.pin }}<small class="helptext">{{ form.pin.help_text }}</small>{% for error in form.pin.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
+<label>{{ form.confirm.label_tag }}{{ form.confirm }}{% for error in form.confirm.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
+<button class="button">{% if has_pin %}Change PIN{% else %}Set PIN{% endif %}</button>
+{% if has_pin %}<a class="button secondary" href="{% url 'clock' %}">Cancel</a>{% endif %}
+</form>
+</section>
+
+<section class="panel">
+<h2>What it opens</h2>
+{% if kiosks %}<ul>{% for k in kiosks %}<li><strong>{{ k.name }}</strong>{% if k.site %} — {{ k.site.client.name }}, {{ k.site.name }}{% endif %}</li>{% endfor %}</ul>
+<p class="helptext">Type the PIN once at the station, then tap what you are doing. The station forgets you after ninety seconds, so the next officer gets a blank pad, not your name.</p>{% else %}
+<p class="muted">No shared stations are open yet, so this PIN is only used if your company turns one on. You can still clock from your own device on the <a href="{% url 'clock' %}">Time clock</a> page.</p>{% endif %}
+</section>
+
+<section class="panel">
+<h2>Two rules worth knowing</h2>
+<p class="helptext">Nobody else can have your PIN. Two officers on one code makes a punch at a shared station unattributable, so the company refuses a PIN that is already taken, and a supervisor who tells you a code is only doing it until you change it here.</p>
+<p class="helptext">Four digits is the shortest code allowed and the weakest. Anything a visitor could reach should be six or eight.</p>
+</section>
+</div>{% endblock %}

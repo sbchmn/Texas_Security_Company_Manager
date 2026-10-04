@@ -1,24 +1,81 @@
+# Production Compose topology: Caddy terminates TLS and proxies to gunicorn; MySQL is the
+# system of record; Redis backs sessions, the login throttle, and offline-clock coordination;
+# ClamAV scans personnel documents. Publish nothing but Caddy.
+#
+# The docker-network ranges in TRUSTED_PROXIES tell Django which peers may supply
+# X-Forwarded-For. Without it every visitor shares one login-throttle bucket, because
+# REMOTE_ADDR is the Caddy container. Keep the default unless you change the subnet.
+#
+# The "signing" profile adds DocuSeal and its own Postgres/Redis behind a second hostname on
+# the same Caddy listener (docs/development-roadmap.md §13). Nothing in the default topology
+# changes, and nothing is shared between the two applications.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
-  web:
+  # One-shot migrator so web, worker, and replicas never apply the same schema concurrently.
+  # Replaces the old "every container migrates at boot" behaviour.
+  migrate:
     build: .
-    command: sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --access-logfile -"
+    image: tscm:local
+    command: ["python", "manage.py", "migrate", "--noinput"]
     env_file: [.env]
     environment:
       MYSQL_HOST: db
-      MYSQL_PORT: 3306
+      MYSQL_PORT: "3306"
       REDIS_URL: redis://cache:6379/0
-      TRUST_PROXY_SSL_HEADER: "true"
       MALWARE_SCAN_MODE: clamav
       CLAMAV_HOST: clamav
-      CLAMAV_PORT: 3310
-    volumes: ["media:/app/media"]
+      CLAMAV_PORT: "3310"
+      TRUSTED_PROXIES: ${TSCM_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
     depends_on:
       db:
         condition: service_healthy
       cache:
         condition: service_started
+    restart: "no"
+    logging: *default-logging
+  web:
+    build: .
+    image: tscm:local
+    # entrypoint.sh is the CMD; RUN_MIGRATIONS=0 because the migrate service already ran.
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+      REDIS_URL: redis://cache:6379/0
+      TRUST_PROXY_SSL_HEADER: "true"
+      MALWARE_SCAN_MODE: clamav
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      TRUSTED_PROXIES: ${TSCM_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
+      RUN_MIGRATIONS: "0"
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-3}
+    env_file: [.env]
+    volumes: ["media:/app/media"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      cache:
+        condition: service_started
+      # Started, not healthy: ClamAV's first signature load takes minutes, and a scanner that
+      # is slow or misconfigured should not take login, scheduling, and clock-in down with it.
+      # Document upload already fails closed with "Malware scanner is unavailable" until clamd
+      # answers, so no unscanned file can be stored either way.
       clamav:
-        condition: service_healthy
+        condition: service_started
+    restart: unless-stopped
+    mem_limit: 1g
+    logging: *default-logging
   caddy:
     image: caddy:2-alpine
     ports:
@@ -26,31 +83,83 @@ services:
       - "${TSCM_HTTPS_PORT:-443}:443"
     environment:
       TSCM_SITE_ADDRESS: ${TSCM_SITE_ADDRESS:-localhost}
+      # The signing host is a second site block on the same listener, not a path under the
+      # first: DocuSeal has no relative-URL-root setting, so a stripped prefix would make it
+      # generate asset and redirect URLs that do not contain it. Defaults to a name that
+      # resolves nowhere on purpose — see the TSCM_SIGN_ADDRESS note in .env.example.
+      TSCM_SIGN_ADDRESS: ${TSCM_SIGN_ADDRESS:-sign.localhost}
+      CADDY_TLS_MODE: ${CADDY_TLS_MODE:-}
+      CADDY_ACME_EMAIL_LINE: ${CADDY_ACME_EMAIL_LINE:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on: [web]
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
   worker:
     build: .
-    command: sh -c "while true; do python manage.py compliance_reminders && python manage.py process_notifications; sleep 60; done"
+    image: tscm:local
+    # Each step is independent: a failing reminder pass must not stop notification delivery.
+    # generate_recurring_posts only touches series a dispatcher opted into, and reports any date
+    # the series could not place rather than leaving the hole to be found on the night;
+    # close_stale_moves shuts offers and trades whose post already started, and fills in the end of a
+    # hold-over that its own clock-out has already answered;
+    # report_missing_punches notices a published post that closed with no clock-in or clock-out —
+    # the one timekeeping gap that produces no row of its own to be noticed by;
+    # capture_reports stores the figures once a day, because a rate that is not stored cannot be
+    # answered next month (a later capture of the same day leaves the stored one alone);
+    # onboarding_reminders hands the checklist to a new hire nobody issued it to and chases the steps
+    # past their date — both passes are idempotent, so a minute-scale loop sends nothing twice.
+    command: ["sh", "-c", "while true; do python manage.py compliance_reminders || true; python manage.py generate_recurring_posts || true; python manage.py report_missing_punches || true; python manage.py onboarding_reminders || true; python manage.py close_stale_moves || true; python manage.py capture_reports || true; python manage.py process_notifications || true; sleep ${WORKER_INTERVAL_SECONDS:-60}; done"]
     env_file: [.env]
     environment:
       MYSQL_HOST: db
-      MYSQL_PORT: 3306
+      MYSQL_PORT: "3306"
       REDIS_URL: redis://cache:6379/0
+      MALWARE_SCAN_MODE: clamav
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      TRUSTED_PROXIES: ${TSCM_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
+      RUN_MIGRATIONS: "0"
     volumes: ["media:/app/media"]
+    # The worker serves nothing; the image HEALTHCHECK probes gunicorn and would always fail.
+    healthcheck:
+      disable: true
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       cache:
         condition: service_started
+    restart: unless-stopped
+    mem_limit: 1g
+    logging: *default-logging
   cache:
     image: redis:7.4-alpine
-    command: redis-server --save 60 1 --appendonly yes
+    command: redis-server --save 60 1 --appendonly yes --maxmemory 200mb --maxmemory-policy volatile-lru
     volumes: ["redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 256m
+    logging: *default-logging
+  # ClamAV keeps its signature database in a volume; without it every redeploy re-downloads
+  # roughly 1.5 GB. No CLAMD_CONF_* overrides are set here: a key that clamd.conf cannot parse
+  # (StreamMaxSize was renamed StreamMaxMemSpace) stops the engine from booting at all, and
+  # the defaults already cover the application's 25 MiB document cap.
   clamav:
-    image: clamav/clamav:stable
+    image: clamav/clamav:1.4
+    volumes: ["clamav_db:/var/lib/clamav"]
+    restart: unless-stopped
+    # The engine needs about 3 GB to load the full signature set; below that it is OOM-killed
+    # and uploads fail closed with "Malware scanner is unavailable".
+    mem_limit: 3g
+    logging: *default-logging
   db:
     image: mysql:8.4
     # Django migrations install deterministic tenant-integrity and audit triggers.
@@ -62,15 +171,234 @@ services:
       MYSQL_USER: ${MYSQL_USER:-tscm}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-root-me}
-    volumes: ["mysql:/var/lib/mysql"]
+      # Restrict root to a specific host before first initialisation; the default "%" is a
+      # local-development convenience only. Set MYSQL_ROOT_HOST on a public host.
+      MYSQL_ROOT_HOST: ${MYSQL_ROOT_HOST:-%}
+      # Consumed by the signing initialisation script below.
+      DOCUSEAL_DATABASE: ${DOCUSEAL_DB_NAME:-docuseal}
+      DOCUSEAL_USER: ${DOCUSEAL_DB_USER:-docuseal}
+      DOCUSEAL_PASSWORD: ${DOCUSEAL_DB_PASSWORD:-change-me}
+    volumes:
+      - "mysql:/var/lib/mysql"
+      # Creates DocuSeal's own database and user inside this server, so the signing profile
+      # needs no second database engine. The scripts in this directory run only while the data
+      # directory is empty, which means an existing installation applies the same file by hand
+      # once — the command is in the DOCUSEAL_DB_NAME note in .env.example, and it prompts for
+      # the password rather than putting it on a command line.
+      - "./docker/mysql-init-signing.sh:/docker-entrypoint-initdb.d/10-signing.sh:ro"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-change-root-me}"]
-      interval: 5s
+      # Probe over TCP after the temporary init server (socket-only, --skip-networking) has
+      # gone away; $$ is escaped so the password stays inside the container.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -p\"$$MYSQL_ROOT_PASSWORD\""]
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 30
+      start_period: 45s
+    restart: unless-stopped
+    mem_limit: 1536m
+    logging: *default-logging
+  # ── Signing profile: docker compose --profile signing up -d ──────────────────────
+  # DocuSeal community edition (AGPLv3 with a GNU Section 7(b) term: a covered work must
+  # retain the original DocuSeal attribution in its UI, so the signing page keeps saying
+  # DocuSeal — white-labeling is a Pro feature). See docs/development-roadmap.md §13.
+  #
+  # Two services, and one shared server:
+  #   docuseal-cache  a queue backend of its own, because `cache` runs --maxmemory-policy
+  #                   volatile-lru: correct for session keys that expire on their own, wrong
+  #                   for a queued "a signature was completed" job that must never be evicted.
+  #   docuseal        the app. Naming REDIS_URL also suppresses the redis-server the image
+  #                   would otherwise fork inside Puma (127.0.0.1:16379, requirepass derived
+  #                   from SECRET_KEY_BASE), so the queue backend is inspectable, and a web
+  #                   restart no longer takes the only copy of the pending jobs with it.
+  #
+  # Its database is a separate *database and user inside the application's own MySQL server*, not
+  # a second engine. config/database.yml branches on the URL scheme and rewrites mysql/trilogy to
+  # the trilogy adapter with utf8mb4, and this was booted end to end against MySQL 8.4 to confirm
+  # it: every migration applied and the app served a 302 to /setup. The one PostgreSQL-only
+  # statement observed in the chain (CREATE STATISTICS ... dependencies, ndistinct) is wrapped in
+  # an adapter_name guard — it took 0.0005s on Postgres and 0.0000s on MySQL, i.e. it was skipped.
+  # Sharing the server is not sharing the schema: DocuSeal gets its own database, its own user,
+  # and no grants on the application's tables.
+  #
+  # To run it on PostgreSQL instead, set DOCUSEAL_DATABASE_URL. Do not mount that engine's data at
+  # the legacy /var/lib/postgresql/data: postgres:18+ exits with "Error: in 18+, these Docker
+  # images are configured to store database data in ... major-version-specific directory names",
+  # and the /var/lib/postgresql/18/docker path in the vendor's own compose names the major version,
+  # so a version bump starts against an empty directory. Mount /var/lib/postgresql as a whole.
+  #
+  # The service names contain no underscore: config/dotenv.rb parses DATABASE_URL, and when
+  # the host part contains "_" it splits the URL into DATABASE_* variables and deletes
+  # DATABASE_URL itself.
+  docuseal-cache:
+    profiles: ["signing"]
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction
+    volumes: ["docuseal_redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 192m
+    logging: *default-logging
+  docuseal:
+    profiles: ["signing"]
+    # Pinned rather than :latest — the vendor releases about weekly (3.3.0 and latest were the
+    # same build on 2026-10-03), and a signing server should move when the operator says so.
+    image: ${DOCUSEAL_IMAGE:-docuseal/docuseal:3.3.0}
+    # Run one of these. DocuSeal applies its own migrations during boot — observed on this host,
+    # the whole chain ran before Puma bound to :3000 — so two containers started together race the
+    # schema, and unlike the application there is no one-shot migrate service to serialise them.
+    # The queue processor lives inside the web process too (config/puma.rb starts Sidekiq in the
+    # Puma master), so the replica count and the number of job workers are the same knob.
+    # Mapped one by one instead of env_file, because the application's names do not mean the
+    # same thing here: WEB_CONCURRENCY makes Puma fork an embedded Sidekiq per worker, and
+    # PORT would move the listener off the 3000 that Caddy proxies to (App Platform exports
+    # PORT for Django). Each :-default below earns its place twice over: these are read as
+    # ENV.fetch(name, default).to_i, so an empty value is zero, not "unset" — zero Sidekiq
+    # threads, or signing links that expire in zero minutes.
+    env_file:
+      # Present-if-you-need-it, ignored if the file does not exist. This is the only way to give
+      # DocuSeal a variable that Compose must not set to an empty string — see SECRET_KEY_BASE
+      # below — and it is also where ACTIVE_STORAGE_PUBLIC, ENCRYPTION_SECRET or any other
+      # upstream variable belongs without editing this file.
+      - path: docuseal.env
+        required: false
+    # SECRET_KEY_BASE is deliberately not mapped, and the reason is worth keeping, because it is
+    # a failure a reviewer cannot see coming: Compose has no way to leave an entry out
+    # conditionally, and `${VAR:-}` sets it to an empty string, which the app reads as "already
+    # provided". config/dotenv.rb only generates a key when the value is empty and Dotenv.load
+    # then declines to overwrite a key already in the environment, so
+    # config/initializers/devise.rb aborts the boot with
+    #   ArgumentError: `secret_key_base` for production environment must be a type of String
+    # (observed at devise.rb:48 on the first boot of this service). Left entirely unset the
+    # container generates its own key into docuseal.env inside the data volume — which makes that
+    # file part of the backup set, not an implementation detail: it derives the ActiveRecord
+    # encryption keys for whatever DocuSeal keeps in its own database, so a dump restored without
+    # it cannot read them.
+    # HOST is omitted for the same reason, and it is the Ruby idiom that makes it a trap rather
+    # than a preference: the app tests `if ENV['HOST']`, and an empty string passes that test, so
+    # a mapped-but-blank HOST produces URLs with no host in them. Links DocuSeal builds during a
+    # request already follow the Host header Caddy forwards, so the variable is only needed if
+    # DocuSeal is ever allowed to send its own mail — put HOST=<signing host> in docuseal.env then.
+    environment:
+      # The application's own MySQL server, a separate database and user (created by
+      # docker/mysql-init-signing.sql). URL-encode the password: this is a URL, not a key/value
+      # config, and an unescaped @ or / in it produces a connection error that names the wrong host.
+      # Set DOCUSEAL_DATABASE_URL to replace the whole thing, e.g. to move to PostgreSQL.
+      DATABASE_URL: ${DOCUSEAL_DATABASE_URL:-mysql2://${DOCUSEAL_DB_USER:-docuseal}:${DOCUSEAL_DB_PASSWORD:-change-me}@db:3306/${DOCUSEAL_DB_NAME:-docuseal}}
+      REDIS_URL: redis://docuseal-cache:6379/0
+      FORCE_SSL: ${DOCUSEAL_FORCE_SSL:-true}
+      WEB_CONCURRENCY: ${DOCUSEAL_WEB_CONCURRENCY:-0}
+      SIDEKIQ_THREADS: ${DOCUSEAL_SIDEKIQ_THREADS:-5}
+      # 7, not the 730-day default: this session belongs to the DocuSeal console your own
+      # staff open to manage templates, not to a guard, who follows a tokenised link instead.
+      SESSION_REMEMBER_DAYS: ${DOCUSEAL_SESSION_REMEMBER_DAYS:-7}
+      PRESIGNED_URLS_EXPIRE_MINUTES: ${DOCUSEAL_PRESIGNED_URLS_EXPIRE_MINUTES:-240}
+      FILE_URLS_EXPIRE_MINUTES: ${DOCUSEAL_FILE_URLS_EXPIRE_MINUTES:-40}
+      # Mail is deliberately not configured here. DocuSeal speaks SMTP only and cannot use the
+      # Mailjet/Postmark API keys the application already holds, so the plan in
+      # docs/development-roadmap.md §13 is that this app sends the invitation carrying the signing
+      # link and DocuSeal stays a signing backend. These variables are also the second reason for
+      # the docuseal.env hook: production.rb reads SMTP_ADDRESS with plain Ruby truthiness, so a
+      # mapped-but-blank value would select the SMTP mailer with no host and swallow the failure
+      # inside a retried job. If you ever let DocuSeal mail directly, put SMTP_ADDRESS, SMTP_PORT,
+      # SMTP_DOMAIN, SMTP_USERNAME, SMTP_PASSWORD, SMTP_AUTHENTICATION and SMTP_FROM in
+      # docuseal.env, where a line you do not write stays genuinely unset.
+      # Unset bucket means files go to the mounted volume. Give DocuSeal its own bucket rather
+      # than the application's: the retention clock on a signed document is not the retention
+      # clock on a personnel file, and one bucket cannot serve two disposal rules. These four are
+      # safe to map because the app chooses the service with Rails' `.present?`, which treats a
+      # blank string as absent.
+      S3_ATTACHMENTS_BUCKET: ${DOCUSEAL_S3_ATTACHMENTS_BUCKET:-}
+      S3_ENDPOINT: ${DOCUSEAL_S3_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID: ${DOCUSEAL_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${DOCUSEAL_AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${DOCUSEAL_AWS_REGION:-}
+      # MULTITENANT and DEMO are deliberately absent. MULTITENANT=true is the hosted/Pro mode:
+      # config/initializers stops drawing the Active Storage routes and config/puma.rb stops
+      # starting the embedded Redis and Sidekiq, so a single self-hosted install set to true
+      # loses its queue processor. DEMO is the vendor's own demo box.
+    volumes: ["docuseal_data:/data/docuseal"]
+    healthcheck:
+      # Ruby is certainly in this image; busybox wget is not worth depending on. An unauthenticated
+      # request answers 302 (to /setup before the first account exists, then to the login form), so
+      # anything under 500 is a live application.
+      test:
+        [
+          "CMD",
+          "ruby",
+          "-e",
+          "require 'net/http'; exit(Net::HTTP.start('127.0.0.1', 3000) { |h| h.get('/') }.code.to_i < 500)",
+        ]
+      interval: 20s
+      timeout: 8s
+      retries: 5
+      start_period: 90s
+    depends_on:
+      db:
+        condition: service_healthy
+      docuseal-cache:
+        condition: service_started
+    restart: unless-stopped
+    # The image carries an ONNX model for automatic field detection and links against libvips
+    # for PDF work, so it is not a small process.
+    mem_limit: 1g
+    logging: *default-logging
+  # Opt-in recovery services: docker compose --profile backups up -d
+  # See docs/backup-and-restore.md for the restore walk and the tested RPO/RTO story.
+  db-backup:
+    profiles: ["backups"]
+    image: mysql:8.4
+    command: ["sh", "/backup/mysql-backup.sh"]
+    env_file: [.env]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tscm}
+      # The dump names databases explicitly, so sharing the MySQL server does NOT put DocuSeal's
+      # signatures in the backup set by itself. Set DOCUSEAL_BACKUP_DATABASES to the signing
+      # database name once it exists (docker compose exec db mysql -e "SHOW DATABASES" is the
+      # check) — a name that is not there makes mysqldump fail and STOP every dump, which is why
+      # this ships empty rather than defaulted. The binlog stream needs no change: it is
+      # server-wide, and a replay of it against a missing base database restores nothing.
+      MYSQL_BACKUP_EXTRA_DATABASES: ${DOCUSEAL_BACKUP_DATABASES:-}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-3600}
+      BACKUP_KEEP: ${BACKUP_KEEP:-72}
+    volumes:
+      - ./docker:/backup:ro
+      - mysql_backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+  binlog-backup:
+    profiles: ["backups"]
+    image: mysql:8.4
+    # Streams the binary log off the datadir continuously, which is what actually closes the
+    # gap between an hourly dump and the accepted RPO target.
+    command: ["sh", "/backup/binlog-backup.sh"]
+    env_file: [.env]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+    volumes:
+      - ./docker:/backup:ro
+      - mysql_backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
 volumes:
   mysql:
   media:
   redis:
+  clamav_db:
   caddy_data:
   caddy_config:
+  mysql_backups:
+  docuseal_redis:
+  docuseal_data:

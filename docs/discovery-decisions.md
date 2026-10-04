@@ -76,6 +76,34 @@ override is enabled.
   stale credentials/rules, and altered device time rather than silently accepting an
   offline punch.
 
+**Ruled on 2026-10-04 — the selfie (CLK-1).** The three questions this section carried as open were
+answered by the owner the same day, and each answer has a build consequence:
+
+1. **Retention is configurable by an owner or administrator, from permanent to a set number of days.**
+   That is the shape `DocumentType.retention_days` already has — a nullable integer where blank means
+   permanent, edited on the compliance settings page, which renders blank as "Permanent" and shows the
+   reader list beside it. So this answer asks for no new field and no new screen; what it asks for is
+   that the selfie's own record type be *there and editable*, like any other.
+2. **A frame is owed at clock-in and clock-out, "if other methods weren't used", and not at breaks.**
+   Two consequences. It is one boolean rather than a per-event matrix, because breaks are annotations on
+   a tour somebody is already paid for, not arrivals anyone needs to witness. And the clause *if other
+   methods weren't used* makes the requirement conditional on the absence of rival evidence: a punch
+   already identified by a verified station PIN, or attested by a checkpoint scan, has its own answer to
+   "who was there", and asking for a face on top of it is friction that proves nothing. So the rule is
+   "selfie required unless another identity method covers this punch" — stated, not implied, and
+   testable in both directions.
+3. **Subject, owner, administrator, HR *and dispatcher* may open a stored selfie.** This is the answer
+   that cannot be implemented by reusing an existing rung, and the reason is worth recording: the
+   current `restricted` staff list is owner/administrator/HR, so putting biometrics there would either
+   leave the dispatcher out or — if `restricted` were widened instead — silently disclose every existing
+   workers'-compensation claim, accommodation file, leave record and screening result to dispatch too.
+   Those are different disclosures decided by different people. The ruling therefore needs its own rung
+   beside the other two, whose staff list is exactly the four roles named, and which the subject can
+   still open because a biometric about you is not sealed from you.
+
+Supervisor approval — the third unbuilt evidence option in the list above — is still open and is a
+different thing: it needs a decision record, not a camera.
+
 ## Time calculation, reports, and corrections
 
 - Pay periods, workweek boundary, timezone, overtime rules, rounding rules, payroll
@@ -97,6 +125,13 @@ override is enabled.
   employer. The UI previews examples and the aggregate effect before activation.
 - Default overtime policies remain subject to the applicable approved compliance rule;
   the system must not ship a silent default that obscures time actually worked.
+- **Approved leave is paid on the hours it displaced** *(ruled 2026-10-03)*. A leave row is
+  priced on the officer's own scheduled post hours that fall inside the approved span, at
+  that post's resolved pay rate and the firm's leave pay-category rule. The calendar span an
+  absence covers is **not** a payable figure and must not be multiplied by a rate. Where the
+  period carries no scheduled posts for that person, the row states that there is no basis
+  rather than inventing one — the same rule that keeps a missing punch from becoming a claimed
+  fact.
 
 ## Scheduling
 
@@ -191,3 +226,65 @@ product, not that they can safely be built simultaneously. The delivery plan sho
 vertical slices: identity/audit foundation first, then personnel plus compliance, then
 schedule-to-punch-to-payroll, with notifications, imports, and mobile capabilities added
 alongside the workflows they enable.
+
+## Rulings taken on 2026-10-03
+
+Four questions that were blocking roadmap items, answered by the product owner. Recorded here
+because each one is a *requirement* now, not a preference, and each has a build consequence.
+
+- **Payroll lock granularity — a partial-lock child object, not a per-branch run.** One run stays
+  one period for the company (the run screen, the exports, the approval and the reopen path keep
+  their current shape), and a lock segment is added beneath it per branch or contract, so a firm can
+  lock the branches it has paid and keep working the ones it has not. Consequence: a run's status is
+  no longer the whole answer to "is this period locked", so every gate that reads
+  `PayrollRun.status` — `record_punch`, the correction approval, the export — has to consult the
+  segment that actually covers the row it is touching, and reopening one segment must not silently
+  unlock the others.
+- **The Texas control matrix — drafted from the statutes, approved row by row.** I read §1702 and
+  37 TAC Ch. 35 and enter each obligation with its proposed value, its authority URL and reference,
+  and its interpretation text; **nothing becomes active until the owner approves that row**, which is
+  the `approved_by` / `approved_at` mechanism the matrix already has. Consequence: the product still
+  ships no jurisdiction's numbers unapproved, and the draft is reviewable work rather than encoded
+  law. Legal review remains a production gate before any of it is relied on.
+- **Document signing — self-hosted free build for a single company; more than one tenant means the
+  licensed Pro edition, still on-premises.** The community edition is one DocuSeal account per
+  installation, so a deployment serving more than one `Organization` licenses Pro rather than
+  splitting one workspace between tenants. Consequence: the application-side integration must be
+  written against a signing *backend* chosen per installation — token, base URL, template ids from
+  tenant settings rather than environment alone — so that moving to Pro is a credential change and
+  not a schema change. It does not license away the local system of record: signed bytes still come
+  back here and are stored as a revision, because the secrecy ladder, the retention rules, the legal
+  hold and the audit chain all live in this application.
+- **Leave is paid on the hours it displaced** — recorded in §Time calculation above, since it is a
+  pay rule rather than a scheduling one.
+
+### Rulings taken later the same day
+
+- **Clock evidence: selfie, shared kiosk with PIN, and the spoof-risk signal. Not NFC.** Of the seven
+  options §Sites lists, the launch set is CLK-1, CLK-2 and CLK-4. The ordering consequence is real: a
+  selfie is personal-biometric data, so it inherits the `DocumentType.sensitivity` ladder and the OWASP
+  upload rules already in the codebase, while the kiosk PIN adds no storage at all and is the biggest
+  friction reduction for a firm whose guards share one phone at the gate. NFC stays unbuilt because QR
+  checkpoints already close the tour-verification promise end to end.
+- **Audit retention: seal the period, then purge.** The chain head is computed and stored per period
+  (with the row count and the digest), after which events older than `audit_retention_days` may be
+  deleted without destroying verifiability — the seal is what proves what the chain said before the
+  rows went. Growing storage forever was never the requirement; a purge that quietly broke the chain
+  would have been worse.
+- **SMS: build the provider ingest now, and capture consent at the account's own start.** Consent is
+  taken **at sign-up, registration or first login**, and additionally from the user's own profile page
+  so owners, HR and the rest can opt in afterwards. The record is per *person holding an account in
+  this product*, scoped per organization, and it is a precondition on send rather than a preference
+  flag: nothing goes to a number until that person has affirmatively opted in, and an opt-out ends the
+  send path immediately. Bounce, complaint, unsubscribe and suppression callbacks are ingested and
+  retained alongside it, since the opt-out arrives as a callback and nowhere else.
+- **Browser preview: yes — permission to read is permission to view.** If the reader's own access rule
+  (`record_readable`, the sensitivity ladder, the authority scope) lets them open a document, there is
+  no reason to make them download it to read it; render it inline, or in a modal behind a thumbnail on
+  the page they are already on. **This supersedes the standing "uploads are never served inline"
+  posture**, which is why it is written down rather than left to whoever reads the code: it is a
+  serving-model change, and the mitigations travel with it — `Content-Disposition: inline` only for a
+  reader the rule already admits, never on a guessed or leaked URL; content-type allowlisting instead
+  of sniffing; a sandboxed CSP for the previewed bytes with no scripting and no same-origin framing; and
+  the same audit event the download writes. Treat it as a security-review item, because the reason
+  inline serving was refused in the first place was XSS and drive-by-download risk on uploaded files.

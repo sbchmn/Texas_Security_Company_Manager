@@ -5,7 +5,9 @@
 
 The links below are primary government guidance or official vendor/standards
 documentation. Texas requirements must be converted into a separate, section-level
-control matrix and approved before implementation.
+control matrix and approved before implementation. That matrix's remaining content work,
+and every other outstanding item, is tracked in
+[development-roadmap.md](development-roadmap.md).
 
 ## HCRM record catalog
 

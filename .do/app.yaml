@@ -14,6 +14,14 @@ services:
         type: SECRET
       - key: TRUST_PROXY_SSL_HEADER
         value: "true"
+      # The container is only reachable through the App Platform edge, so the forwarded
+      # client address is trusted from any peer. Without this the login throttle buckets
+      # every visitor together behind the edge address.
+      - key: TRUSTED_PROXIES
+        value: "0.0.0.0/0"
+      # Set for a public hostname so a cross-origin form post cannot reach the app.
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "https://${APP_DOMAIN}"
       - key: ALLOWED_HOSTS
         value: ${APP_DOMAIN}
       - key: MYSQL_HOST
@@ -28,19 +36,73 @@ services:
         value: ${tscm-db.PASSWORD}
       - key: REDIS_URL
         value: ${tscm-cache.DATABASE_URL}
+      # App Platform has no ClamAV sidecar (the scanner is not an HTTP service), so this
+      # spec ships in basic mode: signature/MIME validation and the EICAR check only.
+      # Before holding real personnel records, either point CLAMAV_HOST at a scanner on
+      # your VPC and set MALWARE_SCAN_MODE=clamav, or keep documents out of production.
+      - key: MALWARE_SCAN_MODE
+        value: basic
+      - key: CLAMAV_HOST
+        value: ""
+      - key: CLAMAV_PORT
+        value: "3310"
+      # Container filesystems on App Platform are ephemeral: without object storage every
+      # personnel document and logo is lost on the next deploy. Replace these three values
+      # with your Spaces bucket, endpoint, and region before deploying.
+      - key: AWS_STORAGE_BUCKET_NAME
+        value: replace-with-your-spaces-bucket
+      - key: AWS_S3_ENDPOINT_URL
+        value: https://replace-with-your-space-region.digitaloceanspaces.com
+      - key: AWS_S3_REGION_NAME
+        value: replace-with-your-space-region
+      - key: AWS_ACCESS_KEY_ID
+        type: SECRET
+      - key: AWS_SECRET_ACCESS_KEY
+        type: SECRET
+      - key: DEFAULT_FROM_EMAIL
+        value: alerts@example.com
+      # One provider is active per installation; set the matching API secret in the
+      # App Platform console (SECRET envs are never stored in this file).
+      - key: POSTMARK_SERVER_TOKEN
+        type: SECRET
+      - key: MAILJET_API_KEY
+        type: SECRET
+      - key: MAILJET_SECRET_KEY
+        type: SECRET
+      # Flip to "1" for the first deploy to create the initial organization and owner from
+      # the BOOTSTRAP_* settings below, then set it back to "0".
+      - key: RUN_BOOTSTRAP
+        value: "0"
+      - key: BOOTSTRAP_EMAIL
+        value: owner@example.com
+      - key: BOOTSTRAP_PASSWORD
+        type: SECRET
+      - key: BOOTSTRAP_COMPANY
+        value: Lone Star Security
+      - key: BOOTSTRAP_SLUG
+        value: lone-star-security
 databases:
+  # production: true is the managed tier with daily backups and a restore path; the dev
+  # tier keeps no backups and cannot meet the documented recovery objectives.
   - name: tscm-db
     engine: MYSQL
-    production: false
+    production: true
+    # App Platform names the generated database/credentials after the component.
+    db_name: tscm
+    db_user: tscm
   - name: tscm-cache
     engine: REDIS
-    production: false
+    production: true
 
 workers:
   - name: notifications
     dockerfile_path: Dockerfile
     source_dir: /
-    run_command: sh -c "while true; do python manage.py compliance_reminders && python manage.py process_notifications; sleep 60; done"
+    # Same passes as the compose worker, so a platform deploy chases the same obligations. Each is
+    # idempotent and `|| true`-guarded: one failing pass must not stop notification delivery.
+    # This spec previously ran only compliance_reminders, which left recurring posts, missing-punch
+    # reports, onboarding chases, stale-move closure and daily figures unattended on App Platform.
+    run_command: sh -c "while true; do python manage.py compliance_reminders || true; python manage.py generate_recurring_posts || true; python manage.py report_missing_punches || true; python manage.py onboarding_reminders || true; python manage.py close_stale_moves || true; python manage.py capture_reports || true; python manage.py process_notifications || true; sleep 60; done"
     instance_count: 1
     envs:
       - key: SECRET_KEY
@@ -59,3 +121,22 @@ workers:
         value: ${tscm-db.PASSWORD}
       - key: REDIS_URL
         value: ${tscm-cache.DATABASE_URL}
+      - key: RUN_MIGRATIONS
+        value: "0"
+      # The worker never uploads files, so it does not need the scanner configuration.
+      - key: MALWARE_SCAN_MODE
+        value: basic
+      - key: AWS_STORAGE_BUCKET_NAME
+        value: replace-with-your-spaces-bucket
+      - key: AWS_S3_ENDPOINT_URL
+        value: https://replace-with-your-space-region.digitaloceanspaces.com
+      - key: AWS_S3_REGION_NAME
+        value: replace-with-your-space-region
+      - key: AWS_ACCESS_KEY_ID
+        type: SECRET
+      - key: AWS_SECRET_ACCESS_KEY
+        type: SECRET
+      - key: DEFAULT_FROM_EMAIL
+        value: alerts@example.com
+      - key: POSTMARK_SERVER_TOKEN
+        type: SECRET

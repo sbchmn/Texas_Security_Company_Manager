@@ -1,0 +1,34 @@
+{% extends 'base.html' %}{% block title %}Text alerts{% endblock %}{% block content %}
+<div class="page narrow"><div class="page-heading"><div><p class="eyebrow">My work</p><h1>Text alerts</h1>
+<p>Whether {{ current_organization.display_name }} may text you, and about what. Nothing is sent to a number that has not opted in, and replying <strong>STOP</strong> to any message we send ends it immediately — no login, no asking anyone.</p></div></div>
+
+{% if not person.mobile_phone and not form.mobile_phone.value %}<p class="message">There is no mobile number on your record yet, so there is nothing to opt in. Add one below and the choice becomes available.</p>{% endif %}
+{% if block %}<p class="message warning">This number is blocked: {{ block.get_kind_display }}{% if block.reason %} — {{ block.reason }}{% endif %} ({{ block.since|date:'M j, Y' }}). {% if block.kind == 'unsubscribe' %}Opting in below clears that block; it is your own decision.{% else %}Opting in again does not lift this one — it is a fact about the number, not a preference. Ask your supervisor to check the number, or to use your email.{% endif %}</p>{% endif %}
+
+<section class="panel">
+<form method="post" class="stacked-form">{% csrf_token %}
+<label>{{ form.mobile_phone.label }}{{ form.mobile_phone }}<small class="helptext">{{ form.mobile_phone.help_text }}</small>{% for error in form.mobile_phone.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
+<label class="consent-line">{{ form.opt_in }} <span>{{ form.opt_in.label }}</span></label>
+<div class="actions"><button class="button" type="submit" name="choice" value="yes">Save</button>
+{% if current and current.state == 'granted' %}<button class="button secondary" type="submit" name="choice" value="off">Turn texts off</button>{% endif %}
+<a class="button text" href="{% url 'dashboard' %}">Not now</a></div>
+</form>
+<p class="helptext">What you are agreeing to, in the words that will be on record: <em>{{ wording }}</em></p>
+</section>
+
+<section class="panel">
+<h2>Your answers, in order</h2>
+<p class="muted">Every decision is kept, including the ones you later changed. A reversed answer is still proof that you were asked, and the wording beside each one is the sentence you actually saw.</p>
+{% for row in history %}<div class="person-row"><div><strong>{{ row.get_state_display }}{% if row.state == 'granted' %} — texts on{% else %} — texts off{% endif %}</strong>
+<small>{{ row.decided_at|date:'M j, Y H:i' }} · {{ row.get_source_display }}{% if row.recorded_by %} · recorded by {{ row.recorded_by.get_full_name|default:row.recorded_by.username }}{% endif %}</small>
+{% if row.wording %}<small class="muted">“{{ row.wording|truncatechars:160 }}”</small>{% endif %}</div>
+<span class="pill {{ row.state }}">••••{{ row.destination|slice:'-4:' }}</span></div>
+{% empty %}<p class="muted">No decisions recorded for this number yet — which means no texts, and no claim that you said no.</p>{% endfor %}
+</section>
+
+<section class="panel">
+<h2>Why the number, not the person</h2>
+<p class="helptext">Carriers reissue phone numbers. If consent followed you instead of the number, a phone you left behind could keep getting your schedule — and the person who has it now would be getting texts they never agreed to. So changing your number below is not switching your opt-in across: it stops the texts until the new number is opted in.</p>
+<p class="helptext">Required notices — a closed post, a timecard exception, a licence about to lapse — are categorised apart from anything optional. By email those still go out even if you unsubscribed from routine mail. By text they do not: an opted-out number gets nothing, because the rule about texts is about the number, not about how important we think our message is.</p>
+</section>
+</div>{% endblock %}

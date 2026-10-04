@@ -4,3 +4,123 @@
 .actions,.clock-actions{display:flex;gap:10px;flex-wrap:wrap}.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}.site-list{margin-top:18px;border-top:1px solid var(--line)}.site-list>div{padding:13px 0;border-bottom:1px solid var(--line)}.site-list small,table td small{display:block;color:var(--muted);margin-top:3px}.clock-card{text-align:center;margin-bottom:22px}.clock-card label{display:grid;gap:7px;text-align:left;max-width:520px;margin:20px auto}.clock-now{font:800 clamp(2rem,8vw,4rem) Inter,ui-sans-serif,system-ui;letter-spacing:-.05em}.clock-actions{justify-content:center;margin:22px 0}.pill.expired,.pill.revoked,.pill.suspended,.pill.rejected{background:#fee2e2;color:#991b1b}.pill.pending,.pill.unverified{background:#fff3d9;color:#986500}.pill.published,.pill.accepted{background:#dff8ed;color:#13734f}
 .skip-link{position:fixed;left:12px;top:12px;z-index:1000;transform:translateY(-200%);background:#fff;color:#111;padding:10px 14px;border:2px solid var(--brand);border-radius:6px}.skip-link:focus{transform:none}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.invitation-link{margin-bottom:24px}.invitation-link label{display:block;font-weight:700;margin:12px 0 6px}@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 .sidebar-user>a{display:block;color:#fff;text-decoration:none;margin-bottom:8px;opacity:.82}.sidebar-user>a:hover,.sidebar-user>a:focus-visible{opacity:1;text-decoration:underline}
+.nav-section{margin:16px 14px 4px;font-size:9px;text-transform:uppercase;letter-spacing:.12em;font-weight:800;color:rgba(255,255,255,.5)}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:22px}
+.tabs a{padding:11px 15px;text-decoration:none;color:var(--muted);font-weight:700;font-size:13px;border-bottom:2px solid transparent;display:flex;gap:7px;align-items:center}
+.tabs a:hover{color:var(--brand)}
+.tabs a.active{color:var(--brand);border-bottom-color:var(--accent)}
+.tabs em{font-style:normal;font-size:10px;background:#edf3f7;border-radius:20px;padding:2px 7px;color:var(--brand)}
+.table-panel{margin-bottom:22px}
+.people-list{margin-top:8px}
+.profile-list{display:grid;grid-template-columns:1fr 1fr;gap:0 22px;margin:0}
+.profile-list dt{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:800;margin-top:14px}
+.profile-list dd{margin:3px 0 0;font-weight:600}
+.setting-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px}
+.setting-card h3{margin:0 0 6px;font-size:15px}
+.setting-card a{color:var(--brand);text-decoration:none}
+.setting-card p{margin:0;font-size:13px}
+.inline-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.inline-form input,.inline-form select{width:auto;min-width:140px}
+.pill.missing{background:#fee2e2;color:#991b1b}
+.pill.clean,.pill.on-time{background:#dff8ed;color:#13734f}
+.pill.inactive,.pill.cancelled{background:#edf1f5;color:#5b6b7f}
+.pill.draft,.pill.not-sourced{background:#fff3d9;color:#986500}
+.pill.restricted{background:#fff3d9;color:#986500}
+.pill.sealed{background:#fee2e2;color:#991b1b}
+.pill.not-evaluated{background:#edf1f5;color:#5b6b7f}
+.breakdown,.history{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}
+.breakdown h3,.history h3{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
+table.compact th,table.compact td{padding:9px 12px;font-size:13px}
+table.compact th{font-size:10px}
+.history .panel-head{border:0;padding:0;margin-bottom:10px;align-items:baseline}
+.history .panel-head h3{margin:0}
+.history .panel-head a{font-size:12px;font-weight:700;color:var(--brand);text-decoration:none}
+.page-heading form{display:inline}
+.scope-note{border-left:3px solid var(--accent);background:#eef4fb;color:var(--ink);border-radius:8px;padding:11px 14px;margin:0 0 18px;font-size:13px}
+.scope-pill{display:inline-block;width:auto;background:#eef4fb;color:var(--muted);border-radius:20px;padding:4px 9px;font-size:10px;letter-spacing:.02em;margin-top:7px;line-height:1.4}
+.sidebar-user .scope-pill{background:rgba(255,255,255,.14);color:#fff;opacity:.86}
+.authority-list dt{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.authority-list dd{margin:2px 0 14px}
+.decide-form{display:grid;gap:8px;min-width:230px}
+.message.warning{background:#fff3d9;color:#986500}
+.pill.declined{background:#fee2e2;color:#991b1b}
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.bar{height:10px;background:#e9eef5;border-radius:6px;overflow:hidden;margin:14px 0}
+.bar span{display:block;height:100%;background:var(--accent)}
+.figure{font-size:34px;letter-spacing:-.04em;white-space:nowrap}
+.tags span.warn{background:#fee2e2;color:#991b1b;font-weight:700}
+.pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.pagination-total{margin:14px 0 0;font-size:12px}
+@media(max-width:760px){.profile-list{grid-template-columns:1fr}.tabs a{padding:9px 11px;font-size:12px}}
+/* An owner sees every section; the nav list scrolls so the account block stays in view. */
+.sidebar nav{flex:1;min-height:0;overflow-y:auto;padding-bottom:10px;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.28) transparent}
+.sidebar nav::-webkit-scrollbar{width:6px}
+.sidebar nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.25);border-radius:8px}
+.allauth-page.page .stacked-form{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:26px;max-width:600px}
+.allauth-page .form-actions{margin-top:8px}
+.allauth-messages{margin-bottom:18px}
+.allauth-messages .message{margin-bottom:8px}
+.allauth-page.entrance{width:min(440px,100% - 40px);margin:96px auto 48px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:34px;position:relative}
+.allauth-page.entrance::before{content:'TS';position:absolute;top:-76px;left:0;width:52px;height:52px;background:var(--accent);color:var(--brand);border-radius:14px;display:grid;place-items:center;font:800 17px Inter,ui-sans-serif,system-ui,sans-serif}
+.allauth-page.entrance h1{font-size:24px}
+.allauth-page.entrance p{color:var(--muted)}
+.stacked-form .field{display:grid;gap:7px}
+.stacked-form .helptext{font-size:11px;color:var(--muted)}
+.stacked-form .error{margin:0}
+.check-field{display:flex;gap:9px;align-items:center;font-weight:600;font-size:13px}
+.button.danger{background:#fee8e8;color:#a32727}
+.button-link{background:none;color:var(--muted);text-decoration:underline}
+.button-link:hover{filter:none;color:var(--brand)}
+.allauth-page .panel{margin-top:18px}
+.allauth-panel .panel-body{padding-top:16px}
+.allauth-panel .panel-body p{margin:6px 0;color:var(--muted)}
+.allauth-panel .panel-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+.qr-img{width:190px;height:190px;display:block;border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px;margin:4px 0}
+hr{border:0;border-top:1px solid var(--line);margin:24px 0}
+/* In-page record viewer. The overlay is the whole viewport so a click outside the frame closes it,
+   and [hidden] has to be restated because the open state is a display:grid — a modal that cannot be
+   hidden is one a worker cannot dismiss. */
+.preview-modal{position:fixed;inset:0;z-index:900;background:rgba(19,34,56,.62);display:grid;place-items:center;padding:20px}
+.preview-modal[hidden]{display:none}
+.preview-frame{background:var(--surface);border-radius:14px;width:min(1040px,100%);height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--shadow)}
+.preview-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.preview-head strong{font-size:15px}
+.preview-head .muted{font-size:12px;margin-right:auto}
+.preview-body{flex:1;background:#eef2f7;position:relative;overflow:hidden}
+.preview-body iframe{width:100%;height:100%;border:0;background:#eef2f7}
+.preview-body img{max-width:100%;max-height:100%;display:block;margin:auto;padding:18px;object-fit:contain}
+.preview-body pre{margin:0;height:100%;overflow:auto;padding:20px;font-size:13px;white-space:pre-wrap;word-break:break-word;text-align:left}
+.preview-frame>p{margin:0;padding:10px 18px;border-top:1px solid var(--line);font-size:11px}
+@media(max-width:760px){.preview-modal{padding:0}.preview-frame{width:100%;height:100vh;border-radius:0}}
+/* CLK-2. The station screen. Large touch targets, nothing that persists, and no dependence on the
+   sidebar the anonymous page never gets. `[hidden]` is restated because the pad is a grid — a display
+   rule beats the browser's default and would otherwise leave both halves on screen at once. */
+.kiosk{width:min(560px,100%);margin:6vh auto;padding:26px;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:14px}
+.kiosk-brand{margin:0;color:var(--accent);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.14em}
+.kiosk-station{margin:0;font-size:clamp(1.6rem,5vw,2.2rem);letter-spacing:-.04em}
+.kiosk-where{margin:0;color:var(--muted)}
+.kiosk-pad,.kiosk-person{display:flex;flex-direction:column;gap:14px}
+.kiosk-pad[hidden],.kiosk-person[hidden]{display:none}
+.kiosk-pin{margin:0;text-align:center;font-weight:800;font-size:clamp(1.4rem,5vw,2rem);letter-spacing:.3em;min-height:2.2rem;color:var(--brand)}
+.kiosk-keys{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.kiosk-key{font:inherit;font-size:1.4rem;font-weight:700;padding:18px 0;border-radius:12px;border:1px solid var(--line);background:var(--canvas);color:var(--ink);cursor:pointer}
+.kiosk-key.secondary{font-size:1rem;color:var(--muted)}
+.kiosk-go{padding:15px;font-size:1.05rem}
+.kiosk-hint{margin:0;font-size:12px;color:var(--muted);line-height:1.5}
+.kiosk-hello{margin:0;font-size:1.3rem}
+.kiosk-status{margin:0;min-height:2.4rem;padding:10px 14px;border-radius:10px;background:var(--canvas);color:var(--brand);font-weight:600}
+.kiosk-posts{display:flex;flex-direction:column;gap:8px}
+.kiosk-post{display:flex;flex-direction:column;gap:3px;text-align:left;font:inherit;padding:13px 15px;border-radius:12px;border:1px solid var(--line);background:#fff;cursor:pointer}
+.kiosk-post small{color:var(--muted);font-size:12px}
+.kiosk-post.selected{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.kiosk-actions{display:flex;gap:10px;flex-wrap:wrap}
+.kiosk-finish{background:none;border:0;color:var(--muted);text-decoration:underline;padding:0;cursor:pointer;font:inherit}
+.field-error{display:block;color:#a32727;font-size:11px;margin-top:4px}
+/* NTF-4. The consent tick is the one checkbox on its page that must not read like a preference: the
+   sentence beside it is what the person is agreeing to, so it sits at label size and wraps. */
+.consent-prompt{margin-bottom:22px}
+.consent-line{display:flex;gap:10px;align-items:flex-start;font-weight:600;font-size:14px;line-height:1.5}
+.consent-line input{margin-top:4px;width:auto;flex:none}
+.pill.blocked{background:#fee8e8;color:#a32727}
+.pill.granted{background:#dff8ed;color:#13734f}
+.pill.revoked{background:#edf1f5;color:#65758b}

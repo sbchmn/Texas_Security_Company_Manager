@@ -1,0 +1,73 @@
+Creating test database for alias 'default'...
+......EE.E..FE..F.C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\.venv\Lib\site-packages\django\core\handlers\base.py:62: UserWarning: No directory at: C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\staticfiles\
+  mw_instance = middleware(adapted_handler)
+.E
+======================================================================
+ERROR: test_a_photo_id_from_another_company_is_not_found_rather_than_forbidden (core.tests.ClockSelfieTest.test_a_photo_id_from_another_company_is_not_found_rather_than_forbidden)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\tests.py", line 9565, in test_a_photo_id_from_another_company_is_not_found_rather_than_forbidden
+    from .services import _selfie_claim
+ImportError: cannot import name '_selfie_claim' from 'core.services' (C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\services.py)
+
+======================================================================
+ERROR: test_a_record_that_is_not_a_clock_photo_cannot_be_laundered_into_one (core.tests.ClockSelfieTest.test_a_record_that_is_not_a_clock_photo_cannot_be_laundered_into_one)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\tests.py", line 9529, in test_a_record_that_is_not_a_clock_photo_cannot_be_laundered_into_one
+    document = store_person_document(organization=self.org, person=self.ana, document_type=id_scan,
+               ^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'store_person_document' is not defined
+
+======================================================================
+ERROR: test_a_station_punch_is_exempt_because_its_pin_already_said_who (core.tests.ClockSelfieTest.test_a_station_punch_is_exempt_because_its_pin_already_said_who)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\tests.py", line 9512, in test_a_station_punch_is_exempt_because_its_pin_already_said_who
+    self.assertFalse(self.recorded(punch)["evidence"]["selfie"]["required"])
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'selfie'
+
+======================================================================
+ERROR: test_the_biometric_rung_admits_exactly_the_four_roles_the_owner_named (core.tests.ClockSelfieTest.test_the_biometric_rung_admits_exactly_the_four_roles_the_owner_named)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\tests.py", line 9578, in test_the_biometric_rung_admits_exactly_the_four_roles_the_owner_named
+    from .services import record_readable
+ImportError: cannot import name 'record_readable' from 'core.services' (C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\services.py)
+
+======================================================================
+ERROR: test_widening_the_rung_for_dispatch_did_not_widen_the_claim_files_too (core.tests.ClockSelfieTest.test_widening_the_rung_for_dispatch_did_not_widen_the_claim_files_too)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\tests.py", line 9595, in test_widening_the_rung_for_dispatch_did_not_widen_the_claim_files_too
+    document = store_person_document(organization=self.org, person=self.ana, document_type=claim,
+               ^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'store_person_document' is not defined
+
+======================================================================
+FAIL: test_one_frame_cannot_evidence_both_ends_of_a_tour (core.tests.ClockSelfieTest.test_one_frame_cannot_evidence_both_ends_of_a_tour)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\tests.py", line 9542, in test_one_frame_cannot_evidence_both_ends_of_a_tour
+    self.assertIn("already been used", str(refused.exception))
+AssertionError: 'already been used' not found in "['Punch time is ahead of the server clock; correct the device time.']"
+
+======================================================================
+FAIL: test_the_policy_that_asked_for_the_frame_is_stamped_beside_the_answer (core.tests.ClockSelfieTest.test_the_policy_that_asked_for_the_frame_is_stamped_beside_the_answer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\core\tests.py", line 9504, in test_the_policy_that_asked_for_the_frame_is_stamped_beside_the_answer
+    self.assertEqual(f"company:{self.policy.revision}", selfie["version"],
+AssertionError: 'company:1' != '1:1'
+- company:1
++ 1:1
+ : the rule is versioned like the fence and the rounding, so an edited policy cannot retroactively change what a punch claimed
+
+----------------------------------------------------------------------
+Ran 20 tests in 20.464s
+
+FAILED (failures=2, errors=5)
+Destroying test database for alias 'default'...
+Found 20 test(s).
+System check identified no issues (0 silenced).

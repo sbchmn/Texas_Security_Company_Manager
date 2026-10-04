@@ -2,6 +2,7 @@ import os
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from allauth.account.models import EmailAddress
 from core.models import AuditEvent, Branch, Membership, Organization
 
 class Command(BaseCommand):
@@ -14,6 +15,12 @@ class Command(BaseCommand):
         User=get_user_model(); user, created=User.objects.get_or_create(username=email, defaults={"email": email, "is_staff": True})
         if created: user.set_password(password); user.save()
         org, _=Organization.objects.get_or_create(slug=slug, defaults={"legal_name": name, "display_name": name})
+        # Mark the provisioned address verified. allauth refuses to enroll an MFA authenticator
+        # while the user holds an unverified address, and saving the user above made allauth
+        # create exactly such a row -- so a forced-MFA bootstrap owner could never get in.
+        # This address is operator-supplied through a deployment secret, not self-signup.
+        if user.email:
+            EmailAddress.objects.update_or_create(user=user, email=user.email, defaults={"verified": True, "primary": True})
         Membership.objects.update_or_create(organization=org, user=user, defaults={"role": Membership.Role.OWNER, "active": True})
         Branch.objects.get_or_create(organization=org, name="Main Branch")
         AuditEvent.objects.get_or_create(organization=org, action="organization.bootstrapped", target_type="organization", target_id=str(org.pk), defaults={"actor": user})

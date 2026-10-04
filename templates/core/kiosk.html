@@ -1,0 +1,38 @@
+{% extends 'base.html' %}{% block title %}Clock{% endblock %}{% block content %}
+{#  A shared station gets no navigation, no roster and nothing that outlives the person standing#}
+{#  in front of it. Everything below the PIN is fetched against that PIN, and the page returns#}
+{#  itself to the pad. See core/services.py §CLK-2 for why the station and the PIN are separate.#}
+{% if closed %}
+<div class="page narrow"><section class="panel empty"><h2>This clock station is retired</h2>
+<p>{{ kiosk.name }} has been closed by someone at {{ kiosk.organization.display_name }}. Use the station your supervisor points you to, or clock from your own device.</p></section></div>
+{% else %}
+<section class="kiosk" data-kiosk data-identify-endpoint="{% url 'kiosk_identify' kiosk_id=kiosk.pk %}" data-punch-endpoint="{% url 'kiosk_punch' kiosk_id=kiosk.pk %}">
+{% csrf_token %}
+<p class="kiosk-brand">{{ organization_name }}</p>
+<h1 class="kiosk-station">{{ kiosk.name }}</h1>
+<p class="kiosk-where">{{ where }}</p>
+
+<div class="kiosk-pad" data-kiosk-pad>
+<p class="kiosk-pin" data-kiosk-pin aria-live="polite">Enter your clock PIN</p>
+<div class="kiosk-keys" role="group" aria-label="PIN pad">
+<button type="button" class="kiosk-key" data-digit="1">1</button><button type="button" class="kiosk-key" data-digit="2">2</button><button type="button" class="kiosk-key" data-digit="3">3</button>
+<button type="button" class="kiosk-key" data-digit="4">4</button><button type="button" class="kiosk-key" data-digit="5">5</button><button type="button" class="kiosk-key" data-digit="6">6</button>
+<button type="button" class="kiosk-key" data-digit="7">7</button><button type="button" class="kiosk-key" data-digit="8">8</button><button type="button" class="kiosk-key" data-digit="9">9</button>
+<button type="button" class="kiosk-key secondary" data-kiosk-back>&larr;</button><button type="button" class="kiosk-key" data-digit="0">0</button><button type="button" class="kiosk-key secondary" data-kiosk-clear>Clear</button>
+</div>
+<button type="button" class="button kiosk-go" data-kiosk-go>Continue</button>
+<p class="kiosk-hint">4 to 8 digits. Nobody else can clock in for you, and this station forgets you after a minute and a half.</p>
+</div>
+
+<div class="kiosk-person" data-kiosk-person hidden>
+<p class="kiosk-hello">Hello, <strong data-kiosk-first></strong></p>
+<p class="kiosk-status" data-kiosk-status role="status" aria-live="polite">Choose what to record.</p>
+<div class="kiosk-posts" data-kiosk-posts></div>
+{% if kiosk.site %}<label class="kiosk-point-label">Patrol point<select data-kiosk-checkpoint><option value="">Not a patrol scan</option>{% for point in kiosk.site.checkpoints.all %}{% if point.active %}<option value="{{ point.scan_code }}" data-site="{{ point.site_id }}">{{ point.name }}</option>{% endif %}{% endfor %}</select></label>
+<p class="kiosk-hint">Only points at this station's post are listed. A scan that cannot name a patrol point proves a button was pressed, not that anyone was anywhere.</p>{% endif %}
+<div class="kiosk-actions"><button type="button" class="button" data-kiosk-punch="in">Clock in</button><button type="button" class="button secondary" data-kiosk-punch="out">Clock out</button>{% if kiosk.site %}<button type="button" class="button secondary" data-kiosk-punch="checkpoint">Patrol point</button>{% endif %}</div>
+<button type="button" class="kiosk-finish button text" data-kiosk-finish>Done — forget me</button>
+</div>
+</section>
+{% endif %}
+{% endblock %}
