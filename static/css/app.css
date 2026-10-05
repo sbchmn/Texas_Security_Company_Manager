@@ -133,3 +133,60 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
 .selfie-capture img{transform:none;background:#eef1f6}
 .selfie-capture .clock-actions{flex-wrap:wrap}
 .selfie-capture[hidden]{display:none}
+
+/* Workspace navigation and layout */
+.workspace-nav{display:grid;grid-auto-columns:1fr;gap:8px;margin-top:18px;padding:14px 8px;border-bottom:1px solid rgba(255,255,255,.12)}
+.workspace-link{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:8px;color:rgba(255,255,255,.72);text-decoration:none;font-weight:600;font-size:13px;text-align:center;transition:all .2s ease}
+.workspace-link:hover{background:rgba(255,255,255,.08);color:white}
+.workspace-link.active{background:var(--accent);color:var(--brand);font-weight:700}
+
+.actions-nav{padding:14px 8px;border-bottom:1px solid rgba(255,255,255,.12)}
+.add-person-btn{display:block;width:100%;padding:11px;background:rgba(255,255,255,.12);color:white;border:1px dashed rgba(255,255,255,.25);border-radius:8px;text-align:center;text-decoration:none;font-weight:600;font-size:13px;transition:all .2s ease}
+.add-person-btn:hover{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.4)}
+
+.settings-nav{flex:1;min-height:0;overflow-y:auto;margin-top:auto;padding:14px 8px;border-top:1px solid rgba(255,255,255,.12)}
+.settings-group{color:rgba(255,255,255,.72);cursor:pointer;user-select:none;width:100%}
+.settings-group summary{padding:10px 14px;border-radius:8px;font-weight:600;list-style:none;display:flex;align-items:center;justify-content:space-between}
+.settings-group summary:hover{background:rgba(255,255,255,.08);color:white}
+.settings-group[open] summary{background:rgba(255,255,255,.08);color:white}
+.settings-list{display:grid;gap:4px;padding:6px 8px;max-height:200px;overflow-y:auto}
+.settings-list a{padding:9px 12px;border-radius:6px;color:rgba(255,255,255,.64);text-decoration:none;font-size:12px;display:block;transition:all .15s ease}
+.settings-list a:hover{background:rgba(255,255,255,.1);color:white}
+.settings-list a.active{background:rgba(255,255,255,.15);color:white;font-weight:600}
+
+/* Workspace grid for card-based layouts */
+.workspace-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;margin:32px 0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:14px;box-shadow:0 2px 4px rgba(15,35,55,.02)}
+.card h2{font-size:16px;margin:0;font-weight:700}
+.card .metric{font-size:32px;font-weight:700;color:var(--brand);margin:8px 0 0}
+.card .muted{color:var(--muted);font-size:13px}
+.card.card-primary{background:var(--brand);color:white;border-color:var(--brand)}
+.card.card-primary h2{color:white}
+.card.card-primary .metric{color:white}
+.card.card-primary .muted{color:rgba(255,255,255,.7)}
+.card.card-primary .button{background:white;color:var(--brand)}
+.card.card-primary .button:hover{filter:brightness(.95)}
+.card.card-attention{border-color:#fbbf24;background:#fffbf0}
+.card.card-attention h2{color:#b45309}
+
+.posts-list,.punches-list,.person-list,.rules-list{list-style:none;padding:0;margin:12px 0;display:grid;gap:8px}
+.posts-list li,.punches-list li,.person-list li,.rules-list li{padding:10px 0;border-bottom:1px solid var(--line)}
+.posts-list li:last-child,.punches-list li:last-child,.person-list li:last-child,.rules-list li:last-child{border:0}
+.person-list li{padding:12px 0}
+.person-list a{text-decoration:none;font-weight:600;color:var(--ink)}
+.person-list a:hover{color:var(--accent)}
+.person-list small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+
+.clock-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.next-shift{background:#f0fdf4;border:1px solid #dbeafe;border-radius:10px;padding:16px;margin:16px 0}
+.next-shift strong{display:block;color:var(--brand);font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.next-shift p{margin:6px 0;font-weight:600}
+.next-shift small{display:block;color:var(--muted);font-size:12px}
+
+/* Responsive workspace layout */
+@media(max-width:760px){
+  .workspace-nav{grid-auto-columns:unset;grid-auto-flow:column;overflow-x:auto}
+  .workspace-link{white-space:nowrap;padding:10px 12px;font-size:12px}
+  .workspace-grid{grid-template-columns:1fr;gap:14px}
+  .card{padding:16px}
+}

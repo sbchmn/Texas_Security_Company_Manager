@@ -702,19 +702,66 @@ additions to the mechanism**:
   answering "no certificate filed" about a certificate that is filed and sealed from them — a
   permission decision dressed up as a compliance gap. **CMP-1** is now unblocked for those rule
   shapes; the site- and hours-shaped duties need their evidence store first.
-- **CMP-1 — enter the Texas rules. Method ruled 2026-10-03: drafted from the statutes, approved row by
-  row.** The research pass recorded the facts but deliberately encoded none of them, and that still
-  stands — what changed is who types them. I read §1702 and 37 TAC Ch. 35 and enter each obligation with
-  its proposed value, its `authority_url` / `authority_reference`, and its interpretation text; nothing
-  is active until the owner approves that row, using the `approved_by` / `approved_at` mechanism the
-  matrix already has. So the draft is reviewable work rather than encoded law, the product ships no
-  jurisdiction's numbers unapproved, and legal review stays a production gate before any of it is relied
-  on. The numbers to propose: renewal windows (180 days early, 1.5×/2× late fees, new application after a
-  year), the CGL limits in §1702.124, and the posting duties in §1702.128 / 37 TAC §35.8.
-  Sources: [Texas Occupations Code Ch. 1702](https://statutes.capitol.texas.gov/Docs/OC/htm/OC.1702.htm),
-  [DPS Private Security Program](https://www.dps.texas.gov/section/private-security), and 37 TAC
-  Ch. 35 (the §1702.302(a) / §35.22(b) pair that makes an expired individual registration a hard
-  stop).
+- **CMP-1 — drafted 2026-10-04, and still nothing but a draft until the owner approves it row by row.**
+  `core/texas_rules.py` holds five obligations, each with its primary text quoted in `interpretation` and
+  the page it was read from on `authority_url`; `/settings/compliance/` offers them as a button and
+  `manage.py seed_texas_obligations` writes the same rows headless, with `--dry-run`. Every row lands with
+  `approved_by`/`approved_at` empty, so `is_approved` is false and `unevaluated_reason` reads *"not
+  approved, so not enforced yet"* — which is what makes this reviewable work rather than encoded law, and
+  it is asserted by comparing the queue's own per-kind figures before and after the seed: they do not
+  move. Idempotent by code, and an existing row is never rewritten, because a draft somebody has started
+  editing — or an approved obligation with versions behind it — is that company's record.
+  **Reading the primary text corrected three things this file had carried from the benchmark pass**, and
+  the corrections sit on the rows rather than being smoothed over:
+  - §1702.124(c) is **$100,000 per occurrence for bodily injury and property damage, $50,000 per
+    occurrence for personal injury, $200,000 aggregate** — not the $1M/$2M named in the previous version
+    of this bullet, which is the commercial-market and client-contract figure. (f) separately requires
+    coverage "sufficient to cover all of the business activities… related to private security"; (e) keeps
+    a filed certificate in effect until the insurer gives the department 10 days' notice.
+  - **37 TAC §35.8 is "Consumer Information and Signage", not a posting duty.** The posting duty is
+    §1702.128 — license posted conspicuously at the principal place of business *and each branch office*.
+    §35.8 is a different set of acts: client notice of the license number and the Regulatory Services
+    Division's contact details, 10-point minimum type in writing, a sign at each office, and the license
+    number at least **one inch high on each side** of any vehicle carrying the company name.
+  - **37 TAC §35.22 is captioned "Renewal Individual License Applications"**, and (b) is the sentence the
+    hard stop rests on: unless a complete renewal arrives *before* expiry, "no regulated services may be
+    performed until a complete renewal application is submitted". §1702.302(a) says it from the license
+    side, and (b)-(d) are the ladder the reminder windows are built on — **1-1/2× the fee at 90 days or
+    less expired, 2× beyond that under a year, no renewal at all at a year or more** (original application,
+    examination included). (e) has the department writing no later than the 30th day before expiry, which
+    is why the drafted ladder starts at 180: waiting for DPS's letter means already being late.
+  The firearm proficiency certificate is sourced to the **department's published procedure** (the DPS
+  individual-license FAQ, read 2026-10-04), not to a statute or rule section, and its row says so; the
+  data test refuses any row whose reference names no `§` unless it is labelled `Tex. DPS` and its
+  interpretation admits it is not the statute. That is the one drafted duty whose authority is
+  administrative guidance, and where a legal review should start.
+  **Two duties stay honestly unmeasured after approval** — posting at each office, and consumer signage —
+  because both attach to a *place* and the personnel register has no site column to file evidence against;
+  they report entered-and-not-measured and stay out of the denominator rather than scoring "no record
+  found" as compliance. The two filed-record duties become measurable the moment they are approved, which
+  is why their `DocumentType`s are seeded with them.
+  **The finding this item surfaced is now closed (ruled 2026-10-05, DD §Compliance status and
+  evidence).** Credential and schedule eligibility used to read `blocks_clock_in` / `blocks_scheduling`
+  and `active` while ignoring `is_approved`, so a requirement with no source, no reference and no named
+  approver could refuse a clock-in, while a drafted `ComplianceRule` refused nothing — one matrix, two
+  meanings for "approved". The ruling is that **approval gates enforcement**, and the part that made it
+  safe is that it does not reach backwards by switching existing rows off:
+  `CredentialType.enforcement_grandfathered` (migration 0057, default **True**) keeps a row that has
+  been enforcing for months enforcing, and the matrix labels it **"Schedule Clock-in · grandfathered"**
+  with the sub-label *"Enforcing without approval — approve it or clear the flags"*, so the debt is a
+  visible list on the screen the approver already works from rather than a silent exemption. The
+  settings screen clears the flag for every row it **creates** (a new requirement gates nothing until
+  approved) and for every row it **approves** (one reason to enforce, not two), and deliberately does
+  *not* clear it on a plain edit — a rename must not stop enforcing the obligation it has been
+  enforcing. `may_enforce` is the single predicate all three gates use: the clock's
+  `prohibited_credentials`, `shift_eligibility`, and the open-post candidate filter.
+  Legal review remains a production gate before any of it is relied on. Sources:
+  [§1702.124](https://texas.public.law/statutes/tex._occ._code_section_1702.124),
+  [§1702.128](https://texas.public.law/statutes/tex._occ._code_section_1702.128),
+  [§1702.302](https://texas.public.law/statutes/tex._occ._code_section_1702.302),
+  [37 TAC §35.8](https://www.law.cornell.edu/regulations/texas/37-Tex-Admin-Code-SS-35-8),
+  [37 TAC §35.22](https://www.law.cornell.edu/regulations/texas/37-Tex-Admin-Code-SS-35-22),
+  [DPS individual-license FAQ](https://www.dps.texas.gov/section/private-security/faq/individual-license-questions).
 - **CMP-2 — evaluation history. Done 2026-10-01**, on the shared mechanism §4 asked for rather than
   a second one: `CredentialType` now carries a `revision`, and every version of its watched values
   is appended to `RuleRevision`, so a reminder computed against a 60-day lead time can still be read
@@ -848,6 +895,27 @@ feature-status.md §Known cost of the inheritance model.
   `services.schedule_week_start` / `week_offset_for`, not `now + n days`: three tests in this suite
   passed mid-week and failed on a Saturday or a late Sunday for exactly that reason, twice in two
   different classes. `ScheduleWindowTest` pins the helpers across ±60 days.
+- **A fixture that derives a *date* from `timezone.now()` is anchoring to UTC, and the product's windows
+  are local.** `timezone.now().date()` and `timezone.localdate()` disagree for the last hours of every
+  day in a UTC-5/6 deployment — which is when this suite is usually run. Found 2026-10-04 as two failures
+  that passed at 13:15 and failed at 22:05 on the *same Sunday*: `PayCategoryTest`'s schedule-page check
+  (the fixture's "Tuesday" was next week's Tuesday, outside the window the page rendered) and
+  `HoldOverTest`'s `close_stale_hold_overs` sweep. Both classes now set `self.now =
+  timezone.localtime()`.
+  **…and the local-time anchor alone was not enough, which is the part worth keeping.** `HoldOverTest`
+  failed again on Monday morning for a second, independent reason: its fixture places the post on
+  **Tuesday of the running week**, so on a Monday or Tuesday the tour is genuinely still in the future,
+  and a sweep called with no reference is *correctly* refusing to close it — the assertion was testing
+  the day of the week. Fixed by passing an explicit `reference=` on every call in that test and adding a
+  second test for the branch the wall clock can only reach by luck. **The rule generalises:** a fixture
+  that places a post on a weekday of the current week makes *past-versus-future* depend on the run day,
+  so any assertion about "has the clock reached it yet" must supply its own reference moment rather than
+  inherit `timezone.now()`. Anything else is a test that passes Wednesday through Sunday and fails
+  Monday and Tuesday, which is indistinguishable from a real regression at 2 a.m. on a deploy branch.
+  **So:** any test computing a weekday, a workweek, a payroll period, or a "has the clock reached it
+  yet" comparison takes its date from local time — the same clock the views and the worker loop use —
+  and supplies its own `reference=` when the assertion is about a moment rather than an instant. A test
+  that only needs an instant may keep `timezone.now()`.
 
 ## 12. Suggested ordering
 
@@ -877,9 +945,15 @@ Not a commitment — the owner sequences. The dependency logic only:
    consent/opt-out policy before any SMS sends") is still only half closed: the policy, the ledger, the
    ingest and now the chooser are built, and the credentials and the real provider still have to be
    pointed at each other. Nothing is seeded, so no text leaves this system until an owner says so.
-4. **CMP-1** — enter the Texas rules. That is the owner's content decision **CMP-0** (2026-10-01)
-   existed to unblock; duties whose evidence has no store yet (a notice at each site, training hours
-   matched to a course) still need that store first.
+4. **CMP-1 — drafted 2026-10-04; the approving is the owner's, and it is now the shortest path in the
+   product.** Five Texas duties sit in `core/texas_rules.py` with their primary text quoted and their
+   sources named, offered as one button on `/settings/compliance/` or one command — so what was "enter the
+   Texas rules" from a blank table became "read a proposal and approve it row by row", which is the same
+   control with most of the typing removed. Nothing is active until the owner approves a row, and
+   §1702.124(c)'s real numbers corrected what this file had recorded. Duties whose evidence has no store
+   yet (a notice at each site, training hours matched to a course) still need that store first, and the
+   newly-recorded question — whether `is_approved` should gate credential enforcement — belongs at the
+   front of this step, because it decides what "approved" is allowed to mean.
 5. **POL-2/POL-3** are all that is left of this step: **AUTH-1 shipped 2026-10-03** (a grant that
    follows the person's own branch), and §1's **SCH-3** went with it. POL-2/POL-3 remain open *decisions*,
    not work — DD §Sites only requires global/client/site, so a branch or post level needs a stated
@@ -926,13 +1000,12 @@ already had — 54 triggers on a real MySQL 8.4.
 
 ## 13. Document signing and onboarding packets
 
-**The signing engine is decided and self-hosted; the integration is not built.** SIG-0 below records
-the owner's ruling of 2026-10-03 — self-host DocuSeal's community edition inside this project's
-compose stack rather than pay per document — and the container wiring for it is now in
-`compose.yaml` under the `signing` profile, with every value it reads in `.env.example`. What does
-**not** exist is any code in this application that talks to it: no API token, no submission call, no
-webhook ingest, no packet model. So the honest sentence is *the signer is installed and the signing
-feature is not*.
+**The application-side MVP integration is implemented; deployment acceptance remains.** DocuSeal
+runs under the optional Compose `signing` profile. The owner chose templates authored in DocuSeal's
+UI, explicit staff sending, and one request per onboarding step. `SigningSettings`, `SigningRequest`
+and `SignedArtifact` connect a step to a provider ceremony and locally retained PDFs. Authenticated
+polling verifies completion and imports the signed documents plus audit certificate before closing
+the step. There is no unauthenticated completion webhook or browser-return shortcut.
 
 **Nothing in the research sources covers signing, and that is still true.** **DD**, **RB**, **PB** and
 **IR** were written from a scheduling/payroll/compliance framing; the only signing language anywhere
@@ -961,13 +1034,13 @@ store now, and the remaining gap in this section is the packet and the signer, n
 
 | Item | Gap | Builds on |
 | --- | --- | --- |
-| SIG-0 | ~~Decide build vs integrate vs hybrid~~ **Decided 2026-10-03: self-host the community edition.** Compose/env/edge wiring done; application-side wiring not | `compose.yaml` `signing` profile, `docker/mysql-init-signing.sh`, `Caddyfile`, `.env.example` |
+| SIG-0 | ~~Decide build vs integrate vs hybrid~~ **Decided: self-host the community edition.** Compose/env/edge and application-side wiring implemented | `compose.yaml` `signing` profile, `docker/mysql-init-signing.sh`, `Caddyfile`, `.env.example` |
 | SIG-4 | ~~One DocuSeal **account** per installation: decide the hosting model~~ **Ruled 2026-10-03: free self-hosted while one company, licensed Pro above one tenant** | `Organization` tenancy, the `signing` profile |
-| SIG-5 | In the free build templates are made by a human in DocuSeal's UI; decide whether that is the product, or the template API is bought | field-tag PDF upload, `GET /templates`, `POST /submissions` |
-| SIG-1 | Keep the signed artefact, the ladder and the record of authority local whichever signer we use | `store_person_document`, `PersonDocument.supersedes`, `record_visibility_filter` |
-| SIG-2 | A packet: N documents offered as one signing event to one person | `PersonDocument`, `DocumentAcknowledgment`, `queue_notice` |
+| SIG-5 | **Ruled: templates authored in DocuSeal UI and selected here; no in-app template authoring** | `OnboardingItemForm`, `GET /templates` |
+| SIG-1 | **Implemented:** signed PDFs and audit certificate verified and filed locally before task completion | `core/document_signing.py`, `store_person_document`, `SignedArtifact` |
+| SIG-2 | **MVP narrowed:** one submission per step, one signer and record type; multi-step packets deferred | `SigningRequest`, `SignedArtifact`, `PersonDocument` |
 | ONB-1 | ~~Onboarding tasks with an owner, a due rule and a completion state~~ **Done 2026-10-03** | `OnboardingItem`, `OnboardingTask`, `onboarding_board`, `onboarding_progress` |
-| ONB-2 | Send a new hire's packet and chase it without a human opening a screen | ONB-1, `queue_acknowledgment_reminders`, `MembershipInvitation` provisioning |
+| ONB-2 | **Implemented for the selected MVP:** staff explicitly sends; invitations, reminders and verified automatic completion follow. Automatic initial sending is deliberately excluded | `issue_signing_request`, `reconcile_signatures`, `onboarding_reminders` |
 | SIG-3 | Signature-capture strength stated per record type, with the I-9 case separated from the rest | `DocumentType.signature_required`, `SEC`-style posture in feature-status.md |
 
 - **SIG-0 — decided: self-host, and here is what that bought and what it costs.** The owner's answer to
@@ -1043,12 +1116,11 @@ store now, and the remaining gap in this section is the packet and the signer, n
 - **SIG-5 — packets are sent by API, but templates are still made by a human.** The field-tag workflow
   (`{{Field Name;role=Signer1;type=date}}` in a PDF, which the auto-detector reads) is a UI action in the
   free build; the API that would let *our* screens create that template is Pro. So the operator story is:
-  build each packet document once in DocuSeal, record its template id against a `DocumentType` here, and
+  build each template once in DocuSeal, select its template id and `DocumentType` on an onboarding step here, and
   let the application send them. That answers the question this section was opened with — yes, PDF
   packets can be built and sent for signature — **with one manual step per document type, in a second
-  admin surface, with its own login, in a container whose releases are weekly.** Decide whether that is
-  acceptable for the launch customer or whether the template API earns its per-document fee. The
-  template-id ↔ `DocumentType` mapping is small and belongs to SIG-1; nothing needs SIG-5 settled first.
+  admin surface, with its own login, in a container whose releases are weekly.** The owner accepted
+  that trade for MVP; no paid template-authoring API is needed.
 - **The dual-hosting question, answered: a second hostname on the same proxy, and the proxy stays
   Caddy.** Three ways to put two applications behind one edge were on the table and two are real.
   **A path prefix (`app.example.com/sign`) does not work**: neither `config/application.rb` nor
@@ -1057,10 +1129,11 @@ store now, and the remaining gap in this section is the packet and the signer, n
   omit it — a broken signing page that reads like a proxy bug. **A second port** on one hostname works
   without DNS but puts a port number in the link a guard opens on a phone, and App Platform publishes
   one HTTPS route per service. **A second hostname on the same 443 listener is the answer**, and that is
-  what shipped: Caddy selects the certificate by SNI, forwards `Host`, and DocuSeal builds its
-  request-driven URLs from that header. The application calls the API over the docker network
-  (`http://docuseal:3000`), where the token does not cross a public hop, while the human-facing link
-  stays the public HTTPS name.
+  what shipped: Caddy selects the certificate by SNI and forwards `Host`; DocuSeal's Account
+  App URL setting names the public signing origin used in file URLs. The integration uses that same trusted HTTPS origin
+  for API calls, human-facing links and file downloads. That hostname and certificate must also work
+  from web/worker containers; a LAN/internal-CA deployment must configure certificate trust rather
+  than disabling verification.
   **Traefik instead of Caddy: evaluated, not adopted.** It buys per-service labels, which is pleasant
   past three backends, and costs two things that matter here. Its Docker provider needs
   `/var/run/docker.sock` mounted — a container that can read that socket can start a privileged
@@ -1080,10 +1153,11 @@ store now, and the remaining gap in this section is the packet and the signer, n
   green hourly job that omits every signature. It ships empty because naming a database that does not
   exist yet makes every dump fail. PLT-5 (the restore walk has never been timed) now covers a second
   system of record: whoever runs it should restore a signature, not only a punch.
-- **SIG-1 — one system of record, and it is this one.** Whatever signs the document, the signed bytes
-  come back and are stored through `store_person_document` as a **new revision** of the same chain, so
-  `signature_lineage` already answers "who signed which text" for a signed packet without a new
-  report. The signer may hold the ceremony; it must not hold the personnel file. Two reasons, both from
+- **SIG-1 — one system of record, and it is this one.** Signed bytes and their audit certificate
+  come back through `store_person_document` as new personnel records linked to the exact signing
+  request. Reissues retain earlier signed records rather than silently superseding or erasing them.
+  This request lineage is separate from the existing typed acknowledgment roster and its
+  `signature_lineage` report. The signer may hold the ceremony; it must not hold the personnel file. Two reasons, both from
   work already in this roadmap: the REC-5 ladder is enforced in this app's read paths, so records parked
   in a vendor are records nobody segregates, retains, holds or exports; and the audit chain plus
   per-type retention are the compliance story, which a vendor's own history page does not substitute for.
@@ -1126,12 +1200,12 @@ store now, and the remaining gap in this section is the packet and the signer, n
     office too. The dashboard-style counts come from `onboarding_progress`, one aggregate query, and a
     test asserts its per-person numbers equal what `onboarding_board` lists — the tile and the page are
     one calculation (RPT-4's argument applied here).
-  **ONB-2 is now half-done and honestly split.** The chase is shipped: `onboarding.assigned` and
+  **ONB-2 follows the owner's explicit-send ruling.** The chase is shipped: `onboarding.assigned` and
   `onboarding.overdue` notices, deduplicated per (task, date), addressed to the step's declared owner,
   never SMS while NTF-4 consent is unmet — which also closes the onboarding family NTF-3 deferred for
-  having no store to hang on. What remains is the *sending* half: handing a real packet to that
-  checklist, which is SIG-1/SIG-2 work and still gated by the SIG-4 hosting decision. So ONB-2 keeps
-  its row rather than being marked done on a chase alone.
+  having no store to hang on. Staff now hand a signing request to each selected step, and the worker
+  verifies and files completion. Initial automatic sending and combined multi-step packets remain
+  deliberately outside the selected MVP.
 - **SIG-3 — do not put the I-9 in the same bucket as the handbook.** USCIS permits Form I-9 to be
   completed and retained electronically with an electronic signature, but conditions that on a system
   with integrity controls, controls that **prevent and detect** unauthorised alteration *including of
@@ -1162,6 +1236,57 @@ officer, signed remotely on a phone, and lands as a retained revision in this te
 retention and audit trail intact — with the I-9 and anything DPS issues explicitly excluded from that
 first path, and with the signing database named in the backup set before the first real document goes
 in.
+
+### MVP setup and acceptance
+
+1. Rebuild web/worker and apply migrations 0058/0059 using the existing one-shot migrator. Preserve
+   existing volumes. Start the `signing` profile; existing MySQL volumes need the signing
+   database/user provisioned as described in `.env.example`.
+2. Configure the DocuSeal hostname with HTTPS. Set `DOCUSEAL_ALLOWED_ORIGINS` to its exact origin,
+   such as `https://sign.example.com`, and restart web/worker. Both services must resolve/reach it
+   and trust its certificate. API and file redirects cannot leave that origin; do not configure
+   remote-object-storage redirects for this first slice. In **DocuSeal Settings > Account > App URL**,
+   set that same HTTPS origin; this controls the URLs DocuSeal returns for signed files.
+3. In DocuSeal's UI, create a template with one signer and a required, writable signature field.
+   In application **Document signing** settings, enter the origin and API key and enable signing.
+   Saving checks the connection. Stored keys are encrypted and never displayed; changing the
+   application's `SECRET_KEY` requires re-entering signing credentials.
+4. Define an onboarding step of kind **A document signed in DocuSeal**, employee-owned, with its
+   template and an active subject-readable personnel record type. One template's PDFs and audit
+   certificate share that type's retention/access rules. Use separate steps for different rules.
+5. Issue the employee's checklist, then press **Send signing request** from their onboarding tab.
+   Provisioning does not send automatically. The employee can use their checklist or invitation
+   link; the existing notification channel and SMS-consent rules still apply.
+6. Sign on a phone, then check that the worker (or **Check signing status**) files all signed PDFs
+   and the audit certificate in the personnel file and closes the step. Repeat a status check and
+   verify it creates no duplicate records. Download the locally stored artifacts to inspect them.
+7. Include `DOCUSEAL_BACKUP_DATABASES` and DocuSeal media/key storage in backups; rehearse restoring
+   both a completed request and a pending one. See `backup-and-restore.md`.
+
+**Local/internal-CA testing:** prefer a hostname with a publicly trusted certificate when possible.
+With Caddy `tls internal`, export only its public root certificate and mount a CA bundle read-only
+into web/worker through a deployment override; set `REQUESTS_CA_BUNDLE` to that bundle's path
+**inside the containers**. Include the normal public CA roots if other HTTPS integrations use
+Requests too. Do not mount the entire `caddy_data` volume into the application: it contains private
+CA keys as well. Never disable certificate verification. The signing hostname must resolve to
+the proxy from inside the containers (an internal DNS record or Docker network alias can provide
+that); `sign.localhost` resolving to a web container's own loopback does not reach Caddy.
+
+**Failure handling:** a rejected creation (HTTP 400/401/403/404/422) is shown as not created and may
+be corrected/reissued. A timeout, server error or invalid creation response is ambiguous: its
+reserved request remains visible and is looked up by external ID without a second POST. Review
+that ID in DocuSeal; never clear the reservation or resend while creation is uncertain. Declined
+or expired requests can be reissued as a new attempt. Download, scanner and local commit failures
+leave the step open, record a visible error and retry with backoff up to one hour. Disabling the
+backend pauses checks. Browser redirects and generic record uploads never complete a signing step.
+
+**Implementation verification:** an isolated DocuSeal 3.3.0 instance was used to author a PDF template
+in its UI, issue a submission through the application, and complete the browser signing ceremony.
+Authenticated API verification and downloads used HTTPS with explicit local-CA trust, not disabled
+certificate checks. The signed PDF and audit certificate were filed locally, their hashes matched,
+the step completed, and a repeated check created no duplicates. MySQL migrations and signing
+request/artifact INSERT/UPDATE guards were also exercised. This is local integration evidence,
+not proof of the deployment's phone UX, live email delivery, production scanner or restore procedure.
 
 ---
 
@@ -1293,7 +1418,7 @@ and §13's SIG-0 bullet records the correction.
 | RB §Mobile delivery options | installable PWA shell, offline punch queue, 12-hour sync gate (launch gap → CLK-5) |
 | RB §Email and SMS providers | SES/Mailjet/Postmark + SNS/Twilio adapters, per-organization provider choice |
 | RB §Notification event catalog | event families now covered; the rest is NTF-3 |
-| E-signature tooling (checked 2026-10-03, §13) | SIG-0 ruled and the signer **self-hosted in compose** (`signing` profile, verified by booting it); **no application-side signing code yet** — SIG-4 and SIG-5 are the decisions that boot exposed, SIG-1..3 and ONB-1..2 the remaining work |
+| E-signature tooling (§13) | Self-hosted DocuSeal plus per-step application signing, authenticated reconciliation and local signed PDF/audit filing implemented; manual templates/explicit sending selected; deployment phone ceremony and restore acceptance remain |
 | USCIS M-274 §101 electronic I-9 storage | why SIG-3 excludes Form I-9 from the first signing path, and the requirements list to satisfy when it comes back |
 | Peer open-post pattern | `ShiftClaim`, request → approve → decline, announcement to qualified officers only |
 | Peer reminder ladders | `CredentialType.reminder_days_before`, once-per-rung dedup, re-arm on date change |

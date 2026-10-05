@@ -798,7 +798,7 @@ class OnboardingItemForm(forms.ModelForm):
 
     class Meta:
         model = OnboardingItem
-        fields = ["name", "code", "kind", "owner", "instructions", "due_within_days", "applies_to", "document_type", "credential_type", "order", "active"]
+        fields = ["name", "code", "kind", "owner", "instructions", "due_within_days", "applies_to", "document_type", "signing_template_id", "credential_type", "order", "active"]
         widgets = {"instructions": forms.Textarea(attrs={"rows": 3})}
 
     def __init__(self, *args, organization=None, **kwargs):
@@ -810,12 +810,73 @@ class OnboardingItemForm(forms.ModelForm):
         if scope is not None:
             self.fields["document_type"].queryset = DocumentType.objects.filter(organization=scope)
             self.fields["credential_type"].queryset = CredentialType.objects.filter(organization=scope, active=True)
+        from .document_signing import DocuSealClient
+        from .models import SigningSettings
+        self.signing_error = ""
+        self.signing_templates = {}
+        choices = [("", "Choose a DocuSeal template")]
+        config = SigningSettings.objects.filter(organization=scope, enabled=True).first() if scope else None
+        if config:
+            try:
+                data = DocuSealClient(config).api("GET", "/templates", params={"limit": 100})
+                rows = data.get("data") if isinstance(data, dict) else None
+                if not isinstance(rows, list):
+                    raise forms.ValidationError("DocuSeal returned an invalid template list.")
+                for row in rows:
+                    if isinstance(row, dict) and type(row.get("id")) is int and row["id"] > 0:
+                        self.signing_templates[row["id"]] = str(row.get("name") or row["id"])[:255]
+                choices += list(self.signing_templates.items())
+            except forms.ValidationError as exc:
+                self.signing_error = " ".join(exc.messages)
+        self.fields["signing_template_id"] = forms.TypedChoiceField(
+            choices=choices, coerce=int, empty_value=None, required=False, label="DocuSeal template",
+            help_text="For a signing step. Build a single-signer template in DocuSeal first. Up to 100 templates are listed.",
+        )
+        if self.instance.signing_template_id and self.instance.signing_template_id not in self.signing_templates:
+            self.fields["signing_template_id"].choices = choices + [
+                (self.instance.signing_template_id, self.instance.signing_template_name or "Previously selected template"),
+            ]
+        self.organization = scope
 
     def clean(self):
         cleaned = super().clean()
         kind = cleaned.get("kind")
+        previous = OnboardingItem.objects.get(pk=self.instance.pk) if self.instance.pk else None
         if kind == OnboardingItem.Kind.DOCUMENT and not cleaned.get("document_type"):
             self.add_error("document_type", "A record step has to name which record type proves it, or it is a box to tick with nothing behind it.")
         if kind == OnboardingItem.Kind.CREDENTIAL and not cleaned.get("credential_type"):
             self.add_error("credential_type", "A credential step has to name which requirement it is waiting on.")
+        if kind == OnboardingItem.Kind.SIGNATURE:
+            from .document_signing import DocuSealClient, signing_config, validate_template
+            document_type = cleaned.get("document_type")
+            template_id = cleaned.get("signing_template_id")
+            if not document_type or (cleaned.get("active") and (
+                    not document_type.active or document_type.audience != DocumentType.Audience.PERSON
+                    or document_type.sensitivity == DocumentType.Sensitivity.SEALED)):
+                self.add_error("document_type", "Choose an active personnel record type that its signer may read.")
+            if not template_id:
+                self.add_error("signing_template_id", "Choose the template this step asks the employee to sign.")
+            elif (previous and previous.kind == OnboardingItem.Kind.SIGNATURE
+                    and previous.signing_template_id == template_id):
+                self.instance.signing_template_name = self.signing_templates.get(template_id, previous.signing_template_name)
+            else:
+                try:
+                    snapshot = validate_template(DocuSealClient(signing_config(self.organization)).template(template_id))
+                    self.instance.signing_template_name = snapshot["name"]
+                except forms.ValidationError as exc:
+                    self.add_error("signing_template_id", exc)
+            if cleaned.get("owner") != OnboardingItem.Owner.PERSON:
+                self.add_error("owner", "A signing step belongs to the employee who signs it.")
+        else:
+            cleaned["signing_template_id"] = None
+            self.instance.signing_template_name = ""
+        if previous:
+            if previous.tasks.filter(signing_requests__isnull=False).exists() and any(
+                cleaned.get(name) != getattr(previous, name) for name in ("kind", "signing_template_id")
+            ):
+                self.add_error("kind", "This step has issued signing requests. Create a new step for a different template or kind.")
+            if previous.tasks.filter(signing_requests__isnull=False).exists() and (
+                getattr(cleaned.get("document_type"), "pk", None) != previous.document_type_id
+            ):
+                self.add_error("document_type", "This step has issued signing requests. Create a new step for a different record type.")
         return cleaned

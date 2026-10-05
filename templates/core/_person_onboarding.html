@@ -1,0 +1,24 @@
+<section class="panel table-panel">
+<div class="panel-head"><div><h2>Onboarding checklist</h2><p class="muted">{{ board.outstanding|length }} outstanding, {{ board.overdue|length }} past their date, {{ board.done|length }} complete, {{ board.waived|length }} waived.</p></div><form method="post" action="{% url 'person_onboarding_issue' person.pk %}" class="inline-form">{% csrf_token %}<button class="button secondary button-small" type="submit">Issue missing steps</button></form></div>
+{% if board.unissued %}<div class="message">{{ board.unissued }} step{{ board.unissued|pluralize }} the company has defined since this checklist was issued are not on it yet. Press <em>Issue missing steps</em> — a step already issued is never created twice.</div>{% endif %}
+{% if board.rows %}
+<div class="table-wrap"><table><thead><tr><th>Step</th><th>Owed by</th><th>Status</th><th>What we can see</th><th></th></tr></thead><tbody>
+{% for row in board.rows %}<tr>
+<td><strong>{{ row.item.name }}</strong>{% if row.item.instructions %}<small>{{ row.item.instructions }}</small>{% endif %}<small>{% if row.item.owner == 'person' %}The officer{% else %}The office{% endif %} · {{ row.item.get_kind_display }}</small></td>
+<td>{% if row.due_on %}{{ row.due_on }}{% if row.overdue %} <span class="pill attention">past date</span>{% endif %}{% else %}<span class="pill pending">no hire date</span>{% endif %}</td>
+<td><span class="pill {% if row.status == 'done' %}active{% elif row.status == 'waived' %}inactive{% else %}pending{% endif %}">{{ row.task.get_status_display }}</span>{% if row.task.decided_at %}<small>{{ row.task.decided_at|date:'M j, Y' }}{% if row.task.decided_by %} by {{ row.task.decided_by }}{% endif %}</small>{% endif %}</td>
+<td>{% if row.evidence %}{% if row.evidence.state == 'hidden' %}not open to your role{% else %}{{ row.evidence.state }}{% if row.evidence.detail %} — {{ row.evidence.detail }}{% endif %}{% endif %}{% if row.block %}<small>cannot be marked complete</small>{% endif %}{% else %}—{% endif %}{% if row.task.note %}<small>{{ row.task.note }}</small>{% endif %}</td>
+<td>
+{% if row.item.kind == 'signature' %}{% if can_waive or is_self %}{% include 'core/_onboarding_signing.html' %}{% endif %}{% endif %}
+{% if row.status == 'open' %}
+{% if row.item.kind != 'signature' %}
+{% if can_office %}<form method="post" action="{% url 'onboarding_task_decide' row.task.pk %}" class="inline-form">{% csrf_token %}<input type="hidden" name="action" value="complete"><button class="button button-small" type="submit">Mark done</button></form>
+{% elif is_self %}{% if row.item.owner == 'person' %}<form method="post" action="{% url 'onboarding_task_decide' row.task.pk %}" class="inline-form">{% csrf_token %}<input type="hidden" name="action" value="complete"><button class="button button-small" type="submit">Mark done</button></form>{% endif %}{% endif %}
+{% endif %}
+{% if can_waive %}<form method="post" action="{% url 'onboarding_task_decide' row.task.pk %}" class="inline-form">{% csrf_token %}<input type="hidden" name="action" value="waive"><input type="text" name="note" placeholder="Why it does not apply" maxlength="255"><button class="button secondary button-small" type="submit">Waive</button></form>{% endif %}
+{% elif can_office %}<form method="post" action="{% url 'onboarding_task_decide' row.task.pk %}" class="inline-form">{% csrf_token %}<input type="hidden" name="action" value="reopen"><button class="button secondary button-small" type="submit">Reopen</button></form>{% endif %}
+</td></tr>{% endfor %}
+</tbody></table></div>
+{% else %}<div class="table-wrap"><table><tbody><tr><td class="empty-cell">No steps issued to {{ person.full_name }}{% if not person.hire_date %}, and no hire date is recorded on the profile, so a due date could not be derived even if steps existed{% endif %}. Press <em>Issue missing steps</em> to hand over the checklist.</td></tr></tbody></table></div>{% endif %}
+<p class="muted">A step that names a record type or a requirement is checked against the personnel file: it cannot be marked complete while that evidence is missing, and an archived record does not count. Signing steps complete automatically only after signed PDFs and their audit certificate are verified and filed. Waiving is reserved for the roles that file records, with a recorded reason. A step with no hire date shows <em>no hire date</em> rather than an invented deadline.</p>
+</section>

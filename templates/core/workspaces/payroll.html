@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% block title %}Time & Payroll{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-heading">
+    <div>
+      <h1>Time & Payroll</h1>
+      <p>Review punches, manage payroll, and approve time exceptions.</p>
+    </div>
+  </div>
+
+  <section class="workspace-grid">
+    <article class="card card-primary">
+      <h2>Pending review</h2>
+      <p class="metric">{{ pending_count }} punch{{ pending_count|pluralize }}</p>
+      <p class="muted">Awaiting time review decision.</p>
+      {% if pending_punches %}
+        <ul class="punches-list">
+          {% for punch in pending_punches|slice:":3" %}
+            <li>
+              <strong>{{ punch.person.full_name }}</strong>
+              <small>{{ punch.occurred_at|date:"M d H:i" }}</small>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <a class="button button-small" href="{% url 'time_review' %}">Review punches</a>
+    </article>
+
+    {% if latest_run %}
+      <article class="card">
+        <h2>Latest payroll</h2>
+        <p class="metric">{{ latest_run.period_start|date:"M d" }} – {{ latest_run.period_end|date:"M d" }}</p>
+        <p class="muted">{{ latest_run.get_status_display }}</p>
+        <a class="button button-small" href="{% url 'payroll' %}">View period</a>
+      </article>
+    {% else %}
+      <article class="card">
+        <h2>Payroll</h2>
+        <p class="muted">Generate and manage payroll runs.</p>
+        <a class="button button-small" href="{% url 'payroll' %}">Open payroll</a>
+      </article>
+    {% endif %}
+
+    {% if can_approve %}
+      <article class="card">
+        <h2>Approvals</h2>
+        <p class="muted">Approve and export payroll.</p>
+        <a class="button button-small" href="{% url 'payroll' %}">Approve runs</a>
+      </article>
+    {% endif %}
+
+    <article class="card">
+      <h2>Time policy</h2>
+      <p class="muted">Rounding, policies, and rates.</p>
+      <a class="button button-small" href="{% url 'settings' %}">View settings</a>
+    </article>
+  </section>
+
+  {% if runs %}
+    <section class="panel table-panel">
+      <h2>Recent payroll runs</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Period</th>
+              <th>Status</th>
+              <th>Approved by</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in runs|slice:":10" %}
+              <tr>
+                <td>
+                  <strong>{{ run.period_start|date:"M d" }}–{{ run.period_end|date:"M d" }}</strong>
+                </td>
+                <td>{{ run.get_status_display }}</td>
+                <td>{% if run.approved_by %}{{ run.approved_by.get_full_name }}{% else %}—{% endif %}</td>
+                <td><a class="button secondary button-small" href="{% url 'payroll' %}">View</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}

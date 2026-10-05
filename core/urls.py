@@ -1,6 +1,24 @@
 from django.urls import path
 from . import views
+from . import signing_views
+from . import workspace_views
+
 urlpatterns = [
+    # Workspace navigation: role-based landing pages
+    path("workspace/today/", workspace_views.workspace_today, name="workspace_today"),
+    path("workspace/people/", workspace_views.workspace_people, name="workspace_people"),
+    path("workspace/schedule/", workspace_views.workspace_schedule, name="workspace_schedule"),
+    path("workspace/payroll/", workspace_views.workspace_payroll, name="workspace_payroll"),
+    path("workspace/compliance/", workspace_views.workspace_compliance, name="workspace_compliance"),
+    path("workspace/reports/", workspace_views.workspace_reports, name="workspace_reports"),
+    
+    # Signing
+    path("settings/signing/", signing_views.signing_settings, name="signing_settings"),
+    path("onboarding/tasks/<uuid:task_id>/signing/send/", signing_views.signing_send, name="signing_send"),
+    path("onboarding/tasks/<uuid:task_id>/signing/refresh/", signing_views.signing_refresh, name="signing_refresh"),
+    path("onboarding/tasks/<uuid:task_id>/signing/open/", signing_views.signing_open, name="signing_open"),
+    
+    # Health and utilities
     path("healthz", views.health, name="health"), path("readyz",views.ready,name="ready"), path("theme.css",views.theme_css,name="theme_css"), path("logo",views.brand_logo,name="brand_logo"), path("manifest.webmanifest", views.manifest, name="manifest"),
     path("service-worker.js", views.service_worker, name="service_worker"),
     path("", views.dashboard, name="dashboard"), path("people/", views.people, name="people"),
@@ -8,6 +26,8 @@ urlpatterns = [
     path("people/new/", views.person_create, name="person_create"), path("people/fields/new/",views.custom_field_create,name="custom_field_create"),path("people/fields/<int:field_id>/edit/",views.custom_field_edit,name="custom_field_edit"),path("people/<uuid:person_id>/",views.person_detail,name="person_detail"),path("people/<uuid:person_id>/edit/",views.person_edit,name="person_edit"), path("people/<uuid:person_id>/access/new/",views.person_access_invite,name="person_access_invite"), path("branches/", views.branches, name="branches"), path("branches/new/", views.branch_create, name="branch_create"), path("branches/<int:branch_id>/edit/", views.branch_edit, name="branch_edit"),
     path("people/<uuid:person_id>/credentials/new/", views.credential_create, name="person_credential_create"), path("people/<uuid:person_id>/training/new/", views.training_create, name="person_training_create"), path("people/<uuid:person_id>/documents/new/", views.document_upload, name="person_document_upload"),
     path("settings/", views.settings, name="settings"), path("settings/compliance/", views.settings_compliance, name="settings_compliance"),
+    # CMP-1: drafting the Texas duties is an act the operator takes, not a migration that happens to them.
+    path("settings/compliance/texas/draft/", views.compliance_seed_texas, name="compliance_seed_texas"),
     path("settings/onboarding/", views.onboarding_settings, name="onboarding_settings"), path("settings/onboarding/new/", views.onboarding_item_edit, name="onboarding_item_create"), path("settings/onboarding/issue/", views.onboarding_issue, name="onboarding_issue"), path("settings/onboarding/<int:item_id>/", views.onboarding_item_edit, name="onboarding_item_edit"), path("people/<uuid:person_id>/onboarding/", views.onboarding_issue, name="person_onboarding_issue"), path("onboarding/tasks/<uuid:task_id>/decide/", views.onboarding_task_decide, name="onboarding_task_decide"), path("my-onboarding/", views.my_onboarding, name="my_onboarding"),
     path("credentials/<uuid:credential_id>/registry/", views.credential_registry_check, name="credential_registry_check"),
     path("settings/pay-categories/", views.settings_pay_categories, name="settings_pay_categories"), path("settings/pay-categories/<int:category_id>/", views.pay_category_edit, name="pay_category_edit"), path("settings/pay-categories/premium/", views.time_policy_premium, name="time_policy_premium"), path("schedule/<uuid:shift_id>/hours/", views.shift_hours, name="shift_hours"), path("schedule/<uuid:shift_id>/hours/save/", views.shift_hours_save, name="shift_hours_save"), path("schedule/<uuid:shift_id>/hours/hold-over/", views.shift_hold_over, name="shift_hold_over"),

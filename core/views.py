@@ -111,13 +111,29 @@ def _compliance_matrix(org):
     for item in org.credential_types.all():
         enforcement = " ".join(filter(None, [
             "Schedule" if item.blocks_scheduling else "", "Clock-in" if item.blocks_clock_in else ""]))
+        # Three states an operator has to be able to tell apart, because only the first two are
+        # decisions somebody took: approved and gating; gating on the legacy escape (a row that predates
+        # the approval gate and has not been revisited); and flags set but nothing gated because the row
+        # is still a draft. The middle one is the debt list this ruling needs, and it is only useful if
+        # it is visible on the screen the approver is already looking at.
+        if enforcement and not item.is_approved:
+            enforcement = (f"{enforcement} · grandfathered" if item.enforcement_grandfathered
+                           else f"{enforcement} · not gating")
         rows.append({
             "name": item.name, "code": item.code, "evidence": "Credential",
             "subject": "Officers by category", "applies": item.applies_to_labels,
             "authority_url": item.authority_url, "authority_reference": item.authority_reference,
             "effective_from": item.effective_from, "effective_until": item.effective_until,
             "enforcement": enforcement or "Recorded only",
-            "measured": "Enforced at assignment and clock-in" if enforcement else "Reported in the queue",
+            # The sub-label has to agree with the label above it. The first draft of this put
+            # "Enforcing without approval" on a row that was not enforcing anything, because it tested
+            # `enforcement` before it tested whether the row may enforce — a compliance screen that
+            # overstates what it is doing is worse than one that says nothing.
+            "measured": ("Enforced at assignment and clock-in" if enforcement and item.is_approved
+                         else "Enforcing without approval — approve it or clear the flags"
+                             if enforcement and item.may_enforce
+                         else "Draft: recorded, not gating" if enforcement
+                         else "Reported in the queue"),
             "reminders": item.reminder_levels, "is_approved": item.is_approved, "version": item.revision,
             "warning_days": item.warning_days, "active": item.active,
             "edit_url": reverse("credential_type_edit", args=[item.pk]),
@@ -144,6 +160,10 @@ def _compliance_matrix(org):
     return rows
 
 
+# CMP-1's drafted Texas obligations, imported beside the screen that offers them in the same style the
+# messaging and CLK-1 surfaces use: what these views touch is exactly what they import.
+from .texas_rules import missing_texas_duties, seed_texas_obligations
+
 @membership_required(*MANAGERS,Membership.Role.AUDITOR)
 def settings_compliance(request):
     """Rule catalogs: what the installation requires, as opposed to who holds it.
@@ -153,17 +173,44 @@ def settings_compliance(request):
     """
     org=request.organization
     editable=request.membership.role in RECORD_WRITERS or request.membership.role in PRIVILEGED
+    # CMP-1's drafts are offered on the screen an empty matrix currently leaves an owner to fill from
+    # memory. Computed against the rows that already exist rather than assumed absent, so a company that
+    # entered one of these duties by hand is not invited to create a second, competing definition of it.
     return render(request,"core/settings_compliance.html",{
         "matrix":_compliance_matrix(org),
         "document_types":org.document_types.all(),
         "field_definitions":org.custom_field_definitions.all(),
         "can_edit":editable,
+        "texas_drafts":missing_texas_duties(request.organization),
         # The matrix itself is owner/administrator work: creating a legal obligation is the same
         # act for a duty and for a credential, and `can_edit` is wider than that because it also
         # covers filing evidence. Showing an HR user a link that answers 403 is how a screen loses
         # people's trust.
         "can_edit_matrix":request.membership.role in PRIVILEGED,
     })
+
+@require_POST
+@membership_required(*PRIVILEGED)
+@transaction.atomic
+def compliance_seed_texas(request):
+    """Draft the Texas duties into the matrix — unapproved, unenforced, reviewable row by row.
+
+    A button rather than a data migration on purpose. An installation that has never consulted a lawyer
+    should not receive a set of obligations it did not choose, and a migration that wrote them would make
+    "who decided this company tracks general liability at $100,000" unanswerable. The actor who clicks is
+    audited, and the rows produced are the same rows `seed_texas_obligations` writes headless.
+    """
+    result = seed_texas_obligations(request.organization, request.user)
+    if not result["rules"]:
+        messages.info(request, "Every drafted Texas duty is already on this matrix, so nothing was added. "
+                               "If one of them reads wrong for this company, edit that row rather than "
+                               "adding a second one beside it.")
+        return redirect("settings_compliance")
+    messages.success(request,
+        f"Drafted {len(result['rules'])} Texas obligation(s) from the statute and rule text, each with its "
+        "source and its proposed reading on the row. None of them is enforced yet: open a row, change "
+        "anything wrong for this company, and approve it. Until then the queue says so out loud.")
+    return redirect("settings_compliance")
 
 @membership_required()
 def settings(request):
@@ -819,6 +866,13 @@ def _catalog_edit(request, *, form_class, instance, name, action, title, eyebrow
         if approval and request.POST.get("approve")=="yes" and not instance.approved_at:
             instance.approved_by=request.user
             instance.approved_at=timezone.now()
+            # The legacy escape is only meaningful while a row is unapproved. Clearing it at the moment
+            # of approval leaves one reason the row enforces, so a later reader cannot tell whether the
+            # firm approved it or simply never revisited it. Cleared on approval *only* — an ordinary
+            # edit of a grandfathered row must not quietly stop enforcing the obligation it has been
+            # enforcing, which would be a weakening nobody asked for.
+            if hasattr(instance, "enforcement_grandfathered"):
+                instance.enforcement_grandfathered = False
         if revision_kind is not None:
             bump_rule_revision(instance, revision_kind, before)
         item=form.save()
@@ -1088,10 +1142,18 @@ def credential_type_create(request):
     if request.method=="POST" and form.is_valid():
         item=form.save(commit=False); item.organization=request.organization
         if request.POST.get("approve") == "yes": item.approved_by=request.user;item.approved_at=timezone.now()
+        # A requirement created from this screen is new, so it has no legacy enforcement to preserve:
+        # it may refuse an assignment or a clock-in only once a named person has approved it. The column
+        # defaults True because the rows that predate this rule must keep behaving as their firms rely
+        # on; clearing it here is what stops that default leaking forward into rows made after the ruling.
+        item.enforcement_grandfathered = False
         item.save()
         record_rule_revision(item, RuleRevision.Kind.CREDENTIAL_RULE, request.user)
-        AuditEvent.objects.create(organization=request.organization,actor=request.user,action="credential_type.created",target_type="credential_type",target_id=str(item.pk),metadata={"name":item.name,"approved":item.is_approved,"authority":item.authority_reference,"version":item.revision})
-        messages.success(request,"Credential type created."); return redirect("settings_compliance")
+        AuditEvent.objects.create(organization=request.organization,actor=request.user,action="credential_type.created",target_type="credential_type",target_id=str(item.pk),metadata={"name":item.name,"approved":item.is_approved,"enforcing":item.may_enforce,"authority":item.authority_reference,"version":item.revision})
+        messages.success(request,"Credential type created." if item.is_approved else
+                         "Requirement recorded. It is a draft: it will not refuse an assignment or a "
+                         "clock-in until you approve it, and the matrix says so beside it.")
+        return redirect("settings_compliance")
     return render(request,"core/form.html",{"form":form,"title":"Add credential type","eyebrow":"Compliance","approval_control":True})
 
 @membership_required(*PRIVILEGED)
@@ -4242,9 +4304,9 @@ const PAGES=["/clock/"];
 const put=(cache,key,response)=>response.ok?cache.put(key,response.clone()):null;
 self.addEventListener("install",event=>event.waitUntil((async()=>{
   const shell=await caches.open(SHELL);
-  await Promise.all(SHELL_ASSETS.map(path=>fetch(path).then(response=>put(shell,path,response)).catch(()=>null)));
+  await Promise.all(SHELL_ASSETS.map(path=>fetch(path,{redirect:"error"}).then(response=>put(shell,path,response)).catch(()=>null)));
   const docs=await caches.open(DOCS);
-  await Promise.all(PAGES.map(path=>fetch(path,{credentials:"same-origin"}).then(response=>put(docs,path,response)).catch(()=>null)));
+  await Promise.all(PAGES.map(path=>fetch(path,{credentials:"same-origin",redirect:"error"}).then(response=>put(docs,path,response)).catch(()=>null)));
 })()));
 self.addEventListener("activate",event=>event.waitUntil((async()=>{
   const names=await caches.keys();
@@ -4310,6 +4372,8 @@ def onboarding_item_edit(request, item_id=None):
         if item is None:
             raise Http404
     form = OnboardingItemForm(request.POST or None, instance=item, organization=org)
+    if form.signing_error:
+        messages.warning(request, form.signing_error)
     if request.POST:
         code = (request.POST.get("code") or "").strip()
         # The uniqueness rule spans (company, code) and the company is not a field on the form, so

@@ -46,6 +46,20 @@ The intended default enforcement matrix is:
 default. Legally prohibited work must never become permissible merely because a software
 override is enabled.
 
+**Ruled on 2026-10-05 — approval gates enforcement.** The table above describes a requirement the
+company has *adopted*: a rule with its source, its section reference, its interpretation, and a named
+approver on the row. An unapproved requirement is a draft, and a draft must not be the reason a guard
+cannot clock in or cannot be assigned — the firm could not say where the refusal came from, and the
+same word "approved" has to mean the same thing on both halves of the control matrix.
+
+Consequence, and it is the part that had to be decided rather than assumed: **this does not apply
+retroactively by switching existing rows off.** A requirement that has been refusing clock-ins since
+before the approval columns meant anything keeps refusing, and is labelled **"grandfathered"** on the
+matrix so the people who own the obligations can see the list and clear it — by approving each row or
+by turning its enforcement flags off. Silently de-enforcing on upgrade day would have taken work
+arrests away from firms relying on them, with no notice and no name attached. New requirements created
+from the settings screen carry no such escape: they gate nothing until approved.
+
 - Credential and evidence data is initially entered manually; no second-person review
   is required.
 - Minimum evidence follows the applicable regulatory requirement. Owners/admins may
@@ -257,6 +271,13 @@ because each one is a *requirement* now, not a preference, and each has a build 
   hold and the audit chain all live in this application.
 - **Leave is paid on the hours it displaced** — recorded in §Time calculation above, since it is a
   pay rule rather than a scheduling one.
+- **Signing MVP: templates authored in DocuSeal, explicit staff sending, one request per onboarding
+  step.** The owner selected these three boundaries during implementation. Checklist provisioning
+  never sends documents automatically. A single-signer template maps to one subject-readable
+  personnel record type; its signed PDFs and audit certificate are retained locally and verified
+  before the step completes. Combined multi-step packets, in-app template authoring, I-9 and DPS
+  workflows are excluded from the first slice. Completion is authenticated polling, not an
+  unverified webhook or browser-return assertion.
 
 ### Rulings taken later the same day
 

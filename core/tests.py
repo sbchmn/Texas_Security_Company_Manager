@@ -601,6 +601,129 @@ class SsoMfaSecurityTest(TestCase):
         self.assertRedirects(response,reverse("security_settings"),fetch_redirect_response=False);self.org.refresh_from_db();self.assertIn(Membership.Role.OWNER,self.org.mfa_required_roles)
         self.assertTrue(AuditEvent.objects.filter(action="security.mfa_policy_updated").exists())
 
+class MfaEnrollmentResourcesTest(TestCase):
+    def setUp(self):
+        from allauth.account.models import EmailAddress
+        from django.core.files.base import ContentFile
+        from django.test import override_settings
+
+        storage = override_settings(STORAGES={
+            "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+            "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+        })
+        storage.enable()
+        self.addCleanup(storage.disable)
+        self.user = get_user_model().objects.create_user(
+            username="enrollment@example.com", email="enrollment@example.com",
+            password="correct horse battery staple",
+        )
+        EmailAddress.objects.create(user=self.user, email=self.user.email, verified=True, primary=True)
+        self.org = Organization.objects.create(
+            legal_name="Enrollment LLC", display_name="Enrollment", slug="enrollment",
+            mfa_required_roles=[Membership.Role.OWNER],
+        )
+        Membership.objects.create(user=self.user, organization=self.org, role=Membership.Role.OWNER)
+        self.org.logo.save("logo.svg", ContentFile(b'<svg xmlns="http://www.w3.org/2000/svg"/>'))
+        self.client.post(reverse("account_login"), {
+            "login": self.user.email, "password": "correct horse battery staple",
+        })
+
+    def load_enrollment_resources(self):
+        from allauth.mfa.totp.internal.auth import SECRET_SESSION_KEY
+
+        page = self.client.get(reverse("mfa_activate_totp"))
+        self.assertEqual(page.status_code, 200)
+        secret = self.client.session[SECRET_SESSION_KEY]
+        self.assertContains(page, secret)
+        resources = (
+            ("theme_css", "text/css"),
+            ("brand_logo", "image/svg+xml"),
+            ("manifest", "application/json"),
+            ("service_worker", "application/javascript"),
+        )
+        for name, content_type in resources:
+            with self.subTest(resource=name):
+                response = self.client.get(reverse(name), follow=True)
+                if getattr(response, "file_to_stream", None) is not None:
+                    self.addCleanup(response.file_to_stream.close)
+                self.assertEqual(response.redirect_chain, [])
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response["Content-Type"], content_type)
+                self.assertEqual(self.client.session[SECRET_SESSION_KEY], secret)
+        return secret
+
+    def test_original_qr_code_enrolls_after_browser_resources_load(self):
+        import time
+        from allauth.mfa import app_settings
+        from allauth.mfa.models import Authenticator
+        from allauth.mfa.totp.internal.auth import SECRET_SESSION_KEY, format_hotp_value, hotp_value
+        from allauth.mfa.utils import decrypt
+        from unittest.mock import patch
+
+        secret = self.load_enrollment_resources()
+        now = time.time()
+        code = format_hotp_value(hotp_value(secret, int(now) // app_settings.TOTP_PERIOD))
+        with patch("allauth.mfa.totp.internal.auth.time.time", return_value=now):
+            response = self.client.post(reverse("mfa_activate_totp"), {"code": code})
+        self.assertRedirects(response, reverse("mfa_view_recovery_codes"), fetch_redirect_response=False)
+        authenticator = Authenticator.objects.get(user=self.user, type=Authenticator.Type.TOTP)
+        self.assertEqual(decrypt(authenticator.data["secret"]), secret)
+        self.assertNotIn(SECRET_SESSION_KEY, self.client.session)
+
+    def test_invalid_code_and_resource_reload_preserve_displayed_secret(self):
+        from allauth.mfa.models import Authenticator
+        from allauth.mfa.totp.internal.auth import SECRET_SESSION_KEY
+
+        secret = self.load_enrollment_resources()
+        response = self.client.post(reverse("mfa_activate_totp"), {"code": "invalid"})
+        self.assertContains(response, "Incorrect code")
+        self.assertContains(response, secret)
+        for name in ("theme_css", "brand_logo", "manifest", "service_worker"):
+            resource = self.client.get(reverse(name), follow=True)
+            if getattr(resource, "file_to_stream", None) is not None:
+                self.addCleanup(resource.file_to_stream.close)
+        self.assertEqual(self.client.session[SECRET_SESSION_KEY], secret)
+        self.assertFalse(Authenticator.objects.filter(user=self.user).exists())
+
+    def test_business_access_remains_gated(self):
+        for method in (self.client.get, self.client.post):
+            for name in ("dashboard", "people", "clock", "security_settings"):
+                with self.subTest(method=method.__name__, route=name):
+                    response = method(reverse(name))
+                    self.assertRedirects(response, reverse("mfa_activate_totp"), fetch_redirect_response=False)
+
+    def test_resource_exemptions_are_exact_paths(self):
+        for name in ("theme_css", "brand_logo", "manifest", "service_worker"):
+            with self.subTest(resource=name):
+                response = self.client.get(reverse(name) + "/not-a-resource")
+                self.assertRedirects(response, reverse("mfa_activate_totp"), fetch_redirect_response=False)
+
+    def test_resource_exemptions_only_allow_reads(self):
+        for name in ("theme_css", "brand_logo", "manifest", "service_worker"):
+            with self.subTest(resource=name):
+                self.assertEqual(self.client.head(reverse(name)).status_code, 200)
+                response = self.client.post(reverse(name))
+                self.assertRedirects(response, reverse("mfa_activate_totp"), fetch_redirect_response=False)
+
+    def test_resource_exemptions_do_not_bypass_authentication(self):
+        self.client.logout()
+        for name in ("theme_css", "brand_logo"):
+            with self.subTest(resource=name):
+                response = self.client.get(reverse(name))
+                self.assertRedirects(
+                    response, reverse("account_login") + "?next=" + reverse(name),
+                    fetch_redirect_response=False,
+                )
+
+    def test_worker_precache_does_not_follow_business_redirects(self):
+        from django.test import RequestFactory
+        from .views import service_worker
+
+        body = service_worker(RequestFactory().get(reverse("service_worker"))).content.decode()
+        self.assertIn('fetch(path,{redirect:"error"})', body)
+        self.assertIn('fetch(path,{credentials:"same-origin",redirect:"error"})', body)
+
+
 class AllauthThemingTest(TestCase):
     """allauth ships a bare default layout, and RequiredMfaMiddleware sends owners straight
     into those enrollment pages. They must render inside the product chrome, not allauth's."""
@@ -6338,7 +6461,12 @@ class PayCategoryTest(TestCase):
         from .services import ensure_pay_categories
         User = get_user_model()
         self.timedelta = timedelta
-        self.now = timezone.now().replace(microsecond=0, second=0)
+        # Anchored to *local* time, not `timezone.now()`: every window these fixtures build is derived
+        # from `self.now.date()`, and the product's week math runs on `localdate()`. After 19:00 in a
+        # UTC-5 deployment the two dates differ, `now().date()` flips to Monday while the schedule page
+        # is still showing Sunday's week, and the fixture's "Tuesday" post lands a week away from the
+        # window it is asserted to appear in.
+        self.now = timezone.localtime().replace(microsecond=0, second=0)
         self.owner = User.objects.create_user(username="pc-owner@example.com", password="pw-pc-owner")
         self.clerk = User.objects.create_user(username="pc-payroll@example.com", password="pw-pc-payroll")
         self.worker = User.objects.create_user(username="pc-worker@example.com", password="pw-pc-worker")
@@ -6809,7 +6937,12 @@ class HoldOverTest(TestCase):
         from django.utils import timezone
         User = get_user_model()
         self.timedelta = timedelta
-        self.now = timezone.now().replace(microsecond=0, second=0)
+        # Local, not UTC. `close_stale_hold_overs` refuses to write an end the clock has not reached,
+        # and this fixture's clock-out sits on a day derived from `self.now.date()`. Anchored to
+        # `timezone.now()` on a Sunday evening in a UTC-5 zone, that "Tuesday" is next week's Tuesday —
+        # still in the future — so the sweep is right and the assertion was wrong. Same family as the
+        # workweek-boundary rule in roadmap §11, one boundary over.
+        self.now = timezone.localtime().replace(microsecond=0, second=0)
         self.owner = User.objects.create_user(username="ho-owner@example.com", password="pw-ho-owner")
         self.dispatch = User.objects.create_user(username="ho-dispatch@example.com", password="pw-ho-dispatch")
         self.ana_user = User.objects.create_user(username="ho-ana@example.com", password="pw-ho-ana")
@@ -6964,12 +7097,37 @@ class HoldOverTest(TestCase):
         shift = self.post(self.ana, 8)
         row = record_hold_over(shift, HoldOver.Reason.RELIEF_NO_SHOW, actor=self.dispatch)
         self.assertIsNone(row.overrun_hours)
-        self.assertEqual(close_stale_hold_overs(), 0, "no clock-out, so nothing can be written")
+        # A `reference` on every call, deliberately. This fixture places its post on Tuesday of the
+        # running week (roadmap §11: never `now + N days` for a week-scoped test), which means the tour
+        # is genuinely in the future whenever the suite runs on a Monday or a Tuesday — and a sweep
+        # driven by the wall clock is then *correctly* unwilling to close it. Passing the reference makes
+        # the assertion about the sweep's rule instead of about the day of the week it was run on. The
+        # "the clock has not reached it" branch is tested on its own below, with a reference too.
+        settled = shift.ends_at + self.timedelta(hours=3)
+        self.assertEqual(close_stale_hold_overs(reference=settled), 0,
+                         "no clock-out, so nothing can be written")
         self.punch_late_out(shift, 2)
-        self.assertEqual(close_stale_hold_overs(), 1)
+        self.assertEqual(close_stale_hold_overs(reference=settled), 1)
         row.refresh_from_db()
         self.assertEqual(row.overrun_hours, 2.0)
-        self.assertEqual(close_stale_hold_overs(), 0, "closing twice would rewrite a settled fact")
+        self.assertEqual(close_stale_hold_overs(reference=settled), 0,
+                         "closing twice would rewrite a settled fact")
+
+    def test_the_sweep_refuses_to_invent_an_end_the_clock_has_not_reached(self):
+        """The other half of the rule, and the half a wall-clock test can only assert by luck.
+
+        Holding the reference at the scheduled end leaves the late clock-out ahead of it: the tour has
+        not finished as far as the sweep is concerned, so writing an end here would be the same
+        fabrication `punch.missing` exists to surface instead.
+        """
+        from .services import close_stale_hold_overs, record_hold_over
+        shift = self.post(self.ana, 8)
+        row = record_hold_over(shift, HoldOver.Reason.RELIEF_LATE, actor=self.dispatch)
+        self.punch_late_out(shift, 2)
+        self.assertEqual(close_stale_hold_overs(reference=shift.ends_at), 0,
+                         "the sweep closed a tour that had not ended yet at the reference moment")
+        row.refresh_from_db()
+        self.assertIsNone(row.held_until)
 
     # -- the split tour --
 
@@ -10155,3 +10313,451 @@ class DispositionTenantGuardTest(TestCase):
         self.assertIn("cross-tenant disposition reference", str(refused.exception))
         request_row.refresh_from_db()
         self.assertEqual(self.mine.pk, request_row.document_id)
+
+
+class TexasObligationsDraftTest(TestCase):
+    """CMP-1: the control matrix gets its first content, and that content enforces nothing by itself.
+
+    The product has always had the shape of a legal obligation and never an obligation, because encoding
+    a jurisdiction's numbers without the licensee approving them is the thing this project refuses to do.
+    The center of gravity here is therefore not "the rows arrive" — it is that a drafted row changes
+    **no number anybody acts on** until a named person approves it, and that a row whose evidence the
+    register cannot hold says so forever instead of quietly passing.
+
+    One number in the seed corrects this file's own research pass: §1702.124(c) sets $100,000 / $50,000 /
+    $200,000, not the $1M/$2M that brokers and client contracts treat as the Texas default. That is why
+    the primary text is quoted on the row and the data test below demands the quotation be there.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from .scope import ActorScope
+        User = get_user_model()
+        self.ActorScope = ActorScope
+        self.owner = User.objects.create_user(username="tx-owner@example.com", password="pw-tx")
+        self.hr = User.objects.create_user(username="tx-hr@example.com", password="pw-tx-hr")
+        self.auditor = User.objects.create_user(username="tx-auditor@example.com", password="pw-tx-au")
+        self.officer_user = User.objects.create_user(username="tx-officer@example.com", password="pw-tx-o")
+        self.org = Organization.objects.create(legal_name="Ranger LLC", display_name="Ranger",
+            slug="ranger-tx")
+        for user, role in ((self.owner, Membership.Role.OWNER), (self.hr, Membership.Role.HR),
+                           (self.auditor, Membership.Role.AUDITOR),
+                           (self.officer_user, Membership.Role.OFFICER)):
+            Membership.objects.create(user=user, organization=self.org, role=role)
+        self.ana = Person.objects.create(organization=self.org, user=self.officer_user, first_name="Ana",
+            last_name="Perez", status=Person.Status.ACTIVE, is_unarmed_officer=True)
+        from .texas_rules import seed_texas_obligations
+        self.seed = seed_texas_obligations
+
+    def attendance(self):
+        from .services import compliance_attendance
+        return compliance_attendance(self.org, self.ActorScope(None),
+            reader=(Membership.Role.OWNER, None))
+
+    def duties(self):
+        from .services import compliance_duties
+        return compliance_duties(self.org, self.ActorScope(None), list(Person.objects.filter(
+            organization=self.org)), reader=(Membership.Role.OWNER, None))
+
+    def test_drafting_the_duties_leaves_every_one_of_them_unenforced(self):
+        self.seed(self.org, self.owner)
+        rules = ComplianceRule.objects.filter(organization=self.org)
+        self.assertEqual(5, rules.count())
+        for rule in rules:
+            self.assertFalse(rule.is_approved,
+                             f"{rule.code} arrived enforceable, which is exactly what the ruling forbids")
+            self.assertIsNone(rule.approved_by_id)
+            self.assertIsNone(rule.approved_at)
+            self.assertEqual("not approved, so not enforced yet", rule.unevaluated_reason)
+        summary = self.duties()
+        self.assertEqual(0, summary["total"],
+                         "an unapproved draft entered the denominator, so the compliance rate would move "
+                         "on the day somebody merely typed the obligation down")
+        self.assertEqual(5, summary["unmeasured"])
+        self.assertEqual(0, summary["attention"])
+
+    def test_the_numbers_somebody_acts_on_do_not_move_when_the_drafts_land(self):
+        """The invariant the whole design rests on, measured rather than asserted in prose."""
+        from .services import record_punch
+        from uuid import uuid4
+        from django.utils import timezone
+        before = self.attendance()
+        site = Site.objects.create(organization=self.org, client=Client.objects.create(
+            organization=self.org, name="Gate"), name="Front", address="1 Test St")
+        post = Shift.objects.create(organization=self.org, site=site, officer=self.ana,
+            starts_at=timezone.now(), ends_at=timezone.now() + timezone.timedelta(hours=8),
+            status=Shift.Status.PUBLISHED)
+        self.seed(self.org, self.owner)
+        after = self.attendance()
+        # `compliance_attendance` is the one definition the queue, the dashboard tile and the report all
+        # read, so comparing its per-kind figures before and after is the whole claim: typing an
+        # obligation onto the matrix must not move a number anybody acts on.
+        self.assertEqual({key: (value["total"], value["attention"]) for key, value in before.items()},
+            {key: (value["total"], value["attention"]) for key, value in after.items()},
+            "a drafted-but-unapproved duty moved a figure the compliance queue is worked from")
+        self.assertEqual(CredentialType.objects.filter(organization=self.org).count(), 0,
+            "a drafted registration duty seeded a credential requirement, and the clock gate reads "
+            "blocks_clock_in without asking whether anyone approved it")
+        punch, created = record_punch(organization=self.org, person=self.ana, shift=post, source="pwa",
+            client_event_id=uuid4(), kind=Punch.Kind.IN, occurred_at=timezone.now(), actor=self.owner)
+        self.assertTrue(created, "a drafted duty stopped a clock-in that no approval had authorized")
+
+    def test_re_running_the_draft_adds_nothing_and_rewrites_nothing(self):
+        self.seed(self.org, self.owner)
+        liability = ComplianceRule.objects.get(organization=self.org, code="tx_gl_insurance")
+        liability.warning_days = 45
+        liability.name = "General liability certificate (our broker's limit)"
+        liability.save()
+        again = self.seed(self.org, self.owner)
+        self.assertEqual([], again["rules"], "a re-seed claimed it had drafted rows that already existed")
+        self.assertEqual(5, ComplianceRule.objects.filter(organization=self.org).count())
+        liability.refresh_from_db()
+        self.assertEqual(45, liability.warning_days,
+                         "the re-seed overwrote an edit the company had already made to its own row")
+        self.assertEqual("General liability certificate (our broker's limit)", liability.name)
+
+    def test_a_duty_the_company_already_entered_by_hand_is_not_duplicated(self):
+        from .texas_rules import missing_texas_duties
+        ComplianceRule.objects.create(organization=self.org, name="Our liability check",
+            code="tx_gl_insurance", evidence=ComplianceRule.Evidence.DOCUMENT,
+            applies_to_subject=ComplianceRule.Subject.ORGANIZATION)
+        self.assertEqual(4, len(missing_texas_duties(self.org)))
+        result = self.seed(self.org, self.owner)
+        self.assertEqual(4, len(result["rules"]))
+        self.assertEqual(1, ComplianceRule.objects.filter(organization=self.org,
+            code="tx_gl_insurance").count())
+
+    def test_every_drafted_row_carries_the_text_it_claims_to_stand_on(self):
+        """A row is approvable only with a source, a reference and a reading — this checks the seed
+        itself, because `is_approved` would let a sloppy row be approved into enforcement on a link and
+        a one-word interpretation, and the person clicking Approve is trusting the drafting."""
+        from .models import PERSONNEL_CATEGORIES
+        from .texas_rules import DOCUMENT_TYPES, DUTIES
+        type_codes = {spec["code"] for spec in DOCUMENT_TYPES}
+        for spec in DUTIES:
+            with self.subTest(code=spec["code"]):
+                self.assertTrue(spec["authority_url"].startswith("https://"))
+                reference = spec["authority_reference"]
+                departmental = reference.startswith("Tex. DPS")
+                self.assertTrue("§" in reference or departmental,
+                    "a reference with no section number and no departmental label cannot be checked")
+                if departmental:
+                    # The one drafted duty sourced from the department's published procedure rather than
+                    # the statute or the rule must say so in three places, because a reader who takes it
+                    # for §1702 text is quoting something that does not exist.
+                    self.assertIn("dps.texas.gov", spec["authority_url"])
+                    self.assertIn("not the statute", spec["interpretation"])
+                    self.assertIn("departmental procedure", spec["interpretation"])
+                self.assertGreater(len(spec["interpretation"]), 400,
+                                   "a one-line paraphrase is not a reading of the source")
+                self.assertIn('"', spec["interpretation"],
+                               "the interpretation restates rather than quotes, so nothing anchors it")
+                if spec["subject"] == ComplianceRule.Subject.PEOPLE:
+                    self.assertTrue(set(spec["applies_to"]) <= {code for code, _ in PERSONNEL_CATEGORIES},
+                                    "a category code that is not in the model binds nobody")
+                    self.assertTrue(spec["applies_to"])
+                if spec["evidence"] == ComplianceRule.Evidence.DOCUMENT:
+                    self.assertIn(spec["document_type"], type_codes,
+                                  "a filed-record duty with no seeded record type can never be measured")
+        rule = DocumentType._meta.get_field("audience")
+        self.assertTrue(rule.choices, "the seeded types must declare who they are issued to")
+
+    def test_filing_the_evidence_after_approving_makes_the_duty_answer_instead_of_vanishing(self):
+        """The proof that the seed is not decorative: approval plus a record produces a real verdict."""
+        import tempfile
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.test import override_settings
+        from django.utils import timezone
+        self.seed(self.org, self.owner)
+        rule = ComplianceRule.objects.get(organization=self.org, code="tx_gl_insurance")
+        rule.approved_by = self.owner
+        rule.approved_at = timezone.now()
+        rule.save()
+        missing = self.duties()
+        states = {row["state"] for row in missing["rows"] if row["subject"] == rule.name}
+        self.assertIn("missing", states, "an approved company duty with nothing filed reported no gap")
+        self.assertGreaterEqual(missing["total"], 1)
+        media = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        override = override_settings(MEDIA_ROOT=media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+        self.addCleanup(media.cleanup)
+        from .services import store_person_document
+        store_person_document(organization=self.org, person=None, document_type=rule.document_type,
+            upload=SimpleUploadedFile("gl.pdf", b"%PDF-1.4\ncertificate",
+                                      content_type="application/pdf"), actor=self.owner)
+        after = self.duties()
+        states = {row["state"] for row in after["rows"] if row["subject"] == rule.name}
+        self.assertEqual({"active"}, states, "the filed certificate did not satisfy the duty it proves")
+
+    def test_a_duty_the_register_cannot_hold_still_says_so_after_approval(self):
+        self.seed(self.org, self.owner)
+        posting = ComplianceRule.objects.get(organization=self.org, code="tx_license_posted")
+        posting.approved_by = self.owner
+        from django.utils import timezone
+        posting.approved_at = timezone.now()
+        posting.save()
+        summary = self.duties()
+        rows = [row for row in summary["rows"] if row["subject"] == posting.name]
+        self.assertEqual("not-evaluated", rows[0]["state"])
+        self.assertIn("records cannot be filed against a site yet", rows[0]["note"])
+        self.assertEqual(0, summary["total"],
+                         "a duty nobody can measure joined the denominator and diluted the rate")
+
+    def test_each_draft_is_stamped_as_version_one_before_anybody_approves_it(self):
+        self.seed(self.org, self.owner)
+        for rule in ComplianceRule.objects.filter(organization=self.org):
+            version_one = RuleRevision.objects.filter(organization=self.org,
+                kind=RuleRevision.Kind.COMPLIANCE_RULE, rule_id=str(rule.pk), revision=1).first()
+            self.assertIsNotNone(version_one, f"{rule.code} has no version 1, so its first approval "
+                                              "would be a change with nothing to differ from")
+            self.assertEqual(rule.interpretation, version_one.values["interpretation"])
+
+    def test_the_drafting_is_attributed_and_records_that_nothing_was_approved(self):
+        self.seed(self.org, self.owner)
+        event = AuditEvent.objects.get(action="compliance_rules.drafted",
+            target_id=str(self.org.pk))
+        self.assertEqual(self.owner.pk, event.actor.pk)
+        self.assertFalse(event.metadata["approved"])
+        self.assertEqual(5, len(event.metadata["rules"]))
+        self.assertIn("gl_certificate", event.metadata["record_types"])
+
+    def test_the_command_is_the_same_write_as_the_button(self):
+        """The headless path is the one an operator uses before a first tenant exists, so it is tested
+        rather than assumed: the button and the command must produce the same rows, and the dry run must
+        prove nothing was written instead of claiming it."""
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        call_command("seed_texas_obligations", "--organization", self.org.slug, "--dry-run", stdout=out)
+        self.assertIn("5 duty", out.getvalue())
+        self.assertEqual(0, ComplianceRule.objects.filter(organization=self.org).count(),
+            "--dry-run wrote rows")
+        out = StringIO()
+        call_command("seed_texas_obligations", "--organization", self.org.slug, stdout=out)
+        self.assertEqual(5, ComplianceRule.objects.filter(organization=self.org).count())
+        self.assertIn("none of it is enforced", out.getvalue().lower())
+        # A second run says so instead of silently doing nothing at all.
+        out = StringIO()
+        call_command("seed_texas_obligations", "--organization", self.org.slug, stdout=out)
+        self.assertIn("already present", out.getvalue())
+        self.assertEqual(5, ComplianceRule.objects.filter(organization=self.org).count())
+        with self.assertRaises(Exception):
+            call_command("seed_texas_obligations", "--organization", "no-such-company")
+
+    def test_the_screen_offers_the_drafts_and_a_reader_cannot_take_them_on(self):
+        self.client.force_login(self.owner)
+        answer = self.client.get(reverse("settings_compliance"))
+        self.assertEqual(200, answer.status_code)
+        self.assertContains(answer, "Draft these 5 obligations")
+        self.assertContains(answer, "1702.124(c)")
+        for user in (self.auditor, self.hr):
+            self.client.force_login(user)
+            self.assertEqual(403, self.client.post(reverse("compliance_seed_texas")).status_code)
+            self.assertEqual(0, ComplianceRule.objects.filter(organization=self.org).count(),
+                             "the refusal stopped the page but not the write")
+        self.client.force_login(self.owner)
+        self.assertEqual(405, self.client.get(reverse("compliance_seed_texas")).status_code)
+        answer = self.client.post(reverse("compliance_seed_texas"), follow=True)
+        self.assertEqual(5, ComplianceRule.objects.filter(organization=self.org).count())
+        self.assertContains(answer, "None of them is enforced yet")
+        self.assertNotContains(answer, "Draft these 5 obligations",
+            msg_prefix="the offer stayed on the page after every duty had been drafted")
+
+
+class ApprovalGatesEnforcementTest(TestCase):
+    """The owner's ruling of 2026-10-05: a requirement nobody approved may not refuse anything.
+
+    Enforcement is where this product says *no* to a human about their job, and until now the clock and
+    schedule gates read `blocks_clock_in` / `blocks_scheduling` and `active` without asking whether the
+    row behind them had a source, a reference, or a named approver. "Approved" meant one thing for a
+    `ComplianceRule` and another for a `CredentialType` on the same matrix.
+
+    The other half of the ruling is what makes this class exist: flipping the gate must **not** stop a
+    requirement that has been refusing clock-ins for months. So the legacy escape defaults to True, the
+    settings screen clears it for rows it creates, approval clears it for rows it adopts, and a plain
+    edit leaves a grandfathered row alone. Each state is asserted in both directions, because the failure
+    is silent either way — a punch that used to be refused is now accepted, or the reverse.
+    """
+
+    def setUp(self):
+        from datetime import timedelta
+        from django.contrib.auth import get_user_model
+        from django.utils import timezone
+        User = get_user_model()
+        self.timedelta, self.timezone = timedelta, timezone
+        self.owner = User.objects.create_user(username="gate-owner@example.com", password="pw-gate")
+        self.officer_user = User.objects.create_user(username="gate-officer@example.com",
+            password="pw-gate-o")
+        self.org = Organization.objects.create(legal_name="Turnstile LLC", display_name="Turnstile",
+            slug="turnstile-gate")
+        Membership.objects.create(user=self.owner, organization=self.org, role=Membership.Role.OWNER)
+        Membership.objects.create(user=self.officer_user, organization=self.org,
+            role=Membership.Role.OFFICER)
+        self.ana = Person.objects.create(organization=self.org, user=self.officer_user,
+            first_name="Ana", last_name="Torres", status=Person.Status.ACTIVE, is_unarmed_officer=True)
+        self.client_user = Client.objects.create(organization=self.org, name="Reception")
+        # No coordinates on the site: the geofence rule never fires, so every refusal below came from the
+        # credential rule and nothing else.
+        self.site = Site.objects.create(organization=self.org, client=self.client_user,
+            name="Tower", address="1 Test St")
+        self.now = timezone.localtime().replace(microsecond=0, second=0)
+        self.post = Shift.objects.create(organization=self.org, site=self.site, officer=self.ana,
+            starts_at=self.now - self.timedelta(hours=1), ends_at=self.now + self.timedelta(hours=7),
+            status=Shift.Status.PUBLISHED)
+
+    def requirement(self, *, grandfathered=True, approved=False, blocks_clock_in=True,
+                    blocks_scheduling=True, applies=("unarmed",), name="Guard registration"):
+        credential_type = CredentialType.objects.create(organization=self.org, name=name,
+            code=name.lower().replace(" ", "-"), applies_to=list(applies),
+            blocks_clock_in=blocks_clock_in, blocks_scheduling=blocks_scheduling,
+            enforcement_grandfathered=grandfathered,
+            authority_url="https://www.dps.texas.gov/section/private-security",
+            authority_reference="Tex. Occ. Code § 1702.222",
+            interpretation="Officers in the named categories must hold current registration.")
+        if approved:
+            # `is_approved` needs the whole set — approver, date, source URL, section reference and the
+            # firm's reading — so an approval that only stamps a name and a time is not one, and this
+            # fixture would be asserting the wrong thing.
+            credential_type.approved_by = self.owner
+            credential_type.approved_at = self.now
+            credential_type.enforcement_grandfathered = False
+            credential_type.save()
+        return credential_type
+
+    def expired_credential(self, credential_type):
+        # `expired` is a derived state, not a stored one: an active row whose expiry date has passed
+        # reads as expired through `effective_status`, which is what both gates consult.
+        return Credential.objects.create(organization=self.org, person=self.ana,
+            credential_type=credential_type, status=Credential.Status.ACTIVE,
+            issued_on=self.now.date() - self.timedelta(days=300),
+            expires_on=self.now.date() - self.timedelta(days=4))
+
+    def punch(self):
+        from .services import record_punch
+        return record_punch(organization=self.org, person=self.ana, shift=self.post, source="pwa",
+            client_event_id=uuid.uuid4(), kind=Punch.Kind.IN, occurred_at=self.now,
+            actor=self.officer_user)
+
+    def eligible(self, credential_type, purpose):
+        from .services import shift_eligibility
+        return shift_eligibility(self.post, officer=self.ana, purpose=purpose,
+            requirements=[(credential_type, "site")])
+
+    def form_payload(self, approve=False):
+        payload = {"name": "Guard registration", "code": "guard-reg", "jurisdiction": "Texas",
+            "authority_url": "https://www.dps.texas.gov/section/private-security",
+            "authority_reference": "Tex. Occ. Code § 1702.222",
+            "interpretation": "Unarmed officers must hold current registration.",
+            "effective_from": "", "effective_until": "", "blocks_scheduling": "on",
+            "blocks_clock_in": "on", "warning_days": 30, "reminder_days_before": "90, 60",
+            "evidence_required": "on", "applies_to": ["unarmed"], "active": "on"}
+        if approve:
+            payload["approve"] = "yes"
+        return payload
+
+    def test_a_draft_requirement_refuses_nothing_at_the_clock_or_the_assignment(self):
+        requirement = self.requirement(grandfathered=False)
+        self.expired_credential(requirement)
+        self.assertFalse(requirement.is_approved)
+        self.assertFalse(requirement.may_enforce,
+                         "a row with neither an approval nor the legacy escape still gates, which is the "
+                         "behaviour this ruling removes")
+        punch, created = self.punch()
+        self.assertTrue(created, "an unapproved draft blocked a punch")
+        self.assertFalse(punch.exception_reason, "the draft wrote a review exception")
+        clean, reasons = self.eligible(requirement, "schedule")
+        self.assertTrue(clean, f"a draft blocked assignment: {reasons}")
+
+    def test_the_same_requirement_refuses_once_somebody_approves_it(self):
+        requirement = self.requirement(grandfathered=False)
+        self.expired_credential(requirement)
+        requirement.approved_by = self.owner
+        requirement.approved_at = self.now
+        requirement.save()
+        self.assertTrue(requirement.may_enforce)
+        with self.assertRaises(Exception) as refused:
+            self.punch()
+        self.assertIn("Guard registration", str(refused.exception),
+                      "the refusal did not name the requirement, so a dispatcher could not act on it")
+        clean, _reasons = self.eligible(requirement, "schedule")
+        self.assertFalse(clean)
+
+    def test_a_requirement_that_predates_the_gate_keeps_refusing(self):
+        """The no-silent-weakening test: what an upgrade day must not change."""
+        requirement = self.requirement(grandfathered=True)
+        self.expired_credential(requirement)
+        self.assertFalse(requirement.is_approved)
+        self.assertTrue(requirement.may_enforce,
+                        "a requirement that has been refusing clock-ins stopped enforcing when the "
+                        "approval gate was introduced")
+        with self.assertRaises(Exception):
+            self.punch()
+        clean, _reasons = self.eligible(requirement, "schedule")
+        self.assertFalse(clean)
+
+    def test_creating_a_requirement_from_the_screen_does_not_inherit_the_legacy_escape(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("credential_type_create"), self.form_payload())
+        created = CredentialType.objects.get(organization=self.org, code="guard-reg")
+        self.assertFalse(created.enforcement_grandfathered,
+                         "the column's default leaked onto a row created after the ruling, so it gates on "
+                         "an obligation nobody approved")
+        self.assertFalse(created.is_approved)
+        self.expired_credential(created)
+        _punch, made = self.punch()
+        self.assertTrue(made, "a row the screen created as a draft still refused the punch")
+
+    def test_approving_clears_the_escape_and_a_plain_edit_does_not(self):
+        self.client.force_login(self.owner)
+        legacy = self.requirement(grandfathered=True, name="Firearms discharge licence")
+        self.client.post(reverse("credential_type_edit", args=[legacy.pk]), self.form_payload())
+        legacy.refresh_from_db()
+        self.assertTrue(legacy.enforcement_grandfathered,
+                        "editing a row's spelling stopped it enforcing")
+        self.client.post(reverse("credential_type_edit", args=[legacy.pk]),
+                         self.form_payload(approve=True))
+        legacy.refresh_from_db()
+        self.assertTrue(legacy.is_approved)
+        self.assertFalse(legacy.enforcement_grandfathered,
+            "an approved row still carrying the legacy flag has two reasons it enforces, and a later "
+            "reader cannot tell which one the firm meant")
+        self.assertTrue(legacy.may_enforce, "clearing the escape on approval stopped enforcement")
+
+    def test_the_matrix_shows_which_rows_are_gating_and_why(self):
+        self.requirement(grandfathered=True, name="Firearms discharge licence")
+        self.requirement(grandfathered=False, name="Guard registration")
+        self.requirement(grandfathered=False, approved=True, name="PSB licence")
+        self.requirement(grandfathered=True, approved=False, blocks_clock_in=False,
+            blocks_scheduling=False, name="Agency certificate")
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("settings_compliance")).content.decode()
+        # Three labels, and each row's sub-label must agree with the label above it. The last fixture is
+        # the grandfathered-but-no-flags case: the escape is irrelevant when nothing is asked to gate,
+        # and a screen that flagged it as unpaid debt would be crying wolf.
+        self.assertIn("Schedule Clock-in · grandfathered", page)
+        self.assertIn("Schedule Clock-in · not gating", page)
+        self.assertIn("Enforcing without approval — approve it or clear the flags", page)
+        self.assertIn("Draft: recorded, not gating", page)
+        self.assertIn("Enforced at assignment and clock-in", page)
+        self.assertIn("Recorded only", page)
+        self.assertEqual(1, page.count("Enforcing without approval"),
+                         "the overstated label is back: only the grandfathered row is enforcing without "
+                         "approval, and the draft must not read that way")
+
+    def test_the_ruling_leaves_both_halves_of_the_matrix_inert_until_approval(self):
+        """CMP-1's safety property, now true of requirements as well as duties — CMP-0 asked for one
+        matrix with one meaning, and this is where the two halves had diverged.
+        """
+        from .texas_rules import seed_texas_obligations
+        seed_texas_obligations(self.org, self.owner)
+        requirement = self.requirement(grandfathered=False)
+        requirement.approved_by = self.owner
+        requirement.approved_at = self.now
+        requirement.save()
+        self.expired_credential(requirement)
+        for rule in ComplianceRule.objects.filter(organization=self.org):
+            self.assertFalse(rule.is_approved)
+            self.assertEqual("not approved, so not enforced yet", rule.unevaluated_reason)
+        with self.assertRaises(Exception):
+            self.punch()

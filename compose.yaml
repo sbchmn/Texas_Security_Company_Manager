@@ -113,7 +113,7 @@ services:
     # answered next month (a later capture of the same day leaves the stored one alone);
     # onboarding_reminders hands the checklist to a new hire nobody issued it to and chases the steps
     # past their date — both passes are idempotent, so a minute-scale loop sends nothing twice.
-    command: ["sh", "-c", "while true; do python manage.py compliance_reminders || true; python manage.py generate_recurring_posts || true; python manage.py report_missing_punches || true; python manage.py onboarding_reminders || true; python manage.py close_stale_moves || true; python manage.py capture_reports || true; python manage.py process_notifications || true; sleep ${WORKER_INTERVAL_SECONDS:-60}; done"]
+    command: ["sh", "-c", "while true; do python manage.py compliance_reminders || true; python manage.py generate_recurring_posts || true; python manage.py report_missing_punches || true; python manage.py reconcile_signatures || true; python manage.py onboarding_reminders || true; python manage.py close_stale_moves || true; python manage.py capture_reports || true; python manage.py process_notifications || true; sleep ${WORKER_INTERVAL_SECONDS:-60}; done"]
     env_file: [.env]
     environment:
       MYSQL_HOST: db

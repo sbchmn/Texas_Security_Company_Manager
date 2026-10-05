@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% block title %}People{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-heading">
+    <div>
+      <h1>People</h1>
+      <p>Manage personnel, onboarding, and credentials.</p>
+    </div>
+    <div class="actions">
+      <a class="button" href="{% url 'person_create' %}">+ Add person</a>
+    </div>
+  </div>
+
+  <section class="workspace-grid">
+    <article class="card card-primary">
+      <h2>Onboarding</h2>
+      <p class="metric">{{ onboarding_count }} officer{{ onboarding_count|pluralize }}</p>
+      <p class="muted">{% if overdue_count %}{{ overdue_count }} overdue{% else %}All on track{% endif %}</p>
+      {% if onboarding_list %}
+        <ul class="person-list">
+          {% for person in onboarding_list|slice:":5" %}
+            <li>
+              <a href="{% url 'person_detail' person.pk %}?tab=onboarding">{{ person.full_name }}</a>
+              <small>{{ person.branch.name }}</small>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <a class="button button-small" href="{% url 'workspace_people' %}?status=onboarding">View all onboarding</a>
+    </article>
+
+    <article class="card">
+      <h2>Active officers</h2>
+      <p class="metric">{{ active_count }}</p>
+      <a class="button button-small" href="{% url 'people' %}">Manage people</a>
+    </article>
+
+    <article class="card">
+      <h2>Total</h2>
+      <p class="metric">{{ people_count }}</p>
+      <a class="button button-small" href="{% url 'people' %}">View directory</a>
+    </article>
+
+    <article class="card">
+      <h2>Credentials & training</h2>
+      <p class="muted">Manage requirements and track completion.</p>
+      <a class="button button-small" href="{% url 'compliance' %}">Compliance queue</a>
+    </article>
+  </section>
+
+  {% if people %}
+    <section class="panel table-panel">
+      <h2>Recent people</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Branch</th>
+              <th>Status</th>
+              <th>Email</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for person in people|slice:":20" %}
+              <tr>
+                <td><a href="{% url 'person_detail' person.pk %}">{{ person.full_name }}</a></td>
+                <td>{{ person.branch.name|default:"—" }}</td>
+                <td>{{ person.get_status_display }}</td>
+                <td><small>{{ person.email }}</small></td>
+                <td><a class="button secondary button-small" href="{% url 'person_detail' person.pk %}">Open</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}

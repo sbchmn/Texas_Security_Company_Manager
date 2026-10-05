@@ -158,6 +158,10 @@ ACCOUNT_LOGIN_METHODS = {"email", "username"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "username*", "password1*", "password2*"]
 MFA_SUPPORTED_TYPES = ["totp", "recovery_codes"]
 MFA_TOTP_ISSUER = "Texas Security Company Manager"
+# Operator-controlled destinations, not arbitrary URLs entered by a tenant administrator.
+DOCUSEAL_ALLOWED_ORIGINS = [
+    value.strip().rstrip("/") for value in os.getenv("DOCUSEAL_ALLOWED_ORIGINS", "").split(",") if value.strip()
+]
 SOCIALACCOUNT_LOGIN_ON_GET = False
 SOCIALACCOUNT_EMAIL_AUTHENTICATION = False
 SOCIALACCOUNT_PROVIDERS = {

@@ -147,11 +147,19 @@ class RequiredMfaMiddleware:
     # which redirects to activate -- and the browser ends on the enrollment page with a fresh,
     # different secret on every load, so the factor could never be added.
     ENROLLMENT_PATHS = ("/accounts/2fa/", "/accounts/reauthenticate/", "/accounts/logout/", "/static/")
+    # Background resource redirects also GET enrollment and replace the session secret
+    # behind the visible QR. Exempt only these shell reads; their view guards still apply.
+    ENROLLMENT_RESOURCE_PATHS = frozenset({
+        "/theme.css", "/logo", "/manifest.webmanifest", "/service-worker.js",
+    })
 
     def __init__(self, get_response): self.get_response=get_response
 
     def __call__(self, request):
-        if request.user.is_authenticated and not request.path.startswith(self.ENROLLMENT_PATHS):
+        enrollment_resource = (
+            request.method in ("GET", "HEAD") and request.path in self.ENROLLMENT_RESOURCE_PATHS
+        )
+        if request.user.is_authenticated and not enrollment_resource and not request.path.startswith(self.ENROLLMENT_PATHS):
             membership=getattr(request,"membership",None)
             # Platform accounts (Django admin) carry no tenant membership, so the tenant role
             # list alone would leave the most privileged surface without a second factor.

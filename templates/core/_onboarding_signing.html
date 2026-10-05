@@ -1,0 +1,8 @@
+{% if row.evidence.state != 'hidden' %}
+{% if row.signing %}<p class="muted">{{ row.signing.get_status_display }}{% if row.signing.last_error %} — {{ row.signing.last_error }}{% endif %}</p>{% endif %}
+{% if row.status == 'open' %}
+{% if can_waive %}{% if not row.signing or row.signing.status == 'declined' or row.signing.status == 'completed' or row.signing.status == 'rejected' %}<form method="post" action="{% url 'signing_send' row.task.pk %}" class="inline-form">{% csrf_token %}<button class="button button-small" type="submit">Send signing request</button></form>{% endif %}{% endif %}
+{% if is_self or not can_waive %}{% if row.signing.status == 'sent' %}<a class="button button-small" href="{% url 'signing_open' row.task.pk %}">Sign document</a>{% endif %}{% endif %}
+{% endif %}
+{% if row.signing %}<form method="post" action="{% url 'signing_refresh' row.task.pk %}" class="inline-form">{% csrf_token %}<button class="button secondary button-small" type="submit">Check signing status</button></form>{% endif %}
+{% endif %}

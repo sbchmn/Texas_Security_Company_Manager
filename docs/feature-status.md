@@ -1,9 +1,10 @@
 # Feature implementation status
 
-**Status date:** 2026-10-04 (the clock photo the owner ruled and got built the same day, and the four
-outliers that closed behind it: a geotag no longer survives an upload, an SNS subscription has a button,
-the last unguarded tenant table does not stay unguarded, and the "missing" list stops claiming a
-shipped feature)
+**Status date:** 2026-10-05 (the clock photo the owner ruled and got built the same day; the four
+outliers that closed behind it — a geotag no longer survives an upload, an SNS subscription has a button,
+the last unguarded tenant table does not stay unguarded, and the "missing" list stops claiming a shipped
+feature; the matrix's first content, drafted from the Texas statute text; and approval now gating
+enforcement, with the rows that predate that rule named on the screen instead of quietly exempt)
 
 ## A photo at the ends of a tour, and the four outliers behind it (2026-10-04)
 
@@ -133,6 +134,104 @@ exactly as submitted*. Fine for a PDF, wrong for a phone photograph.
 - **The disposition guard is proven against raw SQL, not against a hostile application.** That is both
   the point of a database guard and its limit: it says the row cannot be placed wrong, not that a future
   view will remember to filter.
+
+## The matrix gets its first content (2026-10-04, later)
+
+**CMP-1, drafted.** The control matrix has held the *shape* of a legal obligation since CMP-0 —
+jurisdiction, authority URL and reference, interpretation, effective dates, a renewal window, a reminder
+ladder, approval by a named actor — and has never held an obligation, because encoding a jurisdiction's
+numbers before the licensee approves them is the thing this product refuses to do. `core/texas_rules.py`
+now carries five drafted duties, `/settings/compliance/` offers them as a button, and
+`manage.py seed_texas_obligations [--dry-run]` writes the same rows headless.
+
+- **The safety property is the feature.** Every row lands with `approved_by` and `approved_at` empty, so
+  `is_approved` is false and `unevaluated_reason` reads *"not approved, so not enforced yet"*. The test
+  that matters is not "the rows arrive": it compares the compliance queue's own per-kind figures
+  immediately before and after the seed and requires them **equal**, and separately records a clock-in in
+  a company that has just been handed five obligations. Typing an obligation down must not move a number
+  somebody acts on, and now that is proved rather than promised.
+- **Seeding is idempotent by code and never rewrites.** A firm that re-runs it, or that already entered
+  the liability duty by hand under its own code, gets nothing overwritten and no second row:
+  `missing_texas_duties` is computed against the rows that exist, so an already-covered duty is simply not
+  offered. A re-seed that overwrote an owner's edit would destroy the one thing the matrix is for — a
+  record of what *this company* decided it tracks.
+- **Primary text corrected this document's own research pass in three places**, and the corrections are on
+  the rows: §1702.124(c) is **$100,000 / $50,000 per occurrence and $200,000 aggregate**, not the
+  $1M/$2M market figure the roadmap had carried; **37 TAC §35.8 is "Consumer Information and Signage"**
+  (client notice of the license number and the Regulatory Services Division's contact details, 10-point
+  minimum type in writing, a sign at each office, the license number at least one inch high on each side of
+  a marked vehicle) while the posting duty is §1702.128; and **37 TAC §35.22 is "Renewal Individual License
+  Applications"**, whose (b) is the sentence the clock gate rests on — no regulated services once the
+  renewal is late — beside §1702.302(a)-(e), whose ladder is 1-1/2× to 90 days, 2× to a year, and **no
+  renewal at all** past a year, with the department's own letter due by day 30 before expiry. That last
+  fact is why the drafted reminder window starts at **180 days**: a firm waiting for DPS's letter is
+  already late.
+- **One row is honestly weaker than the rest.** The firearm proficiency certificate comes from the
+  department's published procedure, not a statute section, and its interpretation says so; the data test
+  enforces the admission — a reference with no `§` is allowed only when labelled `Tex. DPS`, pointing at
+  the department, and admitting in text that it is not the statute. Legal review should start there.
+- **Two duties will still report *Entered, not measured* after approval** — posting at each office and
+  consumer signage — because they attach to a **place** and the personnel register has no site column to
+  file evidence against. They stay out of the denominator instead of scoring "no record found" as
+  compliance, the same rule CMP-0 set for training hours. The two filed-record duties become measurable
+  the moment they are approved, and their `DocumentType`s are seeded with them for exactly that reason: an
+  obligation that can never be evidenced is a poster, not a control.
+- **The finding this surfaced, deliberately not fixed.** Credential and schedule eligibility read
+  `CredentialType.blocks_clock_in` and `active` but **not `is_approved`**, so a requirement can gate a
+  clock-in today on a row with no source, no reference and no approval. That is why the registration duty
+  was drafted as a `ComplianceRule` and *not* seeded as a `CredentialType`: seeding it would have started
+  refusing clock-ins on an unapproved obligation, while flipping the gate would have silently stopped
+  enforcement for every installation that created a requirement before the approval fields existed — this
+  suite's own `test_expired_credential_blocks_clock_in` builds exactly such a row. It is an owner decision,
+  not a patch: either approval gates enforcement and existing rows are grandfathered explicitly, or the
+  matrix says plainly that enforcement is a separate act from approval. Today they are separate and the
+  screen does not say so.
+
+**What this cannot prove.** The numbers were read on 2026-10-04 from `texas.public.law`,
+`law.cornell.edu` and `dps.texas.gov` — secondary reproductions of the statute and the Texas Register text
+— and the authoritative copy is the Texas Register. No attorney has reviewed any of it, and the product
+still ships no jurisdiction's rules *approved*: until a named person approves each row it is a proposal
+with a citation. The fee amounts in 37 TAC §35.131 were seen only in a partial extract, so they are
+deliberately encoded nowhere.
+
+## Approval now gates enforcement, and the rows that predate it are named (2026-10-05)
+
+**The owner's answer to the question CMP-1 raised.** Enforcement is where this product says *no* to a
+human about their job, and until today the clock and schedule gates asked only whether a requirement was
+`active` and had its `blocks_*` flag set — never whether the firm had actually adopted it. So a row with
+no source, no section reference, no interpretation and no approver could refuse a punch, while a drafted
+`ComplianceRule` in the same table refused nothing. One matrix, two meanings for one word.
+
+- **`may_enforce` is the single predicate**, and all three gates use it: `prohibited_credentials` at the
+  clock, `shift_eligibility` for assignment and claims, and the open-post candidate filter. The reason it
+  is one predicate rather than a check at each site is that the three had already drifted once — they
+  read the same flags with different filters — and an obligation that blocks the clock but not the
+  schedule is a different rule from the one the matrix says the company adopted.
+- **`enforcement_grandfathered` (migration 0057) defaults True, and that is the whole point.** Rows that
+  have been refusing clock-ins since before the approval columns meant anything keep refusing. Flipping
+  the gate on retrospectively would have taken work arrests away from firms relying on them on upgrade
+  day, silently, with nobody's name on it — a behaviour change wearing a bug fix. The flag is not a
+  permanent loophole because the matrix labels it: **"Schedule Clock-in · grandfathered"** with the
+  sub-label *"Enforcing without approval — approve it or clear the flags"*, which turns the exemption
+  into a visible list on the screen the approver is already working from.
+- **Where the flag is cleared, and where it deliberately is not.** The settings screen clears it for
+  every row it **creates**, so a new requirement gates nothing until approved, and for every row it
+  **approves**, so a row ends up with one reason to enforce rather than two. A plain edit does *not*
+  clear it — `test_approving_clears_the_escape_and_a_plain_edit_does_not` exists because the tempting
+  simplification ("clear it whenever an admin touches the row") is a silent de-enforcement disguised as
+  housekeeping: somebody fixing a typo would stop an inspection-critical block.
+- **The label has to agree with the behaviour.** The first version of the matrix code tested
+  `enforcement` before it tested whether the row may enforce, and printed *"Enforcing without approval"*
+  on a draft that was enforcing nothing — an overstated compliance screen, which is the failure mode
+  this product keeps having to design against. The count assertion in that test is what keeps it from
+  coming back.
+
+**What this cannot prove.** The grandfather flag is per-row, and no migration inspects intent: an
+installation that set `blocks_clock_in` on a requirement it never meant to enforce will keep enforcing
+it until somebody reads the matrix. Nothing in the product can tell those two histories apart, which is
+why the answer is a visible list rather than an automatic cleanup. Reminder ladders are **not** gated
+by approval — a draft requirement still warns a person that a certificate is expiring, because a notice
+costs nobody their shift and the alternative is silence about a record that is genuinely lapsing.
 
 ## Who hears what, and what happens when nobody answers (2026-10-03, later)
 
@@ -2145,17 +2244,30 @@ organization that files both routine and privileged material under one type must
 What the product has is an **attestation, not an e-signature**: `DocumentAcknowledgment` stores a typed
 name, the SHA-256 of the text shown, the statement, a hashed IP and a timestamp, bound to one person and
 one revision. Nobody signs the PDF, and no third party can verify a signature without this database.
-Document signing, PDF packets and onboarding automation are **not implemented as a feature**. What
-changed on 2026-10-03 is the infrastructure decision around them: SIG-0 was ruled (self-host DocuSeal's
-community edition rather than pay per document) and the signer now boots inside this project's compose
-stack under `--profile signing`, sharing the application's MySQL server as its own database and served
-on its own hostname through the same Caddy listener. No code in this application talks to it yet — no
-API token, no submission call, no webhook ingest, no packet model — so the sentence to report is *the
-signer is installed, the signing feature is not*. The questions that come before any code are now
-SIG-4 (one DocuSeal account per installation versus many organizations) and SIG-5 (templates built by
-hand in DocuSeal's UI versus the Pro template API), plus whether Form I-9 belongs in the first path at
-all; see §13 of the roadmap, which also records what the real boot proved and where it contradicted the
-vendor's own pages.
+**Document signing now connects an onboarding step to locally filed signed documents.** The owner
+selected manually authored DocuSeal templates, explicit staff sending, and one request per step.
+Owner/admin settings hold a tenant's encrypted API key and trusted HTTPS origin; onboarding definitions
+select a single-signer template and a subject-readable personnel record type. Issuing a checklist
+never sends a submission. Owner/admin/HR send from the personnel onboarding tab; the employee opens
+the signing ceremony from their checklist or a queued invitation.
+
+`reconcile_signatures` runs in the worker and can also be requested from the checklist. Completion
+is checked through DocuSeal's authenticated API, not a browser return or unverified webhook: the
+submission, template, external request ID, signer email/role/IDs, completion timestamps and required
+signature field evidence must match. Signed PDFs and the audit certificate then pass the normal
+size/type/scanning/storage/retention path. Only a successful local import completes an open step;
+manual completion cannot bypass it and an already-waived step stays waived. Import failures roll
+back the records, clean up stored files, expose the error and schedule another check. A creation
+timeout is reconciled by the reserved external ID rather than sent again.
+
+The Compose `signing` profile remains optional. The first slice supports one signer and one record
+type per template (up to twenty documents); documents with different retention/access requirements
+need separate steps. Template creation inside this application, combined multi-step packets, automatic
+sending, completion webhooks, I-9/DPS workflows and externally hosted download origins are not shipped.
+This is provider-verified signing with locally hashed evidence, **not** a claim of qualified digital
+signatures or legal certification. Deployment requires a trusted/reachable signing hostname, credentials,
+the worker, scanning and backups; a real deployment's phone ceremony and restore still need acceptance
+testing. Setup and failure recovery are documented in roadmap §13.
 
 **Queue scope.** `/compliance/`, the directory, `/schedule/`, and `/time/review/` are now bounded
 by the actor's granted authority, so a supervisor's queue is their branch's, their contract's, or

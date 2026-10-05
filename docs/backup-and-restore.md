@@ -117,6 +117,22 @@ docker run --rm -v <project>_media:/from -v "$PWD":/to alpine \
 A restore that recovers the database but not the volume leaves every document row pointing at
 a missing file — the application reports the download as unavailable rather than inventing it.
 
+### Signing installations
+
+Set `DOCUSEAL_BACKUP_DATABASES` to the signing schema before the first real signature; the application
+schema's dump alone does not cover pending ceremonies, templates or provider audit history. Copy
+`docuseal_data` and any configured DocuSeal storage in addition to the application's media. DocuSeal's
+generated secret may live in its data volume, or in operator-managed `docuseal.env`; preserve that
+secret through recovery. Preserve the application's `SECRET_KEY` securely too: organization signing
+API keys are encrypted with a key derived from it. After intentional rotation, re-enter signing
+credentials through the owner/admin settings page; do not disable encryption.
+
+Restore acceptance must include a completed signing request whose local signed PDFs and audit
+certificate download with their stored hashes, and a pending request reconciled against the original
+DocuSeal external ID without issuing another submission. Keep writers stopped until the application
+and signing database/media belong to the intended recovery point. A missing artifact is not made
+whole by changing the onboarding task to done.
+
 ## Restore test log
 
 Run at least quarterly, and on any host or storage change. Record the observed times so

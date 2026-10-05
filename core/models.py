@@ -515,6 +515,27 @@ class CredentialType(RuleVocabulary, models.Model):
     code = models.SlugField(max_length=60)
     blocks_scheduling = models.BooleanField(default=True)
     blocks_clock_in = models.BooleanField(default=True)
+    enforcement_grandfathered = models.BooleanField(
+        default=True,
+        help_text="Legacy escape for rows that were already refusing assignments and clock-ins before "
+                  "approval became a precondition for enforcement. The settings screen clears it on "
+                  "every row it creates or edits, so a requirement made from now on enforces only once "
+                  "a named person has approved it; an existing row keeps behaving as its installation "
+                  "chose until somebody approves it or turns the flags off. See the matrix's "
+                  "\"Grandfathered\" label.")
+
+    @property
+    def may_enforce(self):
+        """Whether this requirement's `blocks_*` flags are allowed to stop anything right now.
+
+        The owner ruled on 2026-10-05 that approval gates enforcement: a rule with no source, no
+        reference and no named approver must not be the reason a guard cannot clock in, because the
+        firm cannot even say where the refusal came from. The grandfather flag exists because flipping
+        that gate on for rows that predate it would silently stop enforcing obligations companies are
+        relying on today — a change of behaviour dressed as a bug fix. So: new rows ask for approval,
+        old rows keep their history, and every row that is enforcing *without* approval is labelled.
+        """
+        return bool(self.is_approved or self.enforcement_grandfathered)
     warning_days = models.PositiveIntegerField(default=60)
     reminder_days_before = models.JSONField(default=list, blank=True, help_text="Escalating reminder lead times in days before expiry. Empty uses the warning window once.")
     # NTF-2. The escalation lives on the requirement row beside the ladder it extends, which is the
@@ -770,6 +791,7 @@ class OnboardingItem(AppliesToCategories, models.Model):
     class Kind(models.TextChoices):
         TASK = "task", "A step someone marks done"
         DOCUMENT = "document", "A record filed in the personnel file"
+        SIGNATURE = "signature", "A document signed in DocuSeal"
         CREDENTIAL = "credential", "A numbered registration or commission on file"
     class Owner(models.TextChoices):
         PERSON = "person", "The new hire"
@@ -783,6 +805,8 @@ class OnboardingItem(AppliesToCategories, models.Model):
     due_within_days = models.PositiveIntegerField(default=7, help_text="Calendar days after the hire date this step is owed by.")
     applies_to = models.JSONField(default=list, blank=True, help_text="Personnel categories that must do this step. Empty means every new hire.")
     document_type = models.ForeignKey("core.DocumentType", on_delete=models.SET_NULL, null=True, blank=True, related_name="onboarding_items", help_text="For a record step: which type must be on file.")
+    signing_template_id = models.PositiveBigIntegerField(null=True, blank=True)
+    signing_template_name = models.CharField(max_length=255, blank=True)
     credential_type = models.ForeignKey(CredentialType, on_delete=models.PROTECT, null=True, blank=True, related_name="onboarding_items", help_text="For a credential step: which requirement must be on file.")
     order = models.PositiveIntegerField(default=0)
     active = models.BooleanField(default=True)
@@ -844,6 +868,76 @@ class OnboardingTask(models.Model):
 
     def __str__(self):
         return f"{self.item.name} — {self.person.full_name}"
+
+
+class SigningSettings(models.Model):
+    organization = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name="signing_settings")
+    base_url = models.URLField(max_length=255)
+    encrypted_api_key = models.TextField()
+    enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class SigningRequest(models.Model):
+    class Status(models.TextChoices):
+        PREPARING = "preparing", "Checking submission creation"
+        SENT = "sent", "Awaiting signature"
+        COMPLETED = "completed", "Signed and filed"
+        DECLINED = "declined", "Declined or expired"
+        REJECTED = "rejected", "Not created; correct settings and resend"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="signing_requests")
+    task = models.ForeignKey(OnboardingTask, on_delete=models.PROTECT, related_name="signing_requests")
+    attempt = models.PositiveIntegerField()
+    document_type = models.ForeignKey("core.DocumentType", on_delete=models.PROTECT)
+    template_id = models.PositiveBigIntegerField()
+    template_snapshot = models.JSONField(default=dict)
+    signer_email = models.EmailField()
+    signer_name = models.CharField(max_length=255)
+    base_url = models.URLField(max_length=255)
+    submission_id = models.PositiveBigIntegerField(null=True, blank=True)
+    submitter_id = models.PositiveBigIntegerField(null=True, blank=True)
+    signing_slug = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PREPARING)
+    issued_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    next_check_at = models.DateTimeField(default=timezone.now)
+    failures = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-attempt"]
+        constraints = [
+            models.UniqueConstraint(fields=["task", "attempt"], name="one_signing_attempt_per_task"),
+            models.UniqueConstraint(fields=["organization", "submission_id"], name="one_signing_submission_per_org"),
+        ]
+        indexes = [models.Index(fields=["status", "next_check_at"], name="core_signing_due")]
+
+    def clean(self):
+        if self.task_id and self.task.organization_id != self.organization_id:
+            raise ValidationError("Signing task must belong to this organization.")
+        if self.document_type_id and self.document_type.organization_id != self.organization_id:
+            raise ValidationError("Signing record type must belong to this organization.")
+
+
+class SignedArtifact(models.Model):
+    request = models.ForeignKey(SigningRequest, on_delete=models.PROTECT, related_name="artifacts")
+    document = models.OneToOneField("core.PersonDocument", on_delete=models.PROTECT, related_name="signed_artifact")
+    key = models.CharField(max_length=80)
+    name = models.CharField(max_length=255)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["request", "key"], name="one_artifact_per_signing_request")]
+
+    def clean(self):
+        if self.request_id and self.document_id:
+            if (self.document.organization_id != self.request.organization_id
+                    or self.document.person_id != self.request.task.person_id
+                    or self.document.document_type_id != self.request.document_type_id):
+                raise ValidationError("Signed artifact must be filed against the signing request's person and record type.")
 
 
 class TrainingRecord(models.Model):

@@ -1,6 +1,0 @@
-Creating test database for alias 'default'...
-C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\.venv\Lib\site-packages\django\core\handlers\base.py:62: UserWarning: No directory at: C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\staticfiles\
-  mw_instance = middleware(adapted_handler)
-...................................C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\.venv\Lib\site-packages\django\core\handlers\base.py:62: UserWarning: No directory at: C:\Users\sbachman\OneDrive - First Dallas Media, Inc\Documents\GitHub\Texas_Security_Company_Manager\staticfiles\
-  mw_instance = middleware(adapted_handler)
-........................................................................................................................................................................................................................................................................

@@ -35,6 +35,12 @@ infrastructure is reviewed.
   bucket, and visitors behind one proxy do not share a bucket.
 - MFA (TOTP plus recovery codes) is required for configured tenant roles and for any
   staff/platform account, which has no tenant membership of its own.
+  Before enrollment, exact GET/HEAD requests for the tenant theme, logo, web manifest,
+  and service-worker script may render the account shell; the theme and logo retain their
+  membership/login checks. Business routes remain gated. These resources must not redirect
+  to enrollment: each enrollment GET replaces the pending session secret and would
+  invalidate the QR already displayed. Service-worker installation preloads refuse redirects
+  so a gated clock request cannot rotate that secret or cache an enrollment page as the clock.
 - A restrictive Content Security Policy, Referrer Policy, Permissions Policy, and
   Cross-Origin-Opener Policy are applied by the application. Tenant theme variables are
   served through an authenticated CSS resource and the brand logo through an authenticated
@@ -64,6 +70,16 @@ infrastructure is reviewed.
   publishes a healthcheck. Compose applies restart policies, bounded log rotation, memory
   caps, service healthchecks, and a one-shot migrator.
 - Secrets and runtime data are excluded from version control and from the build context.
+- Signing credentials are encrypted per organization using a key derived from `SECRET_KEY`; keys
+  and bearer signing links are not written to audit/error logs. Tenant administrators can select
+  only operator-allowlisted HTTPS origins. API requests refuse redirects, file downloads do not
+  send the API key and can follow only same-origin redirects, and responses have explicit bounds.
+- Signing completion is re-read through the authenticated DocuSeal API and bound to the reserved
+  request, signer, template and required signature fields. Signed PDFs plus an audit certificate
+  must pass normal validation/scanning and be committed locally before an onboarding step closes.
+  A browser return, generic upload or manual completion cannot substitute for this evidence.
+  MySQL guards protect signing request/artifact tenant references. This is not a legal certification
+  or proof of a qualified cryptographic PDF signature; I-9/DPS workflows remain excluded.
 
 ## Common-attack review
 

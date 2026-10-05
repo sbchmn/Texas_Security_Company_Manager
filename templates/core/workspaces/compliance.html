@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% block title %}Compliance & Records{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-heading">
+    <div>
+      <h1>Compliance & Records</h1>
+      <p>Obligations, personnel records, and onboarding tasks.</p>
+    </div>
+    <div class="actions">
+      {% if can_edit %}
+        <a class="button secondary" href="{% url 'settings_compliance' %}">Configure rules</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <section class="workspace-grid">
+    <article class="card card-primary">
+      <h2>Compliance rules</h2>
+      <p class="metric">{{ rule_count }}</p>
+      <p class="muted">{% if total_attention %}{{ total_attention }} need attention{% else %}All current{% endif %}</p>
+      {% if rule_summaries %}
+        <ul class="rules-list">
+          {% for item in rule_summaries|slice:":3" %}
+            <li>
+              <strong>{{ item.rule.name }}</strong>
+              <small>{{ item.summary.attention }} gaps</small>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <a class="button button-small" href="{% url 'compliance' %}">View queue</a>
+    </article>
+
+    <article class="card">
+      <h2>Onboarding</h2>
+      <p class="metric">{{ onboarding_total }}</p>
+      <p class="muted">{% if onboarding_overdue %}{{ onboarding_overdue }} overdue{% else %}On track{% endif %}</p>
+      <a class="button button-small" href="{% url 'onboarding_settings' %}">Manage onboarding</a>
+    </article>
+
+    <article class="card">
+      <h2>Personnel documents</h2>
+      <p class="muted">Manage employee records and acknowledgments.</p>
+      <a class="button button-small" href="{% url 'documents' %}">Browse documents</a>
+    </article>
+
+    <article class="card">
+      <h2>Training records</h2>
+      <p class="muted">Credential and training completions.</p>
+      <a class="button button-small" href="{% url 'training' %}">View training</a>
+    </article>
+
+    {% if can_execute_disposition %}
+      <article class="card">
+        <h2>Retention review</h2>
+        <p class="muted">Disposition and legal holds.</p>
+        <a class="button button-small" href="{% url 'retention_review' %}">Review retention</a>
+      </article>
+    {% endif %}
+  </section>
+
+  {% if rule_summaries %}
+    <section class="panel table-panel">
+      <h2>Compliance status</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rule</th>
+              <th>Total</th>
+              <th>Attention</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in rule_summaries %}
+              <tr>
+                <td><strong>{{ item.rule.name }}</strong></td>
+                <td>{{ item.summary.total }}</td>
+                <td>{% if item.summary.attention %}<span class="pill attention">{{ item.summary.attention }}</span>{% else %}—{% endif %}</td>
+                <td><a class="button secondary button-small" href="{% url 'compliance' %}">View</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+{% block title %}Today{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-heading">
+    <h1>{% if manager %}Coverage & Actions{% else %}My work{% endif %}</h1>
+    {% if manager %}<p>Open posts, pending reviews, and schedule changes.</p>{% else %}<p>Clock, shifts, and pending tasks.</p>{% endif %}
+  </div>
+
+  {% if manager %}
+    {# Manager view: open posts and coverage gaps #}
+    <section class="workspace-grid">
+      <article class="card card-primary">
+        <h2>Open posts this week</h2>
+        {% if open_posts %}
+          <div class="posts-list">
+            {% for post in open_posts|slice:":5" %}
+              <div class="post-row">
+                <div>
+                  <strong>{{ post.site.client.name }}</strong>
+                  <small>{{ post.site.name }} • {{ post.starts_at|date:"M d H:i" }}–{{ post.ends_at|time:"H:i" }}</small>
+                </div>
+                <a class="button secondary button-small" href="{% url 'shift_edit' post.pk %}">Assign</a>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="muted">No open posts this week.</p>
+        {% endif %}
+        <a class="button button-small" href="{% url 'schedule' %}">View full schedule</a>
+      </article>
+
+      <article class="card">
+        <h2>Pending reviews</h2>
+        <p class="metric">{{ pending_review_count }} punches</p>
+        <p class="muted">Awaiting time review and approval.</p>
+        <a class="button button-small" href="{% url 'time_review' %}">Review now</a>
+      </article>
+
+      <article class="card">
+        <h2>Shift moves</h2>
+        <p class="metric">{% with total=pending_swaps|length %}{{ total }}{% endwith %} pending</p>
+        <p class="muted">Swaps and exchanges need decision.</p>
+        {% if pending_swaps %}
+          <a class="button button-small" href="{% url 'swaps' %}">Decide swaps</a>
+        {% endif %}
+      </article>
+
+      <article class="card">
+        <h2>Compliance</h2>
+        <p class="metric">{{ compliance_attention }} attention</p>
+        <p class="muted">Rules with gaps or overdue items.</p>
+        <a class="button button-small" href="{% url 'workspace_compliance' %}">Review compliance</a>
+      </article>
+    </section>
+
+  {% else %}
+    {# Employee view: clock and next shift #}
+    {% if can_clock %}
+      <section class="card card-primary">
+        <div class="clock-header">
+          <h2>Clock</h2>
+          <small>{{ today|date:"l, M d" }}</small>
+        </div>
+        
+        {% if next_shift %}
+          <div class="next-shift">
+            <strong>Next shift:</strong>
+            <p>{{ next_shift.site.client.name }} — {{ next_shift.site.name }}</p>
+            <small>{{ next_shift.starts_at|date:"M d H:i" }}–{{ next_shift.ends_at|time:"H:i" }}</small>
+          </div>
+        {% else %}
+          <p class="muted">No scheduled shifts.</p>
+        {% endif %}
+
+        <a class="button" href="{% url 'clock' %}">Clock in/out</a>
+      </section>
+    {% endif %}
+
+    {# Pending tasks #}
+    <section class="workspace-grid">
+      {% if pending_onboarding > 0 %}
+        <article class="card card-attention">
+          <h2>Onboarding</h2>
+          <p class="metric">{{ pending_onboarding }} item{{ pending_onboarding|pluralize }}</p>
+          <a class="button button-small" href="{% url 'my_onboarding' %}">Complete onboarding</a>
+        </article>
+      {% endif %}
+
+      {% if pending_signatures > 0 %}
+        <article class="card card-attention">
+          <h2>Documents to sign</h2>
+          <p class="metric">{{ pending_signatures }} signature{{ pending_signatures|pluralize }}</p>
+          <a class="button button-small" href="{% url 'my_documents' %}">Review & sign</a>
+        </article>
+      {% endif %}
+
+      {% if pending_documents > 0 %}
+        <article class="card">
+          <h2>Documents to review</h2>
+          <p class="metric">{{ pending_documents }} waiting</p>
+          <a class="button button-small" href="{% url 'my_documents' %}">Review documents</a>
+        </article>
+      {% endif %}
+
+      {% if open_offers > 0 %}
+        <article class="card">
+          <h2>Open offers</h2>
+          <p class="metric">{{ open_offers }} offer{{ open_offers|pluralize }}</p>
+          <a class="button button-small" href="{% url 'my_shifts' %}">View offers</a>
+        </article>
+      {% endif %}
+
+      <article class="card">
+        <h2>My schedule</h2>
+        <a class="button button-small" href="{% url 'my_shifts' %}">View my shifts</a>
+      </article>
+
+      <article class="card">
+        <h2>Availability</h2>
+        <a class="button button-small" href="{% url 'availability' %}">Set availability</a>
+      </article>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}

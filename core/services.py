@@ -20,7 +20,7 @@ from django.core import signing
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
-from django.db import connection, transaction
+from django.db import DatabaseError, connection, transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 from .scope import ActorScope, dispatch_recipients_for_shift, manager_recipients_by_person
@@ -65,6 +65,10 @@ def prohibited_credentials(person):
     blocked=[]
     credentials=Credential.objects.filter(person=person,credential_type__active=True,credential_type__blocks_clock_in=True).select_related("credential_type")
     for credential in credentials:
+        # The approval gate, not the punch's problem: an obligation nobody has approved is not allowed
+        # to be the reason a guard cannot clock in. `may_enforce` also carries the legacy escape, so a
+        # requirement that has been refusing clock-ins for months keeps doing so until the firm looks.
+        if not credential.credential_type.may_enforce: continue
         if credential.effective_status in PROHIBITED_CREDENTIAL_STATES:
             blocked.append(f"{credential.credential_type.name}: {credential.effective_status}.")
     return blocked
@@ -175,6 +179,11 @@ def shift_eligibility(shift, officer=None, purpose="schedule", requirements=None
     for required,origin in (post_requirements(shift) if requirements is None else requirements):
         if purpose == "schedule" and not required.blocks_scheduling: continue
         if purpose == "clock" and not required.blocks_clock_in: continue
+        # Approval gates enforcement (the owner's ruling of 2026-10-05), with the grandfather escape for
+        # rows that were already refusing before that gate existed. A refusal a dispatcher cannot trace
+        # to an approved obligation is not a control, it is a dead end — and this is the one place in the
+        # product that says "no" to a human about their job.
+        if not required.may_enforce: continue
         credential=credentials.get(required.id)
         state=credential.effective_status if credential else "missing"
         if state in INVALID_CREDENTIAL_STATES:
@@ -2516,7 +2525,6 @@ def malware_scan(upload):
     upload.seek(0)
     return result.endswith("OK\0"),result.rstrip("\0")
 
-@transaction.atomic
 def store_person_document(*, organization, person, document_type, upload, actor, expires_on=None, supersedes=None):
     from .models import AuditEvent, PersonDocument
     verified_type=validate_document_upload(upload)
@@ -2526,14 +2534,22 @@ def store_person_document(*, organization, person, document_type, upload, actor,
     declared_type=getattr(upload,"content_type","")[:100]
     stripped=strip_document_metadata(upload,verified_type)
     clean,scan_detail=malware_scan(stripped)
+    if not clean:
+        raise ValidationError("The upload failed malware scanning.")
     digest=hashlib.sha256()
     for chunk in stripped.chunks(): digest.update(chunk)
     stripped.seek(0)
     retain_until=None
     if document_type.retention_days is not None: retain_until=timezone.localdate()+timedelta(days=document_type.retention_days)
-    document=PersonDocument.objects.create(organization=organization,person=person,document_type=document_type,file=stripped,original_name=stripped.name,content_type=declared_type,verified_type=verified_type[:100],size=stripped.size,sha256=digest.hexdigest(),scan_status=PersonDocument.ScanStatus.CLEAN if clean else PersonDocument.ScanStatus.REJECTED,expires_on=expires_on,retain_until=retain_until,uploaded_by=actor,supersedes=supersedes)
-    AuditEvent.objects.create(organization=organization,actor=actor,action="document.uploaded",target_type="person_document",target_id=str(document.pk),metadata={"type":document_type.code,"size":stripped.size,"sha256":document.sha256,"scan":scan_detail,"revision":document.revision_number,"supersedes":str(supersedes.pk) if supersedes else None,"metadata_stripped":verified_type in METADATA_BEARING_TYPES})
-    if not clean: document.file.delete(save=False); raise ValidationError("The upload failed malware scanning.")
+    document=PersonDocument(organization=organization,person=person,document_type=document_type,file=stripped,original_name=stripped.name,content_type=declared_type,verified_type=verified_type[:100],size=stripped.size,sha256=digest.hexdigest(),scan_status=PersonDocument.ScanStatus.CLEAN,expires_on=expires_on,retain_until=retain_until,uploaded_by=actor,supersedes=supersedes)
+    try:
+        with transaction.atomic():
+            document.save()
+            AuditEvent.objects.create(organization=organization,actor=actor,action="document.uploaded",target_type="person_document",target_id=str(document.pk),metadata={"type":document_type.code,"size":stripped.size,"sha256":document.sha256,"scan":scan_detail,"revision":document.revision_number,"supersedes":str(supersedes.pk) if supersedes else None,"metadata_stripped":verified_type in METADATA_BEARING_TYPES})
+    except (DatabaseError, ValidationError, OSError):
+        if document.file and document.file._committed:
+            document.file.delete(save=False)
+        raise
     return document
 
 
@@ -2883,7 +2899,7 @@ def swap_candidates(shift, excluding=None):
     if excluding is not None:
         people = [item for item in people if item.pk != excluding.pk]
     gating = [(credential_type, origin) for credential_type, origin in post_requirements(shift)
-              if credential_type.blocks_scheduling]
+              if credential_type.blocks_scheduling and credential_type.may_enforce]
     gating_ids = {credential_type.id for credential_type, _ in gating}
     today = timezone.localdate()
     holds = defaultdict(set)
@@ -3864,6 +3880,13 @@ def onboarding_evidence(organization, task, reader=None):
     item = task.item
     if item.kind == OnboardingItem.Kind.TASK:
         return None
+    if item.kind == OnboardingItem.Kind.SIGNATURE:
+        from .document_signing import signing_evidence
+        if reader is not None and item.document_type_id and not record_open_for(
+            item.document_type, task.person_id, reader[0], reader[1],
+        ):
+            return {"state": "hidden", "detail": "this step's record type is not open to your role", "satisfied": None}
+        return signing_evidence(task)
     if item.kind == OnboardingItem.Kind.DOCUMENT:
         if not item.document_type_id:
             return {"state": "unmeasured", "detail": "no record type named for this step", "satisfied": False}
@@ -3913,6 +3936,10 @@ def onboarding_board(organization, person, today=None, reader=None, tasks=None):
             "task": task, "item": task.item, "status": task.status, "due_on": task.due_on,
             "overdue": overdue, "evidence": evidence, "block": block,
             "no_hire_date": task.due_on is None and task.status == OnboardingTask.Status.OPEN,
+            "signing": (
+                task.signing_requests.order_by("-attempt").first()
+                if task.item.kind == OnboardingItem.Kind.SIGNATURE and evidence["state"] != "hidden" else None
+            ),
         })
     outstanding = [row for row in rows if row["status"] == OnboardingTask.Status.OPEN]
     # Compared by identity, not by count: a step deleted from the checklist after it was issued still
@@ -3966,6 +3993,8 @@ def decide_onboarding_task(task, actor, status, note=""):
             f"Waiving a step needs a reason of at least {ONBOARDING_WAIVER_MIN_LENGTH} characters — "
             "a box ticked with no explanation is not a decision anyone can defend later.")
     if status == OnboardingTask.Status.DONE:
+        if task.item.kind == OnboardingItem.Kind.SIGNATURE:
+            raise ValidationError("A signing step completes automatically after its signed PDF and audit certificate are verified and filed.")
         evidence = onboarding_evidence(task.organization, task)
         if evidence and evidence.get("satisfied") is False:
             raise ValidationError(
@@ -5595,4 +5624,3 @@ MANDATORY_EVENT_PREFIXES = ("payroll.", "punch.", "credential.", "document.", "r
 
 def event_is_mandatory(event_type):
     return str(event_type or "").startswith(MANDATORY_EVENT_PREFIXES)
-
