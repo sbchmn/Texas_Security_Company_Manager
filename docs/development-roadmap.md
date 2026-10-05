@@ -194,10 +194,11 @@ and pay code".
 
 | Item | Gap | Builds on |
 | --- | --- | --- |
-| CLK-1 | Selfie / photo capture at punch | `Punch`, `TimePolicyOverride` tri-state fields |
+| ~~CLK-1~~ | ~~Selfie / photo capture at punch~~ **Done 2026-10-04** | `Punch`, `TimePolicyOverride` tri-state fields |
 | ~~CLK-2~~ | ~~Shared-kiosk PIN~~ **Done 2026-10-03** | `Punch.device_id`, `OfflineClockDevice` |
 | CLK-3 | NFC checkpoints | `Checkpoint` + QR path (now end to end) |
 | ~~CLK-4~~ | ~~Mock-location / spoofing-risk signal~~ **Done 2026-10-03** | geofence validation in `record_punch`, `Punch.risk_flags` |
+| CLK-6 | Supervisor approval of a punch — the last DD §Sites evidence option with no code | nearest existing shape is the correction-request queue, which is a different thing |
 
 **CLK-5 (offline launch) shipped 2026-10-01**: the worker now caches `/clock/` as a document,
 refreshes it on every online load, and tells the page when what it rendered came from cache, so the
@@ -235,9 +236,12 @@ or eight digits, which the page advises rather than imposes.
 **DD §Sites, geofences, clocks** enumerates the supported evidence options: "punch location,
 selfie/photo, shared kiosk PIN, QR checkpoints, NFC checkpoints, supervisor approval, and
 mock-location/spoofing-risk signals", and states registered-device binding is *not* required.
-Three of the seven are no longer missing: the shared-kiosk PIN (CLK-2), the offline launch (CLK-5) and
-the mock-location / spoofing-risk signal (CLK-4) are built, and QR checkpoints are end to end. What is
-left is the selfie (CLK-1, **ruled 2026-10-04 and ready to build** — see its bullet) and supervisor approval.
+Four of the seven are now built — punch location, the shared-kiosk PIN (CLK-2), the offline launch
+(CLK-5), the mock-location / spoofing-risk signal (CLK-4), and the selfie (CLK-1, **shipped
+2026-10-04**) — and QR checkpoints are end to end. NFC was ruled out on 2026-10-03. That leaves
+**supervisor approval (CLK-6)**, which is a decision record rather than a capture and has no code at
+all today; the correction-request queue is its nearest neighbour and is not the same object, so it
+wants its own store before it wants a screen.
 
 - **CLK-4 — done 2026-10-03**, and the item's premise had to be corrected before it could be built
   honestly: nothing a browser reports can *prove* a phone forged its position, because the flag that
@@ -261,26 +265,62 @@ left is the selfie (CLK-1, **ruled 2026-10-04 and ready to build** — see its b
   `RULE_WATCHED` on both sides the day it was written — the PAY-5 drift, caught before it could recur —
   and `_location_claims` keeps a missing accuracy `None` rather than `0`, because absence must not read
   as the most suspicious value possible.
-- **CLK-1 — unblocked 2026-10-04 by three owner rulings** (DD §Sites, geofences, clocks), so it is now
-  work rather than a question. The mechanism it needed was already built by its neighbours:
-  `record_punch(evidence=)` as the one artefact extension point, the per-field company → contract → site
-  resolver with a version stamp, the OWASP upload path with the magic check, scan and SHA-256, and a
-  retention column where blank already means permanent — which is exactly the configurable window the
-  owner asked for, so it needs no new field and no new screen, only that the selfie's record type exist
-  and be editable. The rulings that shape the build:
-  a frame at **clock-in and clock-out and not at breaks**, which makes it one boolean rather than an
-  event-kind matrix; required only **when no other identity method covers that punch**, so a
-  PIN-verified station or a checkpoint scan satisfies it — a stated rule, testable in both directions,
-  and the difference between evidence and a nuisance at a gate; and openable by **the subject, owner,
-  administrator, HR and dispatcher**, which cannot reuse the `restricted` rung. `restricted` is
-  owner/admin/HR, and widening it would disclose every existing claim, accommodation, leave and
-  screening record to dispatch as a side effect — a different disclosure, decided by different people,
-  for different reasons. Biometrics get their own rung beside the other two.
-  What remains genuinely unbuilt is the capture: a camera panel on `/clock/` and at the station, the
-  artefact's link to the punch, the review screen's pointer at it, and the offline question — a frame
-  that arrives hours after the moment it shows cannot be distinguished from one made during that
-  window, which is the same reason CLK-2 refused offline PINs, so an offline punch at a
-  selfie-required post will carry the exception rather than the photo.
+- **CLK-1 — done 2026-10-04**, ruled and built the same day. The mechanism it needed had already been
+  laid by its neighbours: `record_punch(evidence=)` as the one artefact extension point, the per-field
+  company → contract → site resolver with a version stamp, the OWASP upload path with the magic check,
+  scan and SHA-256, and a retention column where blank already means permanent — exactly the
+  configurable window the owner asked for. So the build added no new field and no new screen:
+  `ensure_clock_selfie_type` seeds `clock_selfie` as an ordinary `DocumentType` at 90 days on first need,
+  which puts the selfie on the same page that edits every other type's window and reader list, and inherits
+  the disposition review, the legal hold and the disclosure ladder without a second copy of any of them.
+  The four decisions that are the item:
+  a frame at **clock-in and clock-out and not at breaks**, which is one boolean rather than an event-kind
+  matrix — a break is an annotation on a tour, not a punch, so there is nothing to exempt and no setting
+  to hide it behind; required only **when no other identity method covers that punch**, which is
+  `selfie_owed()` and a station PIN, tested in both directions; openable by **the subject, owner,
+  administrator, HR and dispatcher**, which cannot reuse the `restricted` rung — `restricted` is
+  owner/admin/HR, and widening it would disclose every existing claim, accommodation, leave and screening
+  record to dispatch as a side effect, so `biometric` is a fourth rung with exactly those four staff roles
+  and the auditor left out; and **the frame is single-use and stale in two minutes**, because one photo
+  that can evidence both ends of an eight-hour tour is not evidence about either.
+  Three things the landing settled that the ruling could not. **There is no station camera**: the
+  exemption says a frame is owed where nothing else proves who, and a station punch is by definition
+  PIN-verified, so a camera there would be a rule asking for evidence its own exemption supplies.
+  **The checkpoint branch is unreachable and is therefore not built** — the owner's sentence names
+  "other identity methods" and a checkpoint scan is one, but `_resolve_checkpoint` refuses a checkpoint
+  code on any event kind but `checkpoint`, and a checkpoint is its own kind, so a scan can never also be
+  a clock-in; an allowance nobody can invoke is not a safety margin, it is a rule that reads stricter
+  than it is. Recorded here rather than buried because it is the one place the implementation is
+  narrower than the ruling's wording, and it is narrower by necessity and not by choice. **A retake
+  deletes the abandoned frame** (`discard_unattached_selfie`), because a face with no punch behind it is
+  not evidence and would otherwise age on the retention clock the owner set *for evidence*; it refuses
+  when the frame is attached to a punch or belongs to somebody else, so a crafted `replaces` id is not an
+  API for erasing records.
+  Offline stays refused: a frame that arrives hours after the moment it shows cannot be distinguished from
+  one manufactured during that window — the same reasoning that made CLK-2 refuse offline PINs — so an
+  offline punch at a selfie-required post carries the exception, names the reason in
+  `exception_reason`, and refuses the photo outright rather than accepting a replayed one.
+  Verified on MySQL 8.4: migration 0055 installs `core_punch_selfie_tenant_insert/update` with the
+  `IS NOT NULL` prefix on the nullable FK, and 54 triggers are present after 0056.
+- **The metadata that outlived the upload — done 2026-10-04, found by CLK-1's own landing.** A frame
+  goes through `store_person_document`, and that function stored whatever bytes arrived. Which meant
+  every personnel image upload kept its EXIF — GPS coordinates, device make and model, the camera's own
+  clock — at `standard` sensitivity by default, a rung whose staff list includes **auditor**, a role this
+  schema's own comment describes as often an outside accountant, and in the bytes `personnel_file_zip`
+  hands out. The cheapest fix was the pattern already proven in the same file for logos: re-encode.
+  `strip_document_metadata` does it before the scan, the digest and the store, so **what is hashed is
+  what is kept** — a record whose SHA-256 describes bytes that were thrown away is a digest nobody can
+  re-derive. Container preserved rather than normalised, because `verified_type` is the column the preview
+  allowlist trusts and a `.jpg` stored as PNG bytes would make it a lie; `Orientation` applied to the
+  pixels instead of carried as a tag that is then dropped; nothing resized, because the legibility of a
+  photographed certificate is part of the evidence; **fail-closed**, because an image Pillow cannot decode
+  is an image whose metadata cannot be *proved* gone, and filing it anyway would record a stripped file
+  that still carries a location. That refusal is a real cost and is stated: it also refuses an image a
+  browser could render, and it broke eight synthetic `b"\xff\xd8\xff\xe0" + zeros` fixtures in the selfie
+  suite, which are now real JPEGs. PDFs are untouched — their bytes are the record an inspection reads —
+  and a PDF's XMP block can carry a location, so that is a disclosed limit, not a covered case.
+  `SECURITY.md` claimed a general EXIF strip that only the logo path performed; the claim now matches the
+  code, and the SSRF row describes the one fetch this pass added.
 - **Watch the tri-state trap.** An explicit `False` must not render as "inherit" in an editor;
   `time_policy_override` already had that defect and its test pins it. New evidence fields inherit
   that requirement.
@@ -422,12 +462,13 @@ enumerated list to check against; **RB §Email and SMS providers** covers the pr
   does not understand: an unmapped event becomes a `STATUS` row carrying the provider's own name as
   detail, never a guess, because guessing is how a payload rename blocks a reachable officer. A bounce
   suppresses the *next* message and never rewrites the one that bounced.
-  Two things this deliberately does **not** do. It never follows an SNS `SubscribeURL`: that is a
-  server-side request to an address that arrived inside an unauthenticated payload, so the host is
-  extracted and the event is kept pending — and the operator's confirm button is **not built yet**, which
-  is why the messaging page shows a pending subscription as an unresolved item rather than a success.
-  Until it exists, an SNS deployment must confirm out of band (or accept that email callbacks will not
-  flow), and that is an open end rather than a finished one. And it never claims a
+  Two things this deliberately does **not** do. It never follows an SNS `SubscribeURL`
+  automatically: that is a server-side request to an address that arrived inside an unauthenticated
+  payload, so the host is extracted and the event is kept pending — and the operator's confirm button
+  **landed on 2026-10-04** (§3's sibling work), gated behind `sns_confirmation_target`, an allow-list on
+  the *parsed* host that refuses `169.254.169.254`, the userinfo trick, a port, and a path before any
+  socket opens. Until somebody clicks it, an SNS deployment's email callbacks still do not flow, which is
+  why the messaging page lists the pending subscription instead of reporting success. And it never claims a
   callback was *proven* when it was only addressed: Twilio's signature is required when
   `TWILIO_AUTH_TOKEN` is set, and where a provider documents nothing to verify (SNS, Mailjet) the event
   is stored `verified=False` so a later reader can tell the two apart.
@@ -452,6 +493,17 @@ enumerated list to check against; **RB §Email and SMS providers** covers the pr
 soft deletion/recovery, and owner/admin approval for permanent deletion". Every clause of that sentence
 is now implemented — the last of them, browser preview, on 2026-10-03. §6 is therefore closed as a gap
 list; what remains in this domain is the signing work in §13.
+
+One loose end from the records set closed on 2026-10-04, and it is recorded here rather than as a new item
+because it was never a feature: `core_dispositionrequest` was the only tenant-linked table with no
+cross-tenant reference guard — it FKs a `PersonDocument` and was never in the list 0012/0018/0019/0025/0055
+policed. The application cannot create the bad state (the view resolves the document through the actor's
+own organization), which is why it stood as a disclosed gap rather than an incident. Migration 0056 installs
+the INSERT and UPDATE guards; measured on MySQL 8.4 they refuse a raw cross-tenant insert with
+`cross-tenant disposition reference`, refuse an UPDATE that walks a request onto another tenant's file, and
+still allow the same-tenant case. `document_id` is `NOT NULL` under `on_delete=PROTECT`, so there is no
+`IS NOT NULL` prefix to forget here — the 0045 and 0055 defect could not recur on this table by shape.
+**Total triggers installed after 0056: 54.**
 
 - **REC-1 — done 2026-10-02.** `personnel_file_bundle` / `personnel_file_zip` produce a ZIP of
   `README.txt`, `dossier.json`, `records-manifest.csv` and the permitted files, and the route is
@@ -759,7 +811,12 @@ What the section asked for, and where each landed:
   `querystring_auth` signed URLs and the malware-scan path have only ever been exercised locally.
 - **PLT-4 — accessibility and security review** are open production gates
   (feature-status.md §Production acceptance gates, SECURITY.md); automated landmark checks pass,
-  human/AT testing has not been done.
+  human/AT testing has not been done. Two things this pass added to that review's scope, because a green
+  suite cannot stand in for either: **the first outbound URL fetch in the product** (the SNS
+  confirmation click — its allow-list is a host pattern, so post-resolution IP validation and an egress
+  policy are the reviewer's questions, not this file's answers), and a **deliberate widening of what
+  uploaded bytes may do inside the product** in two directions — served inline since browser preview,
+  and now re-encoded on the way in since the EXIF strip.
 - **PLT-5 — restore evidence.** [backup-and-restore.md](backup-and-restore.md) records the shipped
   configuration's RPO against the accepted target and an empty restore log. The timed restore test
   has never been run.
@@ -796,17 +853,18 @@ feature-status.md §Known cost of the inheritance model.
 
 Not a commitment — the owner sequences. The dependency logic only:
 
-1. ~~**PAY-2** (categories and whether each is paid) with **CLK-1..4**~~ — **closed 2026-10-03.**
-   PAY-2 and PAY-5 shipped first and the dependency turned out to be about provenance rather than
-   sequencing; CLK-2 then settled the family's shared machinery (the per-field evidence switch in the
-   resolver, `record_punch(evidence=)` as one extension point, the punch-vs-post ownership rule), and
-   **CLK-4** shipped on the same day using exactly that machinery — `flag_spoof_risk` resolved per level,
-   the verdict on `Punch.risk_flags`, the measurements in the audit `evidence` block, no new artefact
-   store. What is left of the family is **CLK-1 alone**, and as of 2026-10-04 it is no longer waiting on
-   anybody: the owner ruled the retention window (configurable, permanent down to N days — the shape the
-   record type already has), the cadence (clock-in and clock-out, not breaks, and only where no other
-   identity method covers the punch) and the viewers (subject + owner/admin/HR/dispatcher, which needs a
-   rung of its own rather than a widened `restricted`). What remains is the capture, in §3.
+1. ~~**PAY-2** (categories and whether each is paid) with **CLK-1..4**~~ — **closed 2026-10-03, and the
+   clock family closed behind it on 2026-10-04.** PAY-2 and PAY-5 shipped first and the dependency turned
+   out to be about provenance rather than sequencing; CLK-2 then settled the family's shared machinery
+   (the per-field evidence switch in the resolver, `record_punch(evidence=)` as one extension point, the
+   punch-vs-post ownership rule), and **CLK-4** shipped on the same day using exactly that machinery.
+   **CLK-1** landed 2026-10-04 on the owner's three rulings — the retention window (configurable,
+   permanent down to N days, as a normal record type), the cadence (clock-in and clock-out, never breaks,
+   and only where no other identity method covers the punch), and the viewers (subject + owner/admin/HR/
+   dispatcher, which needed a `biometric` rung rather than a widened `restricted`). What the family still
+   does not have is DD's **supervisor approval**, newly **CLK-6**, which has no store and no screen, and
+   the standing-coverage arithmetic SCH-4 left named. Landing the selfie is what exposed that stored
+   uploads keep their EXIF geotag — fixed the same day; see §3.
 2. ~~**RPT-1/2**, then **AUTH-2**~~ — **RPT-1/2/3 shipped 2026-10-02** (stored figures, their history,
    and the branch/contract split), which leaves **AUTH-2** standing on its own in this step: a client
    portal is reports behind a fence, and the reports half now exists.
@@ -859,7 +917,12 @@ clock station and the PIN that makes it evidence, a retention setting the audit 
 before it purges, and the consent ledger with the provider callbacks that end a send path) and
 **NTF-1 + NTF-2 + CLK-4** (channel rules that choose per audience without ever outranking consent, an
 unanswered reminder rung reaching somebody new, and the three things that can honestly be measured about
-a location reading).
+a location reading), and on 2026-10-04 the clock family's last capture plus the outliers behind it:
+**CLK-1** (the photo at the ends of a tour, its `biometric` rung, and its single-use and staleness rules),
+**the EXIF strip** on every stored image (found by that landing, fail-closed, container preserved),
+**the SNS confirmation click** (the last open end of NTF-4, behind a host allow-list rather than automatic),
+and **migration 0056** giving `core_dispositionrequest` the tenant guard every other tenant-linked table
+already had — 54 triggers on a real MySQL 8.4.
 
 ## 13. Document signing and onboarding packets
 

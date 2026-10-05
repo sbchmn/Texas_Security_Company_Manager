@@ -42,6 +42,9 @@ urlpatterns = [
     path("settings/messaging/rules/", views.messaging_rule_save, name="messaging_rule_add"),
     path("settings/messaging/rules/<uuid:rule_id>/", views.messaging_rule_save, name="messaging_rule_edit"),
     path("settings/messaging/rules/<uuid:rule_id>/remove/", views.messaging_rule_remove, name="messaging_rule_remove"),
+    # NTF-4's one operator-performed step: an SNS subscription stays unpublished until somebody clicks
+    # its confirmation, because the address to fetch arrives inside an unauthenticated body.
+    path("settings/messaging/subscriptions/<uuid:event_id>/confirm/", views.messaging_confirm_subscription, name="messaging_confirm_subscription"),
     path("webhooks/<str:provider>/<str:token>/", views.provider_callback, name="provider_callback"),
     path("time/review/",views.time_review,name="time_review"),path("time/punches/<uuid:punch_id>/review/",views.punch_review,name="punch_review"),path("time/punches/<uuid:punch_id>/correction/",views.adjustment_request,name="adjustment_request"),path("time/adjustments/<uuid:adjustment_id>/review/",views.adjustment_review,name="adjustment_review"),
     path("payroll/",views.payroll,name="payroll"),path("payroll/codes/",views.pay_codes,name="pay_codes"),path("payroll/codes/new/",views.pay_code_create,name="pay_code_create"),path("payroll/codes/<int:code_id>/edit/",views.pay_code_edit,name="pay_code_edit"),path("payroll/codes/<int:code_id>/remove/",views.pay_code_remove,name="pay_code_remove"),path("payroll/<uuid:run_id>/approve/",views.payroll_approve,name="payroll_approve"),path("payroll/<uuid:run_id>/reopen/",views.payroll_reopen,name="payroll_reopen"),path("payroll/<uuid:run_id>/lock/",views.payroll_segment_lock,name="payroll_segment_lock"),path("payroll/<uuid:run_id>/export/",views.payroll_run_export,name="payroll_run_export"),

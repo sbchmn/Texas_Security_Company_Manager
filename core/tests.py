@@ -9455,10 +9455,38 @@ class ClockSelfieTest(TestCase):
             status=Shift.Status.PUBLISHED)
         self.policy = TimePolicy.objects.create(organization=self.org, require_selfie=True)
 
+    def jpeg_bytes(self, geotag=False):
+        """A JPEG a decoder will actually read, optionally carrying a phone's diary.
+
+        Built with Pillow instead of a byte literal because the upload path re-encodes images to clear
+        their embedded location, and a magic-correct blob that no decoder can read exercises the
+        refusal — which is a different rule from the one the photo tests are about.
+        """
+        from fractions import Fraction
+        from io import BytesIO
+        from PIL import Image
+        image = Image.new("RGB", (48, 32), (198, 172, 140))
+        if not geotag:
+            output = BytesIO()
+            image.save(output, format="JPEG")
+            return output.getvalue()
+        exif = image.getexif()
+        exif[0x010F] = "PhoneMaker"                     # Make
+        exif[0x0110] = "GuardModel 12"                  # Model
+        exif[0x0132] = "2026:10:04 06:58:12"            # DateTime
+        gps = exif.get_ifd(0x8825)
+        gps[1] = "N"                                    # GPSLatitudeRef
+        gps[2] = (Fraction(32), Fraction(47), Fraction(8))
+        gps[3] = "W"                                    # GPSLongitudeRef
+        gps[4] = (Fraction(96), Fraction(48), Fraction(41))
+        output = BytesIO()
+        image.save(output, format="JPEG", exif=exif.tobytes())
+        return output.getvalue()
+
     def frame(self, person=None, name="clock-selfie.jpg", body=None):
         # Real JPEG magic, because the validator keys on the bytes and not the name or the declared
         # type — a test that faked either would be exercising a rule the upload path does not have.
-        payload = body if body is not None else b"\xff\xd8\xff\xe0" + b"\x00" * 2048 + b"\xff\xd9"
+        payload = body if body is not None else self.jpeg_bytes()
         return self.store(organization=self.org, person=person or self.ana,
             upload=self.jpg(name, payload, content_type="image/jpeg"), actor=self.owner)
 
@@ -9528,7 +9556,7 @@ class ClockSelfieTest(TestCase):
         from .services import store_person_document
         id_scan = DocumentType.objects.create(organization=self.org, name="ID scan", code="id-scan")
         document = store_person_document(organization=self.org, person=self.ana, document_type=id_scan,
-            upload=self.jpg("scan.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 1024, content_type="image/jpeg"),
+            upload=self.jpg("scan.jpg", self.jpeg_bytes(), content_type="image/jpeg"),
             actor=self.owner)
         with self.assertRaises(ValidationError) as refused:
             self.punch(selfie=document)
@@ -9572,7 +9600,7 @@ class ClockSelfieTest(TestCase):
         foreign = Person.objects.create(organization=elsewhere, first_name="Far", last_name="Away",
             status=Person.Status.ACTIVE)
         document = self.store(organization=elsewhere, person=foreign,
-            upload=self.jpg("clock-selfie.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 2048,
+            upload=self.jpg("clock-selfie.jpg", self.jpeg_bytes(),
                             content_type="image/jpeg"), actor=None)
         with self.assertRaises(ValidationError) as refused:
             _selfie_claim(self.org, {"selfie_document_id": str(document.pk)})
@@ -9608,7 +9636,7 @@ class ClockSelfieTest(TestCase):
         from django.core.exceptions import ValidationError
         first = self.frame()
         second = self.store(organization=self.org, person=self.ana,
-            upload=self.jpg("clock-selfie.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 1024,
+            upload=self.jpg("clock-selfie.jpg", self.jpeg_bytes(),
                             content_type="image/jpeg"), actor=self.owner, replaces=str(first.pk))
         self.assertFalse(PersonDocument.objects.filter(pk=first.pk).exists(),
                          "an unattached face is not evidence and must not age in storage on a "
@@ -9617,7 +9645,7 @@ class ClockSelfieTest(TestCase):
         self.punch(selfie=attached)
         with self.assertRaises(ValidationError) as refused:
             self.store(organization=self.org, person=self.ana,
-                upload=self.jpg("clock-selfie.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 1024,
+                upload=self.jpg("clock-selfie.jpg", self.jpeg_bytes(),
                                 content_type="image/jpeg"), actor=self.owner, replaces=str(attached.pk))
         self.assertIn("already recorded against a punch", str(refused.exception))
         self.assertTrue(PersonDocument.objects.filter(pk=attached.pk).exists())
@@ -9649,7 +9677,7 @@ class ClockSelfieTest(TestCase):
         from django.core.files.uploadedfile import SimpleUploadedFile
         self.client.force_login(self.officer_user)
         response = self.client.post(reverse("clock_selfie_upload"),
-            {"selfie": SimpleUploadedFile("clock-selfie.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 2048,
+            {"selfie": SimpleUploadedFile("clock-selfie.jpg", self.jpeg_bytes(),
                                           content_type="image/jpeg")})
         self.assertEqual(201, response.status_code)
         document = PersonDocument.objects.get(pk=response.json()["document_id"])
@@ -9685,3 +9713,445 @@ class ClockSelfieTest(TestCase):
         # prints as "this level changed that" — a field missing there is a change the page cannot show.
         self.assertIn("require_selfie", TimePolicyOverride(
             organization=self.org, require_selfie=True).overridden_fields())
+
+
+class DocumentMetadataStripTest(TestCase):
+    """Every image that reaches storage loses the camera's diary, and the record says so.
+
+    The hole was structural, not accidental: only the logo path re-encoded, so a licence or a diploma
+    photographed at a kitchen table carried its GPS coordinates into the personnel file, into the
+    export ZIP, and into the hands of everyone the `standard` sensitivity rung admits — a list that
+    includes **auditor**, a role the ladder's own text describes as often an outside accountant.
+    Nobody ever decided to disclose that location; the bytes simply arrived with it.
+
+    These tests assert on what comes **back out of storage** rather than on what the service returned,
+    because the storage copy is what an export reads. Each control case keeps the assertion able to
+    fail: a test that never proves the submitted file *had* a geotag passes on a build that strips
+    nothing.
+    """
+
+    def setUp(self):
+        import tempfile
+        from django.contrib.auth import get_user_model
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.test import override_settings
+        from .services import store_person_document
+        User = get_user_model()
+        self.files = SimpleUploadedFile
+        self.store_person_document = store_person_document
+        self.owner = User.objects.create_user(username="strip-owner@example.com", password="pw-strip")
+        self.org = Organization.objects.create(legal_name="Strips LLC", display_name="Strips",
+            slug="strips-media")
+        Membership.objects.create(user=self.owner, organization=self.org, role=Membership.Role.OWNER)
+        self.ana = Person.objects.create(organization=self.org, first_name="Ana", last_name="Rios",
+            status=Person.Status.ACTIVE)
+        self.licence = DocumentType.objects.create(organization=self.org, name="Driver licence",
+            code="dl-strip")
+        media = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        override = override_settings(MEDIA_ROOT=media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+        self.addCleanup(media.cleanup)
+
+    def photo(self, *, geotag=False, orientation=None, size=(48, 32), name="licence.jpg"):
+        """A real JPEG, optionally carrying what a phone writes into one."""
+        from fractions import Fraction
+        from io import BytesIO
+        from PIL import Image
+        image = Image.new("RGB", size, (196, 178, 150))
+        exif = image.getexif()
+        if geotag or orientation:
+            if geotag:
+                exif[0x010F] = "PhoneMaker"
+                exif[0x0110] = "GuardModel 12"
+                exif[0x0132] = "2026:10:04 06:58:12"
+                gps = exif.get_ifd(0x8825)
+                gps[1] = "N"
+                gps[2] = (Fraction(32), Fraction(47), Fraction(8))
+                gps[3] = "W"
+                gps[4] = (Fraction(96), Fraction(48), Fraction(41))
+            if orientation:
+                exif[0x0112] = orientation
+        output = BytesIO()
+        image.save(output, format="JPEG", exif=exif.tobytes())
+        return self.files(name, output.getvalue(), content_type="image/jpeg")
+
+    def store(self, upload, document_type=None):
+        return self.store_person_document(organization=self.org, person=self.ana,
+            document_type=document_type or self.licence, upload=upload, actor=self.owner)
+
+    def kept_bytes(self, document):
+        with document.file.open("rb") as handle:
+            return handle.read()
+
+    def test_a_photographed_licence_comes_back_without_its_coordinates(self):
+        from io import BytesIO
+        from PIL import Image
+        upload = self.photo(geotag=True)
+        submitted = upload.read()
+        upload.seek(0)
+        # The control first: if the submitted file did not actually carry the location, every
+        # assertion below would pass on a build that strips nothing.
+        before = Image.open(BytesIO(submitted)).getexif()
+        self.assertTrue(dict(before.get_ifd(0x8825)), "the fixture has no geotag to test with")
+        self.assertEqual("PhoneMaker", before.get(0x010F))
+        document = self.store(upload)
+        after = Image.open(BytesIO(self.kept_bytes(document))).getexif()
+        self.assertEqual({}, dict(after.get_ifd(0x8825)),
+                         "a stored personnel photo still carries where it was taken")
+        self.assertIsNone(after.get(0x010F), "the device that took it is not evidence about the licence")
+        self.assertIsNone(after.get(0x0132), "the camera's own clock is not the record's timestamp")
+
+    def test_the_row_describes_the_bytes_that_were_kept_not_the_ones_that_were_sent(self):
+        import hashlib
+        upload = self.photo(geotag=True)
+        submitted = upload.read()
+        upload.seek(0)
+        document = self.store(upload)
+        kept = self.kept_bytes(document)
+        self.assertNotEqual(submitted, kept, "a geotagged file was stored untouched")
+        self.assertEqual(hashlib.sha256(kept).hexdigest(), document.sha256,
+                         "the digest an auditor re-derives must be the digest of what is on disk")
+        self.assertEqual(len(kept), document.size)
+
+    def test_the_container_survives_so_the_preview_still_trusts_its_own_allowlist(self):
+        from .services import PREVIEW_MAGIC
+        document = self.store(self.photo(geotag=True, name="diploma.jpeg"))
+        kept = self.kept_bytes(document)
+        self.assertEqual("image/jpeg", document.verified_type)
+        self.assertTrue(any(kept.startswith(sign) for sign in PREVIEW_MAGIC["image/jpeg"]),
+                        "re-encoding produced bytes that are no longer what the row claims they are")
+
+    def test_a_pdf_is_stored_byte_for_byte_because_the_bytes_are_the_record(self):
+        payload = b"%PDF-1.4\n% an inspection reads exactly this\ntrailer\n<<>>\n%%EOF\n"
+        document = self.store(self.files("handbook.pdf", payload, content_type="application/pdf"))
+        self.assertEqual(payload, self.kept_bytes(document),
+                         "the strip re-wrote a document whose bytes are themselves the evidence")
+        self.assertEqual("application/pdf", document.verified_type)
+
+    def test_an_image_no_decoder_can_read_is_refused_and_keeps_no_row(self):
+        from django.core.exceptions import ValidationError
+        magic_only = self.files("odd.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 2048 + b"\xff\xd9",
+                                content_type="image/jpeg")
+        with self.assertRaises(ValidationError) as refused:
+            self.store(magic_only)
+        self.assertIn("could not be re-encoded", " ".join(refused.exception.messages))
+        self.assertEqual(0, PersonDocument.objects.filter(organization=self.org).count(),
+                         "an image whose metadata cannot be proved gone must not be filed anyway")
+
+    def test_the_orientation_is_baked_into_the_pixels_instead_of_carried_as_a_tag(self):
+        from io import BytesIO
+        from PIL import Image
+        document = self.store(self.photo(orientation=6, name="rotated.jpg"))
+        stored = Image.open(BytesIO(self.kept_bytes(document)))
+        self.assertEqual((32, 48), stored.size, "a sideways photo stayed sideways: the tag was dropped "
+                                                "without the pixels being turned")
+        self.assertIsNone(stored.getexif().get(0x0112))
+
+    def test_the_audit_row_says_whether_the_file_arrived_without_its_diary(self):
+        photo = self.store(self.photo(geotag=True))
+        pdf = self.store(self.files("notice.pdf", b"%PDF-1.4\nnotice", content_type="application/pdf"))
+        for document, stripped in ((photo, True), (pdf, False)):
+            event = AuditEvent.objects.get(target_type="person_document", target_id=str(document.pk),
+                action="document.uploaded")
+            self.assertEqual(stripped, event.metadata["metadata_stripped"],
+                f"{document.verified_type} is reported as the wrong kind of artefact")
+
+    def test_a_clock_frame_is_stripped_by_the_same_control_as_a_licence(self):
+        """One rule, one place. A selfie reaches storage through the same door, so it must leave with
+        the same diary missing — and the frame's time and place are already in the punch."""
+        from io import BytesIO
+        from PIL import Image
+        from .services import store_clock_selfie
+        document = store_clock_selfie(organization=self.org, person=self.ana,
+            upload=self.photo(geotag=True, name="clock-selfie.jpg"), actor=self.owner)
+        self.assertEqual({}, dict(Image.open(BytesIO(self.kept_bytes(document))).getexif()
+                                  .get_ifd(0x8825)))
+
+
+class SnsSubscriptionConfirmTest(TestCase):
+    """The one outbound URL fetch in the product, and everything standing between it and a socket.
+
+    An SNS subscription stays unpublished until its `SubscribeURL` is confirmed, and that address
+    arrives **inside a request body an unauthenticated caller wrote**. So confirming has to be
+    possible — otherwise the SNS deployments this product documents can never receive a bounce — and
+    it has to be a named human click on an address that first survives an allow-list. The hostile set
+    below is why the rule reads the parsed host rather than the string: every one of those contains
+    `sns.us-east-1.amazonaws.com` somewhere except where it is the authority.
+    """
+
+    GOOD = "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn=a&Token=sekret"
+    OK_BODY = ('<ConfirmSubscriptionResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/">'
+               '<ConfirmSubscriptionResult><SubscriptionArn>arn:aws:sns:us-east-1:1:tscm</SubscriptionArn>'
+               '</ConfirmSubscriptionResult></ConfirmSubscriptionResponse>')
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.owner = User.objects.create_user(username="sns-owner@example.com", password="pw-sns")
+        self.auditor = User.objects.create_user(username="sns-auditor@example.com", password="pw-sns-a")
+        self.org = Organization.objects.create(legal_name="Signal LLC", display_name="Signal",
+            slug="signal-sns")
+        Membership.objects.create(user=self.owner, organization=self.org, role=Membership.Role.OWNER)
+        Membership.objects.create(user=self.auditor, organization=self.org, role=Membership.Role.AUDITOR)
+
+    def pending(self, url=None, *, provider="sns", applied=False):
+        url = self.GOOD if url is None else url
+        return DeliveryEvent.objects.create(organization=self.org, provider=provider,
+            channel=MessageConsent.Channel.EMAIL, destination="tscm-handbook",
+            kind=DeliveryEvent.Kind.STATUS,
+            detail="Subscription confirmation pending an owner's click", applied=applied,
+            raw={"subscribe_url_host": url.split("/")[2] if "://" in url else "",
+                 "subscribe_url": url[:300], "topic": "arn:aws:sns:us-east-1:1:tscm"})
+
+    def confirm(self, event, *, fetch=None):
+        from .services import confirm_sns_subscription
+        return confirm_sns_subscription(self.org, event, self.owner,
+            fetch=fetch or (lambda url: (200, self.OK_BODY)))
+
+    def test_amazons_own_endpoint_is_the_shape_that_is_allowed(self):
+        from .services import sns_confirmation_target
+        self.assertEqual(self.GOOD, sns_confirmation_target(self.GOOD))
+
+    def test_the_metadata_address_and_every_trick_that_wears_its_clothes_is_refused_unopened(self):
+        from django.core.exceptions import ValidationError
+        from .services import confirm_sns_subscription
+        opened = []
+
+        def spy(url):
+            opened.append(url)
+            return 200, self.OK_BODY
+
+        for hostile in (
+            "https://169.254.169.254/latest/meta-data/iam/",
+            "http://169.254.169.254/latest/meta-data/",
+            "https://metadata.google.internal/",
+            "https://evil.example/?path=/sns.us-east-1.amazonaws.com",
+            "https://sns.us-east-1.amazonaws.com@evil.example/",
+            "https://sns.us-east-1.amazonaws.com.evil.example/",
+            "https://sns.us-east-1.internal/",
+            "https://sns.us-east-1.amazonaws.com:8443/?Action=ConfirmSubscription&Token=x",
+            "https://sns.us-east-1.amazonaws.com/confirm?Action=ConfirmSubscription&Token=x",
+            "https://sns.us-east-1.amazonaws.com/?Action=DeleteTopic&Token=x",
+            ""):
+            with self.subTest(url=hostile):
+                with self.assertRaises(ValidationError):
+                    confirm_sns_subscription(self.org, self.pending(hostile), self.owner, fetch=spy)
+        self.assertEqual([], opened, "a refused address still reached the socket")
+
+    def test_a_confirmation_click_is_attributed_and_keeps_its_token_out_of_the_record(self):
+        event = self.pending()
+        self.confirm(event)
+        event.refresh_from_db()
+        self.assertTrue(event.applied)
+        self.assertIn("arn:aws:sns", event.raw["subscription_arn"])
+        audit = AuditEvent.objects.get(target_type="delivery_event", target_id=str(event.pk),
+            action="message.subscription_confirmed")
+        self.assertEqual(self.owner.pk, audit.actor.pk)
+        self.assertNotIn("sekret", json.dumps(audit.metadata),
+                         "the token alone is enough to confirm this subscription, so it is not history")
+        self.assertEqual("sns.us-east-1.amazonaws.com", audit.metadata["host"])
+
+    def test_a_redirect_is_not_read_as_confirmation(self):
+        """The fetch does not follow redirects, and the proof that matters is that a 3xx is a *no*."""
+        from django.core.exceptions import ValidationError
+        event = self.pending()
+        with self.assertRaises(ValidationError):
+            self.confirm(event, fetch=lambda url: (302, "Location: http://169.254.169.254/"))
+        event.refresh_from_db()
+        self.assertFalse(event.applied)
+        self.assertTrue(AuditEvent.objects.filter(action="message.subscription_confirm_failed",
+                                                  target_id=str(event.pk)).exists())
+
+    def test_only_a_pending_sns_event_can_be_confirmed(self):
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError):
+            self.confirm(self.pending(provider="twilio"))
+        with self.assertRaises(ValidationError):
+            self.confirm(self.pending(applied=True))
+        with self.assertRaises(ValidationError):
+            self.confirm(self.pending(""))
+        event = self.pending()
+        self.confirm(event)
+        with self.assertRaises(ValidationError):
+            self.confirm(event)
+
+    def test_a_fetch_that_cannot_reach_amazon_reports_the_failure_not_the_subscription(self):
+        from django.core.exceptions import ValidationError
+
+        def broken(url):
+            raise OSError("no route")
+
+        event = self.pending()
+        with self.assertRaises(ValidationError):
+            self.confirm(event, fetch=broken)
+        event.refresh_from_db()
+        self.assertFalse(event.applied)
+        self.assertIn("Could not reach", event.detail)
+
+    def test_the_page_lists_the_pending_topic_without_printing_the_token(self):
+        event = self.pending()
+        self.client.force_login(self.owner)
+        answer = self.client.get(reverse("messaging_settings"))
+        self.assertEqual(200, answer.status_code)
+        self.assertContains(answer, "tscm-handbook")
+        self.assertContains(answer, "sns.us-east-1.amazonaws.com")
+        # The address carries the confirmation token, so the page names the host and never the link.
+        self.assertNotIn("sekret", answer.content.decode())
+        self.assertContains(answer, reverse("messaging_confirm_subscription", args=[event.pk]))
+
+    def test_a_failed_click_through_the_page_still_leaves_its_record(self):
+        """The transaction that should not be there.
+
+        A view wrapped in `atomic` rolls the attempt's own row back while still carrying the refusal
+        message, so an operator chasing "why did the bounce never arrive" is left with no evidence that
+        anybody ever tried. This goes through the route rather than the service because it is the
+        *route's* transaction that caused it. Only the socket is stood in for — nothing about the
+        decision under test is faked, and the suite must not open a connection to Amazon.
+        """
+        from unittest import mock
+        event = self.pending()
+        self.client.force_login(self.owner)
+        with mock.patch("core.services._sns_fetch", return_value=(302, "")) as fetched:
+            answer = self.client.post(reverse("messaging_confirm_subscription", args=[event.pk]))
+        self.assertEqual(1, fetched.call_count)
+        self.assertEqual(302, answer.status_code)
+        event.refresh_from_db()
+        self.assertFalse(event.applied)
+        self.assertIn("302", event.detail)
+        self.assertTrue(AuditEvent.objects.filter(action="message.subscription_confirm_failed",
+                                                  target_id=str(event.pk)).exists(),
+                        "a click that failed left no trace, which is the failure this path had once")
+
+    def test_the_confirmation_is_a_post_and_a_reader_cannot_click_it(self):
+        event = self.pending()
+        self.client.force_login(self.auditor)
+        self.assertEqual(403, self.client.post(reverse("messaging_confirm_subscription",
+            args=[event.pk])).status_code)
+        event.refresh_from_db()
+        self.assertFalse(event.applied)
+        self.client.force_login(self.owner)
+        self.assertEqual(405, self.client.get(reverse("messaging_confirm_subscription",
+            args=[event.pk])).status_code)
+
+    def test_another_tenant_s_pending_event_is_not_found_rather_than_confirmed(self):
+        elsewhere = Organization.objects.create(legal_name="Elsewhere LLC", display_name="Elsewhere",
+            slug="elsewhere-sns")
+        foreign = DeliveryEvent.objects.create(organization=elsewhere, provider="sns",
+            channel=MessageConsent.Channel.EMAIL, destination="their-topic",
+            kind=DeliveryEvent.Kind.STATUS, raw={"subscribe_url": self.GOOD})
+        self.client.force_login(self.owner)
+        self.assertEqual(404, self.client.post(reverse("messaging_confirm_subscription",
+            args=[foreign.pk])).status_code)
+        foreign.refresh_from_db()
+        self.assertFalse(foreign.applied)
+
+
+class DispositionTenantGuardTest(TestCase):
+    """The last tenant-linked table without a database guard, policed where the decision is kept.
+
+    `views.disposition_request` resolves the document through the actor's own organization, so the
+    application cannot create a disposition that points at another tenant's file — which is why this
+    surfaced as a disclosed gap rather than an incident. The guard exists anyway because a disposition
+    row is the paper trail for *destroying* a personnel record, and this schema's posture is that a
+    reference that consequential does not rest on application code alone.
+
+    MySQL-only, like every trigger assertion in this suite: sqlite never runs this SQL, so the CI
+    `mysql` leg is what executes these. The same-tenant case is the control that keeps a guard which
+    refuses everything from reading like a guard that works.
+    """
+
+    def setUp(self):
+        import tempfile
+        from django.contrib.auth import get_user_model
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.test import override_settings
+        from .services import store_person_document
+        User = get_user_model()
+        self.owner = User.objects.create_user(username="guard-owner@example.com", password="pw-guard")
+        self.org = Organization.objects.create(legal_name="Guarded LLC", display_name="Guarded",
+            slug="guarded-dispo")
+        self.other = Organization.objects.create(legal_name="Unguarded LLC", display_name="Unguarded",
+            slug="unguarded-dispo")
+        Membership.objects.create(user=self.owner, organization=self.org, role=Membership.Role.OWNER)
+        Membership.objects.create(user=self.owner, organization=self.other, role=Membership.Role.OWNER)
+        self.kind = DocumentType.objects.create(organization=self.org, name="Record", code="guard-rec")
+        self.their_kind = DocumentType.objects.create(organization=self.other, name="Their record",
+            code="guard-theirs")
+        media = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        override = override_settings(MEDIA_ROOT=media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+        self.addCleanup(media.cleanup)
+        # Rows made through the service so the audit chain under them is real, and a refusal here is
+        # about this table's guard rather than about a malformed row.
+        self.mine = store_person_document(organization=self.org, person=None, document_type=self.kind,
+            upload=SimpleUploadedFile("mine.pdf", b"%PDF-1.4\nmine", content_type="application/pdf"),
+            actor=self.owner)
+        self.theirs = store_person_document(organization=self.other, person=None,
+            document_type=self.their_kind,
+            upload=SimpleUploadedFile("theirs.pdf", b"%PDF-1.4\ntheirs",
+                                      content_type="application/pdf"), actor=self.owner)
+
+    def require_mysql(self):
+        from django.db import connection
+        if connection.vendor != "mysql":
+            self.skipTest("the tenant guards are MySQL triggers")
+
+    def insert(self, organization, document):
+        """Raw SQL, with `uuid.hex` for the UUID columns and `str()` for the user.
+
+        The `char(32)` trap this suite has met twice: a model instance interpolated into the WHERE of
+        the guard's own subselect matches nothing, so the BEFORE trigger never fires and the probe
+        reports an absent guard rather than a broken probe. `requested_by_id` is the opposite case —
+        the user's pk is a plain integer, so `.hex` on it is an `AttributeError`, not a database answer.
+        """
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO core_dispositionrequest (id,organization_id,document_id,action,reason,"
+                "requested_by_id,approved_by_id,status,created_at,executed_at,restored_by_id,restored_at,"
+                "restore_reason) VALUES (%s,%s,%s,'archive','Retention window closed',%s,NULL,'pending',"
+                "NOW(6),NULL,NULL,NULL,'')",
+                [uuid.uuid4().hex, organization.pk.hex, document.pk.hex, str(self.owner.pk)])
+
+    def test_both_guards_are_installed_on_the_disposition_table(self):
+        from django.db import connection
+        self.require_mysql()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT TRIGGER_NAME FROM information_schema.triggers "
+                           "WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='core_dispositionrequest'")
+            names = sorted(row[0] for row in cursor.fetchall())
+        self.assertEqual(["core_disposition_tenant_insert", "core_disposition_tenant_update"], names)
+
+    def test_the_database_refuses_a_destruction_order_borrowing_another_tenant_s_file(self):
+        from django.db import connection, transaction
+        self.require_mysql()
+        with self.assertRaises(Exception) as refused:
+            with transaction.atomic():
+                self.insert(self.org, self.theirs)
+        self.assertIn("cross-tenant disposition reference", str(refused.exception),
+                      "the refusal did not come from this table's own guard")
+        self.assertEqual(0, DispositionRequest.objects.filter(organization=self.org).count(),
+                         "the guard is a BEFORE trigger, so nothing should have landed")
+
+    def test_the_same_tenant_still_files_a_disposition(self):
+        from django.db import connection
+        self.require_mysql()
+        self.insert(self.org, self.mine)
+        self.assertEqual(1, DispositionRequest.objects.filter(organization=self.org,
+            document=self.mine).count())
+
+    def test_an_update_that_walks_a_request_across_the_tenant_line_is_refused(self):
+        from django.db import connection, transaction
+        self.require_mysql()
+        self.insert(self.org, self.mine)
+        request_row = DispositionRequest.objects.get(organization=self.org)
+        with self.assertRaises(Exception) as refused:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute("UPDATE core_dispositionrequest SET document_id=%s WHERE id=%s",
+                        [self.theirs.pk.hex, request_row.pk.hex])
+        self.assertIn("cross-tenant disposition reference", str(refused.exception))
+        request_row.refresh_from_db()
+        self.assertEqual(self.mine.pk, request_row.document_id)

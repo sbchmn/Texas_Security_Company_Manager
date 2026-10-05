@@ -12,7 +12,13 @@
 {% else %}<p class="muted">No address has been issued yet — it is created the first time a consent decision or a callback needs it, or press the button below.</p>
 <form method="post" action="{% url 'messaging_rotate_token' %}">{% csrf_token %}<button class="button button-small">Create the callback address</button></form>{% endif %}
 <p class="helptext"><strong>What proves a callback came from the provider.</strong> Twilio signs its posts, and when <code>TWILIO_AUTH_TOKEN</code> is configured an unsigned or wrongly signed post is refused outright. Amazon SNS and Mailjet document nothing equivalent on this path, so a post from them is accepted on the strength of the address and TLS, and the retained event is marked <em>unverified</em>. That difference is recorded per event rather than averaged into a general claim about the endpoint.</p>
-<p class="helptext">An SNS subscription also has to be confirmed before AWS will publish anything to it. The confirmation request goes to a URL inside the payload, so this build does not follow it automatically — a pending one is listed below and needs a human who can see the topic it came from.</p>
+<p class="helptext">An SNS subscription also has to be confirmed before AWS will publish anything to it. The confirmation request goes to a URL inside the payload, so this build never follows it on its own — the address arrives in a body that an unauthenticated caller wrote, and fetching whatever such a body names is a way to make this server open its own cloud credentials. A pending one is listed below for a person who can see the topic it came from.</p>
+{% if pending_subscriptions %}<h3>Waiting to be confirmed ({{ pending_subscriptions|length }})</h3>
+{% for item in pending_subscriptions %}<div class="person-row"><div><strong>{{ item.destination }}</strong><small>from <code>{{ item.raw.subscribe_url_host }}</code> · {{ item.created_at|date:'M j, Y, g:i A' }}{% if item.raw.subscription_arn %} · {{ item.raw.subscription_arn }}{% endif %}</small></div>
+<form method="post" action="{% url 'messaging_confirm_subscription' item.pk %}" class="inline-form">{% csrf_token %}<button class="button button-small">Confirm with Amazon</button></form></div>
+{% endfor %}
+<p class="muted">Confirming sends one request to the host named above and nowhere else — the address is checked against Amazon's own naming first, over https, with no redirects followed. The confirmation token inside the address is never printed on this page, because holding it is enough to confirm the subscription.</p>
+{% else %}<p class="muted">No subscription is waiting. If you have just pointed an SNS topic at this address, publish a test message and the confirmation request appears here.</p>{% endif %}
 </section>
 
 <section class="panel">

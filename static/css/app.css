@@ -124,3 +124,12 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
 .pill.blocked{background:#fee8e8;color:#a32727}
 .pill.granted{background:#dff8ed;color:#13734f}
 .pill.revoked{background:#edf1f5;color:#65758b}
+/* CLK-1. The capture panel is deliberately not a modal: an officer holding a phone at arm's length in
+   a doorway should see the frame they are about to send on the same page they clock from, with nothing
+   to dismiss. Mirrored to match what the front camera shows them, so the thumbnail is not a surprise
+   flip of the face they just framed. */
+.selfie-capture{margin-top:14px;padding:14px;border:1px dashed #c3ccd8;border-radius:10px;background:#f7f9fc}
+.selfie-capture video,.selfie-capture img{display:block;width:100%;max-width:280px;aspect-ratio:4/3;object-fit:cover;border-radius:8px;background:#0b1220;margin-bottom:10px;transform:scaleX(-1)}
+.selfie-capture img{transform:none;background:#eef1f6}
+.selfie-capture .clock-actions{flex-wrap:wrap}
+.selfie-capture[hidden]{display:none}

@@ -49,6 +49,12 @@ infrastructure is reviewed.
   must be approved by someone other than its requester before it changes any export.
 - Brand colors, slugs, image type, and a 5 MiB image limit are validated; logos are
   re-encoded to PNG with EXIF stripped.
+- Personnel and clock-photo images are re-encoded before they are scanned, hashed, or stored, so the
+  geotag, device make/model, and camera timestamp a phone writes into a photograph do not survive into
+  the record — and therefore not into the disclosure ladder, the compliance queue, or the personnel
+  export ZIP. The container is preserved (`image/jpeg` in, `image/jpeg` out) so the preview allowlist
+  keeps telling the truth about the bytes, and an image no decoder can read is **refused** rather than
+  stored with its metadata unproven. A PDF's XMP block is not cleared: its bytes are the record.
 - Uploads are extension-allowlisted, signature-checked, size-capped, malware-scanned
   (ClamAV in production, EICAR-only in basic mode), stored under generated private keys, and
   downloaded only through an authorized view with `attachment`, `nosniff`, and
@@ -72,8 +78,8 @@ infrastructure is reviewed.
 | Authentication failures | Local authentication, Google/Entra OIDC with explicit account linking, TOTP MFA with recovery codes, throttled tenant **and** admin login paths, proxy-aware client identification | Add secure recovery, suspicious-login alerting, session/device revocation UI, and reauthentication for privileged actions |
 | Integrity failures | Audit mutation is blocked in application code, hash-chained per tenant, and blocked by MySQL triggers that the CI MySQL leg asserts | Add an external immutable sink, signed/verified builds, and protected CI branches |
 | Logging/monitoring failures | A basic business audit stream exists | Add structured security logs, alerting, correlation IDs, redaction, operator access audit, retention, and incident response |
-| SSRF | No URL-fetching feature is implemented; domain verification performs DNS TXT lookups only | Apply URL allowlists, DNS/IP validation, redirect limits, egress restrictions, and metadata-address blocking before webhooks/previews |
-| File upload attacks | Extension allowlist, magic-byte check, size caps, generated storage keys, ClamAV scanning (fail-closed when the scanner is unreachable), PNG re-encode with EXIF strip, authorized attachment downloads with `nosniff` and `private, no-store` | Implement asynchronous quarantine, encryption at rest, version lineage, and isolated storage/origins for active content |
+| SSRF | One outbound fetch exists: an operator's click confirming an Amazon SNS subscription. The stored address must be `https`, match `sns.<region>.amazonaws.com` as its **parsed host**, carry no port but 443, no path, and name `Action=ConfirmSubscription` — checked before the socket is opened, with redirects not followed and the reply read as text only. Domain verification still performs DNS TXT lookups only, and provider callbacks are inbound-only | The allowlist is a host pattern, so a compromised DNS answer for a genuine `sns.*` name could still walk the request: add post-resolution IP-range validation (refuse link-local, metadata, and reserved addresses), egress restrictions, and a response-size ceiling. The China partition is deliberately absent and refuses rather than fetches |
+| File upload attacks | Extension allowlist, magic-byte check, size caps, generated storage keys, ClamAV scanning (fail-closed when the scanner is unreachable), JPEG/PNG re-encode that drops EXIF/XMP-derived metadata before the stored bytes are hashed, authorized attachment downloads with `nosniff` and `private, no-store` | Implement asynchronous quarantine, encryption at rest, version lineage, and isolated storage/origins for active content; clear PDF XMP only if a re-write that preserves the rendered page can be proven safe |
 | Host-header/custom-domain attacks | The project's own `VerifiedHostMiddleware` rejects unknown hosts before any redirect or tenant resolution, backed by DNS-verified custom hostnames; `ALLOWED_HOSTS` is intentionally `["*"]` because that middleware is the gate | Cache the hostname lookup, and add regression tests for every response class and for pending/failed domain states |
 | Clickjacking | `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'`, also emitted by Caddy at the edge | Add regression tests for every response class and document any future embedding exception |
 

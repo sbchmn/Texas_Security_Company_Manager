@@ -3576,7 +3576,7 @@ def text_alerts(request):
 # file, so the channel-rule views read as one section: what they touch is exactly what they import.
 from .forms import ChannelRuleForm
 from .models import ChannelRule
-from .services import audience_reach
+from .services import audience_reach, confirm_sns_subscription
 
 @membership_required(*PRIVILEGED)
 def messaging_settings(request):
@@ -3613,6 +3613,12 @@ def messaging_settings(request):
         "editing": editing,
         "rule_form": ChannelRuleForm(instance=editing) if editing else ChannelRuleForm(),
         "audience_choices": ChannelRule.Audience.choices,
+        # Subscriptions AWS is still waiting to confirm. Bounded in Python rather than with a
+        # `raw__has_key` lookup because the JSON path differs across the two databases this suite runs
+        # on, and twenty rows is more than one company can plausibly have pending.
+        "pending_subscriptions": [row for row in organization.delivery_events.filter(
+            provider="sns", applied=False, kind=DeliveryEvent.Kind.STATUS).order_by("-created_at")[:20]
+            if (row.raw or {}).get("subscribe_url")],
         "suppressions": organization.suppressions.filter(cleared_at__isnull=True).order_by("-since")[:100],
         "events": organization.delivery_events.select_related("notification").order_by("-created_at")[:100],
         "consents": organization.message_consents.select_related("person").order_by("-decided_at")[:100],
@@ -3685,6 +3691,33 @@ def messaging_rotate_token(request):
     rotate_webhook_token(organization, request.user)
     messages.success(request, "New callback address issued. Any provider still posting to the old one "
                               "will get a not-found, so update them before leaving the page.")
+    return redirect("messaging_settings")
+
+@require_POST
+@membership_required(*PRIVILEGED)
+def messaging_confirm_subscription(request, event_id):
+    """Confirm one pending SNS subscription that arrived on this company's own callback address.
+
+    The row is resolved through `organization.delivery_events`, so an id belonging to another tenant is
+    a 404 rather than somebody else's confirmation click, and the allow-list check happens inside the
+    service before any socket is opened. Nothing here prints the address: it carries a token.
+
+    No `transaction.atomic` on this view, on purpose. The refusal path in the service *wants* its
+    record of the attempt to stand, and a view-level transaction would erase it the moment the
+    `ValidationError` was caught below — a failed click that leaves no trace is the one outcome an
+    operator chasing a missing bounce must not be left with.
+    """
+    organization = request.organization
+    event = organization.delivery_events.filter(pk=event_id).first()
+    if event is None:
+        raise Http404
+    try:
+        confirm_sns_subscription(organization, event, request.user)
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+        return redirect("messaging_settings")
+    messages.success(request, "Amazon confirmed the subscription. Email events for that topic will now "
+                              "arrive on the callback address.")
     return redirect("messaging_settings")
 
 # The callback endpoint is device-token-free by design: a provider posts a form or a JSON body with no

@@ -1,9 +1,138 @@
 # Feature implementation status
 
-**Status date:** 2026-10-03 (text consent and provider callbacks, a shared clock station that knows who
-is standing at it, a retention setting the audit chain can obey, and — same day, later — who hears which
-notice on which channel, an unanswered reminder rung reaching somebody new, and a location reading that
-cannot be true)
+**Status date:** 2026-10-04 (the clock photo the owner ruled and got built the same day, and the four
+outliers that closed behind it: a geotag no longer survives an upload, an SNS subscription has a button,
+the last unguarded tenant table does not stay unguarded, and the "missing" list stops claiming a
+shipped feature)
+
+## A photo at the ends of a tour, and the four outliers behind it (2026-10-04)
+
+**CLK-1, then the metadata strip, the confirmation click, and the disposition guard.** CLK-1 was ruled
+and built on this date — the three rulings are in DD §Sites, geofences, clocks and the item is in
+roadmap §3 — and its own landing surfaced the first outlier: a frame stored through
+`store_person_document` inherits that function's habits, and one of its habits was *store the bytes
+exactly as submitted*. Fine for a PDF, wrong for a phone photograph.
+
+- **CLK-1 is the fourth evidence switch in the resolver.** One boolean on `TimePolicy` plus the same
+  nullable field on `TimePolicyOverride`, so it resolves company → contract → site with its own
+  `policy_source`/`policy_version` stamp like the three before it, and the punch's audit event carries
+  the frame's SHA-256 beside the verdict. Four decisions are the item rather than the camera: a frame
+  is owed at **clock-in and clock-out and not at breaks** (a break is an annotation on a tour, not a
+  punch, so there is nothing to exempt and no setting to hide it behind); **the exemption is a rule, not
+  a loophole** — `selfie_owed()` does not ask when a verified station PIN already answered *who*,
+  because demanding a face on top of stronger evidence is friction that proves nothing; **a frame is
+  single-use and stale in two minutes**, because one photo that can evidence both ends of an eight-hour
+  tour is not evidence about either; and **the offline path refuses the frame rather than accepting a
+  replayed one** — CLK-2's reasoning about offline PINs applied to a face.
+- **There is deliberately no station camera.** The exemption clause decided it: a station punch is by
+  definition PIN-verified, so a camera at the kiosk would be a rule asking for evidence its own
+  exemption already supplies.
+- **The `biometric` rung is a fourth value, not a widened third.** A face photo about you is not sealed
+  from you, but adding dispatcher to `restricted` would have handed every workers'-compensation claim,
+  accommodation file, leave record and screening result to dispatch as a side effect of a ruling about a
+  photograph. `test_widening_the_rung_for_dispatch_did_not_widen_the_claim_files_too` keeps the two
+  decisions apart.
+- **The selfie is a normal record type, so retention needed no new field.** `ensure_clock_selfie_type`
+  seeds `clock_selfie` as a `DocumentType` at 90 days on first need, which puts the configurable window
+  the owner asked for on the compliance settings page that already edits every other type's window and
+  reader list — permanent down to a week, no new screen — and the OWASP path, the magic check, the scan,
+  the digest, the disclosure ladder and the disposition review apply without a second copy.
+- **The geotag that outlived the upload.** Only `process_brand_image` ever re-encoded, so every
+  personnel image upload kept its EXIF: GPS coordinates, device make and model, the camera's own clock.
+  At `standard` sensitivity — the default — that file is readable by **AUDITOR**, a role the ladder's own
+  comment describes as often an outside accountant, and the same bytes travel into `personnel_file_zip`.
+  `SECURITY.md` claimed a PNG re-encode with EXIF strip as a general upload control while only the logo
+  path did it. `store_person_document` now re-encodes JPEG and PNG through that proven pattern **before**
+  the scan, the digest and the store, so what is hashed is what is kept. Three choices in it:
+  - **The container is preserved, not normalised.** A logo becomes a canonical PNG because it is
+    *rendered*; a record has to come back out of storage as the same kind of file it went in as, or
+    `verified_type` — the column the preview allowlist trusts — would be a claim about bytes that no
+    longer match. `image/jpeg` in, `image/jpeg` out, magic re-checked against `PREVIEW_MAGIC` in a test.
+  - **Fail-closed.** If Pillow cannot decode the pixels, the metadata cannot be *proved* gone, and
+    storing the original anyway would file a geotagged photo under a record that says it was stripped.
+    The cost is stated rather than hidden: this also refuses an image a browser could render and Pillow
+    cannot, and it turned every synthetic `b"\xff\xd8\xff\xe0" + zeros` fixture in the selfie suite into
+    a refusal until those eight fixtures were rebuilt as real JPEGs.
+  - **Nothing is resized, and PDFs are left alone.** The legibility of a photographed certificate is part
+    of the evidence, and a PDF's bytes *are* the record an inspection reads. A PDF's XMP block can carry
+    a location and is **not** cleared — a disclosed limit, not a covered case. `Orientation` is the one
+    tag that is *applied* rather than dropped, so a sideways photo is stored upright instead of losing
+    the tag that told readers how to turn it.
+
+
+- **The confirmation button NTF-4 left open.** AWS publishes nothing to an endpoint until the
+  subscription behind its `SubscribeURL` is confirmed, and that address arrives inside an
+  unauthenticated body — so the October slice stored it for a human and shipped no button, leaving every
+  SNS deployment with a callback address and no events. `confirm_sns_subscription` is now the human's
+  click, and `sns_confirmation_target` is the allow-list it must pass first: `https`, host matching
+  `sns.<region>.amazonaws.com`, no port but 443, no path, and a query that names
+  `Action=ConfirmSubscription`. The refusal happens **before the socket** — the test asserts a spy fetch
+  was called zero times across eleven addresses, among them `169.254.169.254`,
+  `https://sns.us-east-1.amazonaws.com@evil.example/`, and the real host wearing somebody else's path or
+  port. The China partition is absent from the pattern on purpose: an install that needs it meets a
+  refusal naming the missing case, which beats a pattern wide enough to mean nothing. The token inside
+  the address is never rendered on the page and never written to the audit event, because holding it is
+  enough to confirm the subscription. A redirect is not a confirmation — the fetch does not follow
+  redirects and a 3xx is recorded as a failure, not retried into something worse.
+- **The last tenant table without a guard.** `core_dispositionrequest` FKs a `PersonDocument` and was
+  the only tenant-linked reference 0012/0018/0019/0025/0055 never policed. The application cannot create
+  the bad state — the view resolves the document through the actor's own organization — which is why it
+  was reported rather than patched mid-slice. It is closed now because a disposition row is the paper
+  trail for *destroying* someone's record, and this schema's posture is that a reference that
+  consequential does not rest on application code. Migration 0056 installs INSERT and UPDATE guards
+  comparing the document's `organization_id`; `document_id` is `NOT NULL` under `on_delete=PROTECT`, so
+  there is no `IS NOT NULL` prefix to get wrong here and no `COUNT()` clause to precede.
+
+### Defects this pass's own tests caught
+
+- **A failure record erased by its own refusal.** `confirm_sns_subscription` was written with
+  `@transaction.atomic`, raised `ValidationError` *after* writing the attempt's event update and audit
+  row, and rolled both back on the way out. Two tests failed for it: the redirect case found no audit
+  row, and the unreachable-endpoint case found `detail` still saying "pending". The decorator moved down
+  to `_record_confirmation_attempt` — the event update and its audit row are all-or-nothing together —
+  and the view lost its own `atomic` so no later raise in the request cycle can undo a record an operator
+  needs. The rule this restates is NTF-4's own: retention is unconditional, action is not.
+- **A probe that blamed the database for its own parameter.** The guard test passed `self.owner.pk.hex`
+  for `requested_by_id`, which is an integer primary key, and three tests died with an `AttributeError`
+  dressed as a product failure. The UUID columns need `.hex` and the user needs `str()`; both are
+  commented at the call site, because getting the first wrong reads as a missing trigger that is not
+  missing.
+- **The host shell leaks the deployment's environment.** The live leg inherited `CLAMAV_HOST=clamav`
+  and `MALWARE_SCAN_MODE=clamav` from the ambient environment — not from `.env`, which
+  `DOTENV_PATH=/nonexistent` does exclude — and every test touching an upload died on
+  `getaddrinfo failed`, reading exactly like the new strip control having broken uploads. Pinning
+  `MALWARE_SCAN_MODE=basic` and `CLAMAV_HOST=""` in the runner is what makes that leg measure triggers
+  instead of the absence of a scanner.
+
+### MySQL 8.4 checks (real server, migrations applied, then torn down)
+
+- `migrate` on `mysql:8.4` with `--log-bin-trust-function-creators=1` applied through **0056** cleanly:
+  **54 triggers** installed; `information_schema.triggers` for `core_dispositionrequest` returns
+  `core_disposition_tenant_insert` and `core_disposition_tenant_update`; `core_punch` and
+  `core_persondocument` still carry 6 between them.
+- A raw cross-tenant INSERT into `core_dispositionrequest` is refused with SQLSTATE `45000`
+  `cross-tenant disposition reference`; the same-tenant INSERT lands; an UPDATE that walks a request onto
+  another tenant's document is refused and leaves `document_id` where it was.
+- `DispositionTenantGuardTest`, `DocumentMetadataStripTest`, `SnsSubscriptionConfirmTest` and
+  `ClockSelfieTest` together on the live leg: **42 tests, OK**.
+- `models.W036` still reports **13** skipped conditional uniques on MySQL — unchanged by this pass, since
+  no new constraint was added; the application-side dedup list in roadmap §11 is the same one.
+
+### What this pass cannot prove
+
+- **No real SNS confirmation was fetched.** The allow-list and the outcome handling are tested against a
+  stubbed socket, because the suite must not open a connection to Amazon. Unknowable here: AWS's actual
+  error body for an expired token — so the "usually the token expired" sentence is a guess about a shape,
+  and success is asserted against the documented response element rather than an observed one.
+- **No camera, no browser, no phone.** The capture panel and the re-encode's behaviour on a 12-megapixel
+  JPEG off a real handset are untested; the 4 MiB cap and the fail-closed refusal are the two places a
+  device could disagree with this suite. That is PLT-4's gate, unchanged.
+- **The strip is only as good as the decoder.** Metadata in a segment Pillow re-emits rather than drops
+  would survive. The tests assert on `getexif()` of the stored bytes — the same reader a phone would use
+  — which is not an exhaustive metadata audit, and PDF XMP is untouched as stated above.
+- **The disposition guard is proven against raw SQL, not against a hostile application.** That is both
+  the point of a database guard and its limit: it says the row cannot be placed wrong, not that a future
+  view will remember to filter.
 
 ## Who hears what, and what happens when nobody answers (2026-10-03, later)
 
@@ -163,9 +292,9 @@ liability with an API key attached.
   `verified=False`. A reader in six months can tell a proven callback from a merely addressed one. An SNS
   subscription is deliberately *not* auto-confirmed: following `SubscribeURL` is a server-side request to
   a URL that arrived inside an unauthenticated payload — an SSRF primitive — so the host is extracted, the
-  event is kept pending, and the row is listed as unresolved. **The operator's confirm button is not
-  built**, so until it is, an SNS deployment confirms out of band or its email callbacks do not flow; that
-  is an open end of this item, not a finished one.
+  event is kept pending, and the row is listed as unresolved. **The confirmation is an operator's click**
+  (see this document's opening section): the address must pass an allow-list before a socket is opened,
+  and until somebody clicks it an SNS deployment's email callbacks do not flow.
 - **The audit chain gets four bullets, not the number.** `mask_destination` writes the last four
   characters, because the chain is append-only and survives every retention rule below, so contact
   details put into it could never be scrubbed; the ledger holds the real value, because that is what the
@@ -1021,7 +1150,9 @@ adds ride on the state the first two already keep.
   onboarding tasks (`Person.status` is one value, not a checklist), evidence rejection (a failed scan
   deletes the file and rolls back, so there is no rejected row to announce), and post-order
   acknowledgment (a checkpoint tour is completed, not acknowledged). Each wants its store before it
-  wants a notice.
+  wants a notice. *(Of those four, onboarding got its store two days later — `OnboardingItem` /
+  `OnboardingTask` and the `onboarding.assigned` / `onboarding.overdue` notices, see §13 of the
+  roadmap — leaving the other three still waiting for theirs.)*
 
 **Defects this slice's own tests and checks caught**
 
@@ -1850,10 +1981,10 @@ The seven confirmed software outcomes are now represented end to end:
 | Multi-tenancy | Explicit tenant selection with session rotation, membership enforcement, verified custom-host routing, platform superuser overview, tenant-scoped form/query paths, cross-tenant tests (list views **and** per-object routes: person, document download, import apply, disposition, payroll, audit redaction), model validation, and MySQL reference-integrity triggers for high-risk records. A verified hostname pins the tenant: the membership fallback cannot resolve a different organization on that host. |
 | Branding | WCAG-oriented contrast validation, scanned and normalized PNG uploads, immutable brand snapshots and rollback, automatic dark palette, DNS TXT hostname verification, and HTML email branding. |
 | Personnel/HCRM | Extended employment/contact profile, typed custom fields, sensitive-field visibility controls, change history, private documents, signed acknowledgments bound to a document hash, imports, granular retention, legal holds, archive/delete approvals, and immutable disposition tombstones. |
-| Audit | Application append-only controls, per-tenant SHA-256 hash chains, verification UI, MySQL update/delete rejection triggers (installed **and** asserted by the CI MySQL leg), two-person export-redaction workflow (requester cannot approve; only an approved redaction alters an export), NDJSON export, and an organization retention floor that is recorded and displayed but not yet enforced by any purge job. Audit events themselves are never purged. |
+| Audit | Application append-only controls, per-tenant SHA-256 hash chains, verification UI, MySQL update/delete rejection triggers (installed **and** asserted by the CI MySQL leg), two-person export-redaction workflow (requester cannot approve; only an approved redaction alters an export), NDJSON export, and an organization retention floor now enforced by sealing each closed period and trimming it from the live chain (see "Retention the chain can obey") — the pass is a command and a page action, not yet a scheduled job. |
+| Records safety | Personnel-document downloads are authorized per actor, streamed as attachments with `nosniff` and `private, no-store`, and audited. Brand logos are streamed from an authenticated same-origin route instead of a public media path. Payroll CSV/XLSX cells are neutralised against spreadsheet formula injection. JPEG and PNG uploads are re-encoded before storage, so a photographed record does not keep the geotag, device and clock the phone wrote into it (see this document's opening section). |
 | PWA/offline clock | Responsive installable shell, IndexedDB queue encrypted with a non-extractable WebCrypto AES-GCM key (the key lives in the same browser storage as the ciphertext and the device token, so this is tamper-evidence and at-rest hygiene, not a defense against a compromised browser profile), signed 30-day tenant/user/device credentials, monotonic replay protection with sequence-ordered queue draining, idempotent retries, a 12-hour synchronization limit, rejection of punch times ahead of the server clock, unclosed-shift and orphan clock-out detection, and geofence validation bound either to the shift site or to an explicitly named site. |
 | Identity/security | Local auth, Google and Microsoft OIDC/account linking, TOTP/recovery-code MFA, configurable role MFA plus enforced MFA for platform (staff) accounts, login throttling on both the tenant and `/admin/` sign-in paths with proxy-aware client identification, `/admin/` source-range restriction that fails closed, CSRF, restrictive browser headers, secure production settings, dependency/SAST/container scanning CI, Redis cache (sessions remain database-backed), and S3-compatible private media support. |
-| Records safety | Personnel-document downloads are authorized per actor, streamed as attachments with `nosniff` and `private, no-store`, and audited. Brand logos are streamed from an authenticated same-origin route instead of a public media path. Payroll CSV/XLSX cells are neutralised against spreadsheet formula injection. |
 
 ## Wider product capability already present
 
@@ -1900,18 +2031,20 @@ company-level roles, which are deliberately never narrowed. Scope
 choices on the officer-facing `/open-posts/` list — deliberately firm-wide, since a guard may
 offer for any post they lawfully stand.
 
-**Clock evidence.** Missing the documented evidence option selfie/photo capture (CLK-1), which the
-owner unblocked on 2026-10-04 with three rulings — a configurable retention window from permanent down
-to N days, a frame at clock-in and clock-out but not at breaks and only when no other identity method
-covered the punch, and opening rights for the subject plus owner/administrator/HR/dispatcher — so the
-remaining gap is the capture itself, not a decision (see "Who hears what, and what happens when nobody
-answers" for the same day's channel and escalation work, and DD §Sites for the rulings). NFC tags are
-not built and were ruled out on
-2026-10-03. Shared-kiosk PIN is now built (see "A shared clock station, and the PIN that makes it
-evidence"), and so are the mock-location / spoofing-risk signals (see "What a location reading cannot
-be"): an implausible accuracy radius, a fix captured minutes before the punch it accompanies, and a
-distance no vehicle could have covered all put the punch in time review with the numbers printed beside
-it, and none of them stops the clock. Supervisor approval remains the third DD option that is not built.
+**Clock evidence.** The selfie / photo capture (CLK-1) is **built** — ruled by the owner on 2026-10-04
+and shipped the same day (see this document's opening section and DD §Sites): one boolean resolved
+company → contract → site, a frame at clock-in and clock-out and not at breaks, exempted when a verified
+station PIN already said who, filed as a `clock_selfie` record type on the `biometric` rung with a
+configurable retention window, and refused on the offline path rather than accepted as a replay. Five of
+the seven evidence options DD §Sites enumerates are now built — punch location, selfie, shared-kiosk PIN,
+QR checkpoints, and the spoof-risk signal — with NFC ruled out on 2026-10-03 and supervisor approval the
+one still missing. Shared-kiosk PIN is described in "A shared clock station, and the PIN that makes it
+evidence", and the mock-location / spoofing-risk signals in "What a location reading cannot be": an
+implausible accuracy radius, a fix captured minutes before the punch it accompanies, and a distance no
+vehicle could have covered all put the punch in time review with the numbers printed beside it, and none
+of them stops the clock. **Supervisor approval of a punch is the last documented option unbuilt**, and it
+is a decision record rather than a capture: the correction-request queue is the nearest existing shape and
+is not the same thing, so it needs its own store before it needs a screen.
 QR checkpoints are end to
 end: a patrol point is created per site, the clock offers only that site's points, and both the
 online and the offline path attribute the scan or refuse it — a checkpoint punch that names no
@@ -1954,12 +2087,13 @@ The provider webhooks with the bounce /
 complaint / unsubscribe / suppression handling and the consent record that must precede any SMS are now
 built — see "Consent that belongs to a number, and the callbacks that end a send path" — so SMS has a
 gate, a ledger, an inbound path, and now a rule that can choose it. Quiet hours, number validation and
-rate or cost controls from RB's SMS list remain unbuilt, and the SNS `SubscribeURL` is still handed to a
-human rather than fetched. The four families that have
+rate or cost controls from RB's SMS list remain unbuilt; the SNS `SubscribeURL` is now confirmed by an
+operator's click on `/settings/messaging/` — after the address passes an allow-list — rather than fetched
+automatically, so an unclicked subscription still leaves email callbacks not flowing until somebody acts. The three families that have
 nothing durable to report yet — identity/security events (there is no in-app role editor, and
 recovery or suspicious-access belong to the authentication pipeline rather than a domain row),
-onboarding tasks (`Person.status` is one value, not a checklist), evidence rejection (a failed scan
-rolls the row back, so there is no rejected record to announce), and post-order acknowledgment (a
+evidence rejection (a failed scan deletes the file and rolls the row back, so there is no rejected
+record to announce), and post-order acknowledgment (a
 checkpoint tour is completed, not acknowledged).
 
 **Reports and exports.** Timecard rows break out client, site, post, pay and bill rate with the

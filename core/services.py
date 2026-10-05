@@ -2369,6 +2369,11 @@ ALLOWED_DOCUMENT_SIGNATURES = {
     ".csv": tuple(), ".txt": tuple(),
 }
 
+# One ceiling, named, because the validator and the re-encode below both have to enforce it: an image
+# that shrinks or grows on re-save must still be under the size the storage path and the export zip
+# assume.
+DOCUMENT_MAX_BYTES = 25 * 1024 * 1024
+
 # The MIME each extension was *proved* to be, recorded on the row at upload. Kept next to the
 # signatures rather than in a form or a view because the pair must never disagree: an entry here with
 # no signature above it would claim a verification that nothing performed.
@@ -2415,7 +2420,7 @@ class PreviewUnavailable(Exception):
 
 def validate_document_upload(upload):
     from pathlib import Path
-    if upload.size > 25*1024*1024: raise ValidationError("Documents must be 25 MiB or smaller.")
+    if upload.size > DOCUMENT_MAX_BYTES: raise ValidationError("Documents must be 25 MiB or smaller.")
     extension=Path(upload.name).suffix.lower()
     if extension not in ALLOWED_DOCUMENT_SIGNATURES: raise ValidationError("Unsupported document type.")
     head=upload.read(16); upload.seek(0)
@@ -2428,6 +2433,72 @@ def validate_document_upload(upload):
     # rather than recomputing it at the write site is what keeps the claim honest: the only way to get
     # a verified MIME out of here is to have passed the signature check above.
     return VERIFIED_DOCUMENT_TYPES[extension]
+
+
+# The two storable formats that carry a camera's diary. `.heic` and `.tif` are not on this list because
+# the extension allowlist above will not accept them at all — an iPhone photo reaches this application
+# only after the browser or the office has converted it, so there is no exotic container left to
+# special-case here.
+METADATA_BEARING_TYPES = {"image/jpeg": "JPEG", "image/png": "PNG"}
+
+
+def strip_document_metadata(upload, verified_type):
+    """Return the bytes to store, with an image's embedded metadata removed.
+
+    Why this exists at all: a licence, a diploma or a registration photo is taken on a phone, in a
+    doorway, at a kitchen table or at a vehicle, and the phone writes the place into the file. The
+    stored artefact then defaults to `standard` sensitivity, whose staff list includes **auditor** —
+    a role the ladder itself describes as often an outside accountant — and the same bytes travel into
+    `personnel_file_zip`. So an external party can be handed the coordinates where an officer's
+    personal documents were photographed, without any decision ever being taken to disclose them.
+
+    The mechanism is the one `process_brand_image` already proves in this file — open, verify,
+    re-open, `exif_transpose`, re-save with no metadata argument — with one difference that matters.
+    A logo becomes a canonical PNG because it is *rendered*; a personnel record has to come back out of
+    storage as the same kind of file it went in as, or the `verified_type` the preview allowlist trusts
+    would be a lie about the bytes on disk. So the container is preserved, not normalised.
+
+    Nothing is resized. The resolution of a certificate photographed for legibility is part of the
+    evidence, and a control that quietly degrades records is a control people start working around.
+
+    **Fail-closed.** If the pixels cannot be decoded, the metadata cannot be proved gone, and storing
+    the original anyway would record a stripped file that still carries its geotag. The refusal names
+    what to do about it. This does refuse an image that is merely unusual to Pillow but readable by a
+    browser; the honest cost of that is one re-save from the office's desktop, and it is cheaper than
+    the disclosure it prevents.
+    """
+    container = METADATA_BEARING_TYPES.get(verified_type)
+    if container is None:
+        # PDF, DOCX, XLSX, CSV, TXT. A PDF can carry XMP, but these uploads are documents whose bytes
+        # *are* the record, and re-writing a PDF to clear a metadata packet would re-render the
+        # artefact that an inspection is meant to read. Recorded as a limit in SECURITY.md rather than
+        # quietly claimed as covered.
+        return upload
+    from io import BytesIO
+    from django.core.files.base import ContentFile
+    from PIL import Image, ImageOps, UnidentifiedImageError
+    try:
+        image = Image.open(upload)
+        image.verify()                      # `verify()` consumes the object, so re-open after it
+        upload.seek(0)
+        image = ImageOps.exif_transpose(Image.open(upload))
+        if container == "JPEG":
+            image = image.convert("RGB")    # Pillow cannot write JPEG for palette or alpha modes
+        output = BytesIO()
+        image.save(output, format=container)  # no exif=/pnginfo= argument: nothing is carried over
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        upload.seek(0)
+        raise ValidationError(
+            "This image could not be re-encoded, so its embedded location and camera details cannot "
+            "be removed. Open it and save a copy, then upload that — photos are never stored with "
+            "their metadata in this system.") from exc
+    payload = output.getvalue()
+    if len(payload) > DOCUMENT_MAX_BYTES:
+        raise ValidationError("Re-encoding the image did not keep it under 25 MiB.")
+    stripped = ContentFile(payload, name=upload.name)
+    upload.seek(0)
+    return stripped
+
 
 def malware_scan(upload):
     import socket
@@ -2449,14 +2520,19 @@ def malware_scan(upload):
 def store_person_document(*, organization, person, document_type, upload, actor, expires_on=None, supersedes=None):
     from .models import AuditEvent, PersonDocument
     verified_type=validate_document_upload(upload)
-    clean,scan_detail=malware_scan(upload)
+    # Captured before the re-encode, because `strip_document_metadata` hands back a fresh file object
+    # that never went through a browser. This column is the uploader's *claim*, kept for display and
+    # never used for a decision — `verified_type` above is the one the preview reads.
+    declared_type=getattr(upload,"content_type","")[:100]
+    stripped=strip_document_metadata(upload,verified_type)
+    clean,scan_detail=malware_scan(stripped)
     digest=hashlib.sha256()
-    for chunk in upload.chunks(): digest.update(chunk)
-    upload.seek(0)
+    for chunk in stripped.chunks(): digest.update(chunk)
+    stripped.seek(0)
     retain_until=None
     if document_type.retention_days is not None: retain_until=timezone.localdate()+timedelta(days=document_type.retention_days)
-    document=PersonDocument.objects.create(organization=organization,person=person,document_type=document_type,file=upload,original_name=upload.name,content_type=getattr(upload,"content_type","")[:100],verified_type=verified_type[:100],size=upload.size,sha256=digest.hexdigest(),scan_status=PersonDocument.ScanStatus.CLEAN if clean else PersonDocument.ScanStatus.REJECTED,expires_on=expires_on,retain_until=retain_until,uploaded_by=actor,supersedes=supersedes)
-    AuditEvent.objects.create(organization=organization,actor=actor,action="document.uploaded",target_type="person_document",target_id=str(document.pk),metadata={"type":document_type.code,"size":upload.size,"sha256":document.sha256,"scan":scan_detail,"revision":document.revision_number,"supersedes":str(supersedes.pk) if supersedes else None})
+    document=PersonDocument.objects.create(organization=organization,person=person,document_type=document_type,file=stripped,original_name=stripped.name,content_type=declared_type,verified_type=verified_type[:100],size=stripped.size,sha256=digest.hexdigest(),scan_status=PersonDocument.ScanStatus.CLEAN if clean else PersonDocument.ScanStatus.REJECTED,expires_on=expires_on,retain_until=retain_until,uploaded_by=actor,supersedes=supersedes)
+    AuditEvent.objects.create(organization=organization,actor=actor,action="document.uploaded",target_type="person_document",target_id=str(document.pk),metadata={"type":document_type.code,"size":stripped.size,"sha256":document.sha256,"scan":scan_detail,"revision":document.revision_number,"supersedes":str(supersedes.pk) if supersedes else None,"metadata_stripped":verified_type in METADATA_BEARING_TYPES})
     if not clean: document.file.delete(save=False); raise ValidationError("The upload failed malware scanning.")
     return document
 
@@ -5338,6 +5414,127 @@ def ingest_provider_events(organization, provider, events, *, verified=False, ra
             occurred_at=event.get("occurred_at"), applied=applied, verified=verified,
             raw=dict(raw or {}) if len(json.dumps(raw or {})) < 4000 else {"omitted": True}))
     return stored
+
+
+# Amazon's confirmation endpoint, and nothing else. The China partition (`amazonaws.com.cn`) is absent
+# on purpose rather than by oversight: it is a separate authority with its own DNS root, and an
+# installation that genuinely runs there will find this refusal and name the missing case, which is a
+# better failure mode than a pattern wide enough to be worth nothing.
+SNS_CONFIRM_HOST_PATTERN = re.compile(r"^sns\.[a-z0-9-]+\.amazonaws\.com$")
+SNS_CONFIRM_TIMEOUT_SECONDS = 10
+
+
+def sns_confirmation_target(url):
+    """The confirmation address this application will fetch, or a refusal naming what was wrong.
+
+    This is the only outbound URL fetch in the product, and it exists because a `SubscribeURL` arrives
+    **inside a request body that an unauthenticated caller wrote**. Following one blindly is the
+    textbook SSRF primitive: post a `SubscriptionConfirmation` whose URL points at
+    `169.254.169.254` and the application fetches its own cloud credentials with its own privileges.
+    So the rule is an allow-list on the *host that the URL claims*, matched against Amazon's documented
+    naming, applied before any socket is opened:
+
+      * `https` only — a plain-http "SNS" endpoint is not Amazon's;
+      * host must match `sns.<region>.amazonaws.com`, which rejects an IP literal, an internal name,
+        `evil.example/?x=sns.us-east-1.amazonaws.com` (that string is the query, not the host), and the
+        userinfo trick `https://sns.us-east-1.amazonaws.com@evil.example/`;
+      * no port other than the default, no path — the real endpoint answers at `/`;
+      * the query has to carry the action it claims, so a stored URL that got edited into something
+        else is refused rather than fetched.
+
+    Even with all four, the fetch does not follow redirects and its reply is read as text only.
+    """
+    from urllib.parse import urlsplit
+    parts = urlsplit(str(url or ""))
+    if parts.scheme != "https":
+        raise ValidationError("A confirmation address has to be https.")
+    if not SNS_CONFIRM_HOST_PATTERN.match(parts.hostname or ""):
+        raise ValidationError("That confirmation address is not an Amazon SNS endpoint, so it will not "
+                              "be opened.")
+    if parts.port not in (None, 443):
+        raise ValidationError("A confirmation address has to use the standard https port.")
+    if parts.path not in ("", "/"):
+        raise ValidationError("A confirmation address has to point at the SNS endpoint itself.")
+    if "Action=ConfirmSubscription" not in (parts.query or ""):
+        raise ValidationError("That address does not ask to confirm a subscription.")
+    return url
+
+
+def _sns_fetch(url):
+    """Open one allow-listed confirmation address and report the status and the body, without walking."""
+    import requests
+    response = requests.get(url, timeout=SNS_CONFIRM_TIMEOUT_SECONDS, allow_redirects=False)
+    return response.status_code, response.text[:4000]
+
+
+def confirm_sns_subscription(organization, event, actor, *, fetch=None):
+    """Click the confirmation AWS is waiting on, for a subscription that arrived on this tenant's token.
+
+    AWS publishes nothing to an endpoint until the subscription behind its `SubscribeURL` is confirmed,
+    so an SNS deployment without this action has a callback address and no events — the open end the
+    NTF-4 slice recorded rather than pretending it was finished. The reason it stayed open is the
+    reason it is still a human click and not an automatic one: the URL came from an unauthenticated
+    body. An operator who can see the topic decides; the allow-list decides what that click may reach.
+
+    **Deliberately not wrapped in `transaction.atomic`.** The record of the attempt has to survive a
+    refused or failed confirmation — this schema's standing rule is "retention is unconditional, action
+    is not" — and an atomic block here would roll the attempt's own row back on the way out of its own
+    `ValidationError`, which is the bug this function shipped with once. The two writes that *should*
+    be all-or-nothing (the event update and its audit event) are atomic inside
+    :func:`_record_confirmation_attempt` instead.
+
+    `fetch` is a seam for tests and nothing else: no caller passes one in production, and nothing here
+    reaches a socket the allow-list above did not already accept.
+    """
+    if event.provider != "sns":
+        raise ValidationError("Only an Amazon SNS subscription is confirmed with a click.")
+    if event.applied:
+        raise ValidationError("That subscription has already been confirmed.")
+    url = str((event.raw or {}).get("subscribe_url") or "")
+    if not url:
+        raise ValidationError("This event did not carry a confirmation address to follow.")
+    sns_confirmation_target(url)
+    open_url = fetch or _sns_fetch
+    arn = ""
+    try:
+        status, body = open_url(url)
+    except Exception as exc:
+        reached, note = False, f"Could not reach the SNS endpoint ({type(exc).__name__})"
+    else:
+        reached = status == 200 and "<ConfirmSubscriptionResponse" in (body or "")
+        found = re.search(r"<SubscriptionArn>\s*([^<]+?)\s*</SubscriptionArn>", body or "")
+        arn = found.group(1)[:200] if reached and found else ""
+        note = "Subscription confirmed" if reached else \
+            f"SNS answered {status} without a confirmation result"
+    _record_confirmation_attempt(event, actor, confirmed=reached, note=note, subscription_arn=arn)
+    if not reached:
+        raise ValidationError("Amazon did not confirm this subscription. The usual reason is that the "
+                              "token expired — publish a test message and confirm the event that "
+                              "arrives, or confirm it in the AWS console.")
+    return event
+
+
+@transaction.atomic
+def _record_confirmation_attempt(event, actor, *, confirmed, note, subscription_arn=""):
+    """Write what the click did, keeping the token out of the record.
+
+    The `SubscribeURL` embeds a `Token` that is enough to confirm *this* subscription, so the audit
+    event names the host and the topic and never the address. The stored event keeps its raw URL — it
+    has to, or a retry is impossible — and the messaging page prints the host, not the link.
+
+    This is the only transaction in the confirmation path: the event update and its audit row are
+    all-or-nothing together, and neither is rolled back by the refusal the caller raises afterwards.
+    """
+    event.detail = note[:255]
+    event.applied = bool(confirmed)
+    if subscription_arn:
+        event.raw = {**(event.raw or {}), "subscription_arn": subscription_arn}
+    event.save(update_fields=["detail", "applied", "raw"])
+    AuditEvent.objects.create(organization=event.organization, actor=actor,
+        action="message.subscription_confirmed" if confirmed else "message.subscription_confirm_failed",
+        target_type="delivery_event", target_id=str(event.pk),
+        metadata={"provider": event.provider, "topic": event.destination,
+                  "host": (event.raw or {}).get("subscribe_url_host", ""), "note": note})
 
 
 def handle_inbound_message(organization, from_number, body, *, provider="twilio", verified=False):
