@@ -330,3 +330,54 @@ if(preview){
     }
   }));
 }
+
+// Text wording editor: mirrors core/sms.py so the counter matches what the server will send.
+const smsEditor = document.querySelector('[data-sms-editor]');
+if (smsEditor) {
+  const input = smsEditor.querySelector('[data-sms-input]');
+  const preview = smsEditor.querySelector('[data-sms-preview]');
+  const meter = smsEditor.querySelector('[data-sms-meter]');
+  const samplesNode = document.getElementById('sms-samples');
+  const samples = samplesNode ? JSON.parse(samplesNode.textContent) : {};
+  const prefix = smsEditor.dataset.prefix || '';
+  const GSM_BASIC = new Set(Array.from('@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e\u00c6\u00e6\u00df\u00c9 !"#\u00a4%&\'()*+,-./0123456789:;<=>?\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bfabcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0'));
+  const GSM_EXT = new Set(Array.from('^{}\\[~]|\u20ac\f'));
+  const PLAIN = {'\u2018':"'",'\u2019':"'",'\u201a':"'",'\u201b':"'",'\u201c':'"','\u201d':'"','\u201e':'"','\u2033':'"',
+    '\u2013':'-','\u2014':'-','\u2212':'-','\u2026':'...','\u00b7':'-','\u2022':'-','\u00a0':' ','\u2009':' ','\u202f':' '};
+  const plain = text => Array.from(text).map(ch => PLAIN[ch] ?? ch).join('');
+  const tidy = text => plain(text)
+    .replace(/[ \t]*\n[ \t]*/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/ +([.,;:!?])/g, '$1')
+    .replace(/\.\.(?=\s|$)(?<!\.\.\.)/g, '.').trim().replace(/:\s*$/, '.').trim();
+  const dropLink = text => text.replace(/(?:(?:(?<=[.!?] )|^)[A-Z][^.!?{}:\n]*:\s*)?\{link\}/g, '');
+  const segments = text => {
+    const chars = Array.from(text);
+    let units, single, multi, encoding;
+    if (chars.every(ch => GSM_BASIC.has(ch) || GSM_EXT.has(ch))) {
+      units = chars.reduce((sum, ch) => sum + (GSM_EXT.has(ch) ? 2 : 1), 0); single = 160; multi = 153; encoding = 'GSM-7';
+    } else {
+      units = text.length; single = 70; multi = 67; encoding = 'Unicode';
+    }
+    return {units, encoding, count: units === 0 ? 0 : (units <= single ? 1 : Math.ceil(units / multi))};
+  };
+  const render = () => {
+    let wording = input.value.replace(/\r\n/g, '\n').trim();
+    if (!samples.link) wording = dropLink(wording);
+    const text = prefix + tidy(wording.replace(/\{([^{}]*)\}/g, (match, name) => samples[name] ?? ''));
+    const size = segments(text);
+    preview.textContent = text;
+    meter.innerHTML = '';
+    const strong = document.createElement('strong'); strong.textContent = size.units;
+    meter.append(strong, ` characters \u00b7 ${size.count} segment${size.count === 1 ? '' : 's'} \u00b7 ${size.encoding}`);
+    meter.classList.toggle('over', size.count > 1);
+  };
+  input.addEventListener('input', render);
+  smsEditor.querySelectorAll('[data-sms-insert]').forEach(chip => chip.addEventListener('click', () => {
+    const token = `{${chip.dataset.smsInsert}}`;
+    const start = input.selectionStart ?? input.value.length, end = input.selectionEnd ?? start;
+    input.setRangeText(token, start, end, 'end'); input.focus(); render();
+  }));
+  smsEditor.querySelector('[data-sms-default]')?.addEventListener('click', () => {
+    input.value = smsEditor.querySelector('[data-sms-default-text]').value; input.focus(); render();
+  });
+  render();
+}

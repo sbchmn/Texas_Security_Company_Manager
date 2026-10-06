@@ -1,0 +1,35 @@
+{% extends 'base.html' %}{% block title %}{{ notice.label }} · Text wording{% endblock %}{% block content %}
+<div class="page"><div class="page-heading"><div><p class="eyebrow">Settings · Text message wording</p><h1>{{ notice.label }}</h1>
+<p>Sent to: <strong>{{ notice.audience }}</strong>. {% if custom %}<span class="pill granted">Your wording</span>{% else %}<span class="pill inactive">Built-in wording</span>{% endif %}</p></div>
+<div class="actions"><a class="button secondary" href="{% url 'sms_templates' %}">All texts</a></div></div>
+
+<div class="sms-editor" data-sms-editor data-prefix="{{ prefix }}">
+<section class="panel">
+<form method="post" class="data-form">{% csrf_token %}
+{% if errors %}<div class="form-error-summary" role="alert"><strong>The wording was not saved.</strong><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>{% endif %}
+<label>Message wording
+<textarea name="body" rows="5" maxlength="{{ max_length }}" data-sms-input required>{{ wording }}</textarea>
+<small class="helptext"><code>{{ prefix|default:"(company name)" }}</code> is added to the front automatically. Placeholders in braces are filled in when the text is sent.</small></label>
+<div class="sms-chips" aria-label="Placeholders you can use">{% for name, description, sample in placeholders %}
+<button type="button" class="sms-chip" data-sms-insert="{{ name }}" title="{{ description }}{% if sample %} — e.g. {{ sample }}{% endif %}">{{ "{" }}{{ name }}{{ "}" }}</button>{% endfor %}</div>
+<div class="form-actions"><button class="button" name="action" value="save">Save wording</button>
+<button type="button" class="button secondary" data-sms-default>Load built-in wording</button></div>
+</form>
+{% if custom %}<form method="post" class="inline-form sms-reset">{% csrf_token %}<input type="hidden" name="action" value="reset">
+<button class="button secondary button-small">Reset to built-in wording</button></form>{% endif %}
+<textarea hidden data-sms-default-text>{{ default }}</textarea>
+</section>
+
+<section class="panel sms-preview-panel">
+<h2>What a phone shows</h2>
+<div class="sms-bubble" data-sms-preview aria-live="polite">{{ preview }}</div>
+<p class="sms-meter" data-sms-meter><strong>{{ size.characters }}</strong> characters · {{ size.segments }} segment{{ size.segments|pluralize }} · {{ size.encoding }}</p>
+<p class="helptext">Sample values are used here; real names and times can be longer or shorter. One segment holds 160 plain characters, or 70 if any character outside the basic text alphabet (curly quotes, emoji, most accents) appears — then the whole text switches to Unicode. Curly quotes and dashes are straightened automatically.</p>
+{% if not link_sample %}<p class="helptext"><strong>No link will be included</strong> until <code>PUBLIC_BASE_URL</code> is set. A label right before <code>{link}</code>, such as "Review:", is dropped with it.</p>{% endif %}
+<h3>Placeholders</h3>
+<dl class="sms-placeholders">{% for name, description, sample in placeholders %}<dt><code>{{ "{" }}{{ name }}{{ "}" }}</code></dt><dd>{{ description }}</dd>{% endfor %}</dl>
+</section>
+</div>
+{{ samples|json_script:"sms-samples" }}
+</div>
+{% endblock %}

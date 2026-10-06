@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% block title %}Messaging{% endblock %}{% block content %}
 <div class="page"><div class="page-heading"><div><p class="eyebrow">Settings</p><h1>Messaging delivery</h1>
-<p>What the email and text providers have told us back, who is blocked from receiving anything, and every consent decision on record. DD requires these events to be <em>processed and retained</em>, which means both a table you can read and a send path that consults it.</p></div><div class="actions"><a class="button secondary" href="{% url 'settings' %}">Company settings</a><a class="button secondary" href="{% url 'notifications' %}">Notifications</a></div></div>
+<p>What the email and text providers have told us back, who is blocked from receiving anything, and every consent decision on record. DD requires these events to be <em>processed and retained</em>, which means both a table you can read and a send path that consults it.</p></div><div class="actions"><a class="button" href="{% url 'sms_templates' %}">Text message wording</a><a class="button secondary" href="{% url 'settings' %}">Company settings</a><a class="button secondary" href="{% url 'notifications' %}">Notifications</a></div></div>
 
 <section class="panel">
 <h2>Callback address</h2>

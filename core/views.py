@@ -24,6 +24,7 @@ from .middleware import client_ip
 from .forms import AuditRedactionForm, AuthorityScopeForm, AvailabilityRuleForm, BrandForm, BranchForm, CheckpointForm, ClientForm, ClockKioskForm, ClockPinForm, ComplianceRuleForm, CredentialForm, CredentialTypeForm, CsvImportForm, CustomFieldDefinitionForm, DispositionRequestForm, DocumentAcknowledgmentForm, DocumentTypeForm, DocumentUploadForm, DomainForm, ExchangeAcceptForm, InvitationAcceptanceForm, MembershipInvitationForm, OnboardingItemForm, OrganizationSecurityForm, PayCodeForm, PayrollPeriodForm, PersonAccessForm, PersonForm, PunchAdjustmentForm, ShiftExchangeForm, ShiftForm, ShiftGenerationForm, ShiftSwapForm, ShiftTemplateForm, SiteForm, TextAlertsForm, TimeOffRequestForm, TimePolicyForm, TimePolicyOverrideForm, TrainingRecordForm
 from .models import AuditEvent, AuditRedaction, AuthorityScope, AvailabilityRule, BrandVersion, Checkpoint, Client, ClockKiosk, ComplianceRule, Credential, CredentialRegistryCheck, CredentialType, CustomFieldDefinition, DispositionRequest, DOCUMENT_TYPE_READERS, DocumentAcknowledgment, DocumentType, HoldOver, ImportBatch, Membership, MembershipInvitation, MessageConsent, DeliveryEvent, Notification, OnboardingItem, OnboardingTask, OfflineClockDevice, Organization, OrganizationDomain, PayCategory, PayCode, PayrollRun, Person, PersonCustomValue, PersonDocument, PayrollLockSegment, Punch, PunchAdjustment, record_readable, record_visibility_filter, ReportSnapshot, RuleRevision, Shift, ShiftClaim, ShiftExchange, ShiftHourDesignation, ShiftSwap, ShiftTemplate, Site, TimeOffRequest, TimePolicy, TimePolicyOverride, TrainingRecord
 from .scope import SCOPE_CAPABLE_ROLES, ActorScope, dispatch_recipients_for_shift, scope_for
+from .sms import date_span, moment_label, shift_when
 from decimal import Decimal
 from .services import COMPLIANCE_KINDS, RULE_WATCHED, SNAPSHOT_WINDOW_DAYS, apply_csv_import, apply_recurring_plan, approve_payroll_run, assignment_impact, audit_retention_state, bump_policy_revision, bump_rule_revision, capture_report_snapshots, clear_kiosk_pin_failures, clock_pin_lockout, close_clock_kiosk, clock_policy_coverage, coerce_custom_value, compliance_attendance, compliance_recipients, compliance_summary, credential_registry_state, coverage_report, coverage_state, create_brand_version, create_payroll_run, decide_onboarding_task, describe_hold_over, effective_clock_policy, effective_pay_code, effective_rates, ensure_pay_categories, ensure_rule_history, execute_disposition, expire_stale_moves, find_person_by_pin, haversine_meters, KIOSK_IDENTITY_SECONDS, kiosk_identity, kiosk_identity_token, kiosk_policy_refusal, kiosk_shifts, lock_subject, onboarding_board, onboarding_progress, open_clock_kiosk, open_lock_segments, open_post_candidates, outstanding_acknowledgments, overrun_prompt, payroll_csv, payroll_lock_state, payroll_recipients, payroll_totals, payroll_snapshot_csv, payroll_snapshot_pdf, payroll_snapshot_xlsx, parse_punch_timestamp, person_snapshot, personnel_file_bundle, personnel_file_zip, post_requirements, preview_filename, PreviewUnavailable, preview_source, preview_csv_import, process_brand_image, provision_onboarding_tasks, purge_sealed_audit, queue_acknowledgment_reminders, queue_notice, queue_onboarding_assignment, record_rule_revision, record_registry_check, recurring_plan, record_hold_over, record_person_history, record_punch, registry_checks_by_credential, reopen_payroll_run, report_breakdown, resolve_rule_version, restore_disposition, revise_pay_category, role_domain_gate, role_recipients, rounding_preview, rule_snapshot, saved_report_history, schedule_week_start, seal_audit_period, set_clock_pin, set_payroll_lock_segment, set_shift_designation, shift_advisories, shift_eligibility, shift_participants, signature_lineage, snapshot_csv, store_person_document, swap_candidates, tour_completion, uncovered_advisory, uncovered_windows, verify_audit_chain, verify_clock_pin, verify_seal_archive, week_offset_for
 # NTF-4, kept on its own line so the messaging surface's imports read as one group.
@@ -1398,13 +1399,13 @@ def _persist_shift(request, form, previous_status):
         if previous_status != Shift.Status.PUBLISHED:
             if item.officer_id:
                 queue_shift_notice(item, event_type="shift.published", dedup_key=f"shift-published:{item.pk}:{stamp}",
-                                   subject="You are scheduled", body=f"{item.site} on {item.starts_at:%a %b %d, %H:%M} to {item.ends_at:%H:%M}.")
+                                   subject="You are scheduled", body=f"{item.site} on {shift_when(item)}.")
             else:
                 # An unfilled post is only useful if the qualified people hear about it.
                 queue_open_post_notice(item)
         elif item.officer_id:
             queue_shift_notice(item, event_type="shift.changed", dedup_key=f"shift-changed:{item.pk}:{stamp}",
-                               subject="Your shift changed", body=f"{item.site} now runs {item.starts_at:%a %b %d, %H:%M} to {item.ends_at:%H:%M}.")
+                               subject="Your shift changed", body=f"{item.site} now runs {shift_when(item)}.")
     # Availability and the overtime threshold are warnings, not refusals: the dispatcher who
     # needs the post covered should hear what it costs and decide, not be blocked silently.
     if item.officer_id:
@@ -1412,7 +1413,7 @@ def _persist_shift(request, form, previous_status):
             messages.warning(request, advisory)
     return item
 
-def queue_shift_notice(shift, *, event_type, subject, body, dedup_key):
+def queue_shift_notice(shift, *, event_type, subject, body, dedup_key, sms=None):
     recipients = shift_participants(shift)
     if not recipients:
         return 0
@@ -1423,7 +1424,8 @@ def queue_shift_notice(shift, *, event_type, subject, body, dedup_key):
     # docstring already promises, and the managers' audience will then be resolved by role instead.
     subject_ids = {shift.officer.user_id} if shift.officer_id and shift.officer.user_id else set()
     return queue_notice(organization=shift.organization, recipients=recipients, event_type=event_type,
-                        subject=subject, body=body, dedup_key=dedup_key, subject_user_ids=subject_ids)
+                        subject=subject, body=body, dedup_key=dedup_key, subject_user_ids=subject_ids,
+                        sms={"shift": shift, **(sms or {})})
 
 def queue_open_post_notice(shift):
     from .services import open_post_candidates
@@ -1432,8 +1434,8 @@ def queue_open_post_notice(shift):
         return 0
     return queue_notice(organization=shift.organization, recipients=candidates, event_type="shift.open",
                         subject="An open post needs coverage",
-                        body=f"{shift.site} on {shift.starts_at:%a %b %d, %H:%M} to {shift.ends_at:%H:%M} is unfilled. Ask to take it from Open posts.",
-                        dedup_key=f"shift-open:{shift.pk}:{shift.starts_at:%Y%m%d%H%M}")
+                        body=f"{shift.site} on {shift_when(shift)} is unfilled. Ask to take it from Open posts.",
+                        dedup_key=f"shift-open:{shift.pk}:{shift.starts_at:%Y%m%d%H%M}", sms={"shift": shift})
 
 @membership_required()
 def open_posts(request):
@@ -1482,8 +1484,9 @@ def shift_claim(request):
     dispatch = dispatch_recipients_for_shift(shift, person)
     queue_notice(organization=org, recipients=dispatch, event_type="shift.claim_requested",
                  subject=f"{person.full_name} asked to take an open post",
-                 body=f"{person.full_name} requested {shift.site} on {shift.starts_at:%a %b %d, %H:%M}." + (f" Note: {claim.note}" if claim.note else ""),
-                 dedup_key=f"shift-claim:{claim.pk}")
+                 body=f"{person.full_name} requested {shift.site} on {shift_when(shift)}." + (f" Note: {claim.note}" if claim.note else ""),
+                 dedup_key=f"shift-claim:{claim.pk}",
+                 sms={"shift": shift, "officer": person, "note": claim.note})
     AuditEvent.objects.create(organization=org, actor=request.user, action="shift.claim_requested", target_type="shift_claim", target_id=str(claim.pk), metadata={"shift": str(shift.pk), "officer": str(person.pk)})
     messages.success(request, "Request sent for approval.")
     return redirect("open_posts")
@@ -1571,9 +1574,10 @@ def shift_claim_decide(request, claim_id):
     queue_notice(organization=request.organization, recipients=({claim.officer.user_id} if claim.officer.user_id else set()),
                  event_type=f"shift.claim_{claim.status}",
                  subject=("You're scheduled — " if claim.status == ShiftClaim.Status.APPROVED else "Request declined — ") + str(shift.site),
-                 body=(f"Your request for {shift.site} on {shift.starts_at:%a %b %d, %H:%M} was "
+                 body=(f"Your request for {shift.site} on {shift_when(shift)} was "
                        f"{claim.status}. " + (note if note else "")),
-                 dedup_key=f"shift-claim-decision:{claim.pk}:{stamp}")
+                 dedup_key=f"shift-claim-decision:{claim.pk}:{stamp}",
+                 sms={"shift": shift, "note": note})
     AuditEvent.objects.create(organization=request.organization, actor=request.user, action=f"shift.claim_{claim.status}", target_type="shift_claim", target_id=str(claim.pk), metadata={"shift": str(shift.pk), "officer": str(claim.officer_id), "note": note, "uncovered_hours": uncovered_hours})
     messages.success(request, ("Request approved and the post is filled." if claim.status == ShiftClaim.Status.APPROVED
                                else f"Request declined.{f' {shift.site} stays uncovered for {uncovered_hours}h — no other published post there stands those hours.' if uncovered_hours else ''}"))
@@ -1633,7 +1637,8 @@ def shift_cancel(request,shift_id):
     gap = uncovered_advisory(request.organization, scope_for(request), shift) if shift.officer_id else {"gaps": [], "text": ""}
     shift.status=Shift.Status.CANCELLED;shift.save(update_fields=["status"])
     queue_shift_notice(shift,event_type="shift.cancelled",dedup_key=f"shift-cancelled:{shift.pk}:{timezone.now().strftime('%Y%m%d%H%M')}",
-                       subject="Your shift was cancelled",body=f"{shift.site} on {shift.starts_at:%a %b %d, %H:%M} was cancelled: {reason}")
+                       subject="Your shift was cancelled",body=f"{shift.site} on {shift_when(shift)} was cancelled: {reason}",
+                       sms={"note":reason})
     hours=round(sum(item["hours"] for item in gap["gaps"]), 2)
     if gap["gaps"]:
         # The dispatcher whose authority reaches the post, never the actor who pressed the button:
@@ -1642,8 +1647,9 @@ def shift_cancel(request,shift_id):
         if recipients:
             queue_notice(organization=request.organization, recipients=recipients, event_type="shift.coverage_gap",
                          subject=f"{shift.site} loses {hours}h of coverage",
-                         body=gap["text"] + f" Cancelled post: {shift.starts_at:%a %b %d, %H:%M}. Reason: {reason}",
-                         dedup_key=f"shift-gap:{shift.pk}")
+                         body=gap["text"] + f" Cancelled post: {shift_when(shift)}. Reason: {reason}",
+                         dedup_key=f"shift-gap:{shift.pk}",
+                         sms={"shift": shift, "hours": f"{hours:g}", "note": reason})
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="shift.cancelled",target_type="shift",target_id=str(shift.pk),metadata={"reason":reason,"site":str(shift.site_id),"uncovered_hours":hours,"uncovered_windows":len(gap["gaps"])})
     messages.success(request,"Shift cancelled and the officer notified." + (f" {gap['text']} Post it as open, or find relief before {timezone.localtime(shift.starts_at):%a %H:%M}." if gap["gaps"] else ""))
     return redirect(_schedule_return(shift))
@@ -2026,15 +2032,17 @@ def offer_post(request, shift_id):
             queue_notice(organization=request.organization, recipients={replacement.user_id} - {None},
                 event_type="shift.swap_offered",
                 subject=f"{standing.full_name} asked you to take a post",
-                body=f"{shift.site} on {shift.starts_at:%a %b %d, %H:%M} to {shift.ends_at:%H:%M}."
+                body=f"{shift.site} on {shift_when(shift)}."
                      + (f" Reason: {swap.note}" if swap.note else ""),
-                dedup_key=f"shift-swap:{swap.pk}")
+                dedup_key=f"shift-swap:{swap.pk}",
+                sms={"shift": shift, "officer": standing, "note": swap.note})
             if raising == ShiftSwap.RaisedBy.MANAGER and standing.user_id:
                 queue_notice(organization=request.organization, recipients={standing.user_id},
                     event_type="shift.swap_offered", subject="Cover is being arranged for your post",
-                    body=f"A manager offered {shift.site} on {shift.starts_at:%a %b %d, %H:%M} to "
+                    body=f"A manager offered {shift.site} on {shift_when(shift)} to "
                          f"{replacement.full_name}. You keep the post until a manager approves the move.",
-                    dedup_key=f"shift-swap-raised:{swap.pk}")
+                    dedup_key=f"shift-swap-raised:{swap.pk}",
+                    sms={"notice": "shift.swap_offered.officer", "shift": shift, "other": replacement})
             AuditEvent.objects.create(organization=request.organization, actor=request.user, action="shift.swap_offered",
                 target_type="shift_swap", target_id=str(swap.pk),
                 metadata={"shift": str(shift.pk), "requester": str(standing.pk), "replacement": str(replacement.pk),
@@ -2049,15 +2057,17 @@ def offer_post(request, shift_id):
             queue_notice(organization=request.organization, recipients={partner.user_id} - {None},
                 event_type="shift.exchange_proposed",
                 subject=f"{standing.full_name} wants to trade posts with you",
-                body=f"{shift.site} on {shift.starts_at:%a %b %d, %H:%M} — choose which of your own posts "
+                body=f"{shift.site} on {shift_when(shift)} — choose which of your own posts "
                      "to put in, from My shifts. Nothing moves until a manager approves the pair.",
-                dedup_key=f"shift-exchange:{exchange.pk}")
+                dedup_key=f"shift-exchange:{exchange.pk}",
+                sms={"shift": shift, "officer": standing, "note": exchange.note})
             if raising == ShiftSwap.RaisedBy.MANAGER and standing.user_id:
                 queue_notice(organization=request.organization, recipients={standing.user_id},
                     event_type="shift.exchange_proposed", subject="A trade is being arranged for your post",
-                    body=f"A manager proposed trading {shift.site} on {shift.starts_at:%a %b %d, %H:%M} with "
+                    body=f"A manager proposed trading {shift.site} on {shift_when(shift)} with "
                          f"{partner.full_name}. You keep the post until a manager approves.",
-                    dedup_key=f"shift-exchange-raised:{exchange.pk}")
+                    dedup_key=f"shift-exchange-raised:{exchange.pk}",
+                    sms={"notice": "shift.exchange_proposed.officer", "shift": shift, "other": partner})
             AuditEvent.objects.create(organization=request.organization, actor=request.user, action="shift.exchange_proposed",
                 target_type="shift_exchange", target_id=str(exchange.pk),
                 metadata={"shift": str(shift.pk), "initiator": str(standing.pk), "partner": str(partner.pk),
@@ -2104,15 +2114,18 @@ def swap_respond(request, swap_id):
         queue_notice(organization=request.organization, recipients=dispatch_recipients_for_shift(shift, swap.requester),
             event_type="shift.swap_agreed",
             subject=f"Shift swap waiting for approval — {shift.site}",
-            body=f"{swap.requester.full_name} offered {shift.starts_at:%a %b %d, %H:%M} to {person.full_name}, "
+            body=f"{swap.requester.full_name} offered {shift_when(shift)} to {person.full_name}, "
                  "and they accepted. Approve it in Shift swaps.",
-            dedup_key=f"shift-swap-agreed:{swap.pk}:{stamp}")
+            dedup_key=f"shift-swap-agreed:{swap.pk}:{stamp}",
+            sms={"shift": shift, "officer": swap.requester, "other": person})
     queue_notice(organization=request.organization, recipients={swap.requester.user_id} - {None},
         event_type=f"shift.swap_{swap.status}",
         subject=("Your swap was accepted — waiting on a manager" if action == ShiftSwap.Status.AGREED
                  else "Your colleague could not take the post"),
-        body=f"{person.full_name} {swap.status} your offer of {shift.site} on {shift.starts_at:%a %b %d, %H:%M}.",
-        dedup_key=f"shift-swap-answer:{swap.pk}:{stamp}")
+        body=f"{person.full_name} {swap.status} your offer of {shift.site} on {shift_when(shift)}.",
+        dedup_key=f"shift-swap-answer:{swap.pk}:{stamp}",
+        sms={"notice": "shift.swap_agreed.requester" if action == ShiftSwap.Status.AGREED else "shift.swap_declined",
+             "shift": shift, "officer": person})
     AuditEvent.objects.create(organization=request.organization, actor=request.user, action=f"shift.swap_{swap.status}",
         target_type="shift_swap", target_id=str(swap.pk), metadata={"shift": str(shift.pk)})
     messages.success(request, "Accepted — a manager whose authority covers this post is asked to approve it."
@@ -2135,8 +2148,9 @@ def swap_withdraw(request, swap_id):
     swap.save(update_fields=["status", "decided_by", "decided_at"])
     queue_notice(organization=request.organization, recipients={swap.replacement.user_id} - {None},
         event_type="shift.swap_withdrawn", subject="A swap offer was withdrawn",
-        body=f"{swap.requester.full_name} no longer needs {swap.shift.site} on {swap.shift.starts_at:%a %b %d, %H:%M} covered.",
-        dedup_key=f"shift-swap-withdrawn:{swap.pk}")
+        body=f"{swap.requester.full_name} no longer needs {swap.shift.site} on {shift_when(swap.shift)} covered.",
+        dedup_key=f"shift-swap-withdrawn:{swap.pk}",
+        sms={"shift": swap.shift, "officer": swap.requester})
     AuditEvent.objects.create(organization=request.organization, actor=request.user, action="shift.swap_withdrawn",
         target_type="shift_swap", target_id=str(swap.pk), metadata={"shift": str(swap.shift_id)})
     messages.success(request, "Offer withdrawn.")
@@ -2179,7 +2193,8 @@ def exchange_respond(request, exchange_id):
             event_type="shift.exchange_declined", subject="Your colleague could not trade",
             body=f"{person.full_name} declined to trade posts with you. You keep {exchange.initiator_shift.site} "
                  "on the schedule — ask someone else, or offer the post outright.",
-            dedup_key=f"shift-exchange-declined:{exchange.pk}")
+            dedup_key=f"shift-exchange-declined:{exchange.pk}",
+            sms={"shift": exchange.initiator_shift, "officer": person})
         AuditEvent.objects.create(organization=request.organization, actor=request.user,
             action="shift.exchange_declined", target_type="shift_exchange", target_id=str(exchange.pk),
             metadata={"partner": str(person.pk)})
@@ -2207,12 +2222,14 @@ def exchange_respond(request, exchange_id):
         subject=f"Shift trade waiting for approval — {exchange.initiator_shift.site}",
         body=f"{exchange.initiator.full_name} and {person.full_name} agreed to trade two posts. "
              "Approve or refuse the pair in Shift moves.",
-        dedup_key=f"shift-exchange-agreed:{exchange.pk}:{now.strftime('%Y%m%d%H%M')}")
+        dedup_key=f"shift-exchange-agreed:{exchange.pk}:{now.strftime('%Y%m%d%H%M')}",
+        sms={"shift": exchange.initiator_shift, "officer": exchange.initiator, "other": person})
     queue_notice(organization=request.organization, recipients={exchange.initiator.user_id} - {None},
         event_type="shift.exchange_agreed", subject="Your trade was accepted — waiting on a manager",
         body=f"{person.full_name} put in {exchange.partner_shift.site} on "
-             f"{exchange.partner_shift.starts_at:%a %b %d, %H:%M}. Nothing moves until a manager approves the pair.",
-        dedup_key=f"shift-exchange-accepted:{exchange.pk}")
+             f"{shift_when(exchange.partner_shift)}. Nothing moves until a manager approves the pair.",
+        dedup_key=f"shift-exchange-accepted:{exchange.pk}",
+        sms={"notice": "shift.exchange_agreed.initiator", "shift": exchange.partner_shift, "officer": person})
     AuditEvent.objects.create(organization=request.organization, actor=request.user, action="shift.exchange_agreed",
         target_type="shift_exchange", target_id=str(exchange.pk),
         metadata={"initiator_shift": str(exchange.initiator_shift_id), "partner_shift": str(exchange.partner_shift_id)})
@@ -2235,8 +2252,9 @@ def exchange_withdraw(request, exchange_id):
     queue_notice(organization=request.organization, recipients={exchange.partner.user_id} - {None},
         event_type="shift.exchange_withdrawn", subject="A trade offer was withdrawn",
         body=f"{exchange.initiator.full_name} no longer wants to trade {exchange.initiator_shift.site} "
-             f"{exchange.initiator_shift.starts_at:%a %b %d, %H:%M}. Nothing has moved.",
-        dedup_key=f"shift-exchange-withdrawn:{exchange.pk}")
+             f"{shift_when(exchange.initiator_shift)}. Nothing has moved.",
+        dedup_key=f"shift-exchange-withdrawn:{exchange.pk}",
+        sms={"shift": exchange.initiator_shift, "officer": exchange.initiator})
     AuditEvent.objects.create(organization=request.organization, actor=request.user, action="shift.exchange_withdrawn",
         target_type="shift_exchange", target_id=str(exchange.pk))
     messages.success(request, "Trade withdrawn.")
@@ -2311,17 +2329,19 @@ def exchange_decide(request, exchange_id):
     _decide_exchange(exchange, request)
     stamp = timezone.now().strftime("%Y%m%d%H%M")
     body = (f"{exchange.initiator.full_name} now stands {exchange.partner_shift.site} on "
-            f"{exchange.partner_shift.starts_at:%a %b %d, %H:%M}, and {exchange.partner.full_name} stands "
-            f"{exchange.initiator_shift.site} on {exchange.initiator_shift.starts_at:%a %b %d, %H:%M}."
+            f"{shift_when(exchange.partner_shift)}, and {exchange.partner.full_name} stands "
+            f"{exchange.initiator_shift.site} on {shift_when(exchange.initiator_shift)}."
             if action == ShiftExchange.Status.APPROVED else
             f"The trade of {exchange.initiator_shift.site} and {exchange.partner_shift.site} was not approved."
             + (f" Reason: {note}" if note else " Both officers keep their current posts."))
-    queue_notice(organization=request.organization, recipients=exchange.involved_user_ids(),
-        event_type=f"shift.exchange_{exchange.status}",
-        subject=("Your trade is approved" if action == ShiftExchange.Status.APPROVED else "Trade refused"),
-        body=body + (" Your punches for time already worked stay on your own timecard."
-                     if action == ShiftExchange.Status.APPROVED else ""),
-        dedup_key=f"shift-exchange-{exchange.status}:{exchange.pk}:{stamp}")
+    for officer, other in ((exchange.initiator, exchange.partner), (exchange.partner, exchange.initiator)):
+        queue_notice(organization=request.organization, recipients={officer.user_id} - {None},
+            event_type=f"shift.exchange_{exchange.status}",
+            subject=("Your trade is approved" if action == ShiftExchange.Status.APPROVED else "Trade refused"),
+            body=body + (" Your punches for time already worked stay on your own timecard."
+                         if action == ShiftExchange.Status.APPROVED else ""),
+            dedup_key=f"shift-exchange-{exchange.status}:{exchange.pk}:{stamp}",
+            sms={"shift": exchange.initiator_shift, "officer": officer, "other": other, "note": note})
     AuditEvent.objects.create(organization=request.organization, actor=request.user,
         action=f"shift.exchange_{exchange.status}", target_type="shift_exchange", target_id=str(exchange.pk),
         metadata={"initiator_shift": str(exchange.initiator_shift_id), "partner_shift": str(exchange.partner_shift_id),
@@ -2339,7 +2359,8 @@ def _decide_exchange(exchange, request, notify=False):
         queue_notice(organization=exchange.organization, recipients=exchange.involved_user_ids(),
             event_type=f"shift.exchange_{exchange.status}", subject="A trade offer closed",
             body=f"{exchange.review_note} No action needed from you.",
-            dedup_key=f"shift-exchange-closed:{exchange.pk}")
+            dedup_key=f"shift-exchange-closed:{exchange.pk}",
+            sms={"notice": "shift.exchange_closed", "note": exchange.review_note})
 
 
 @membership_required(*MANAGERS)
@@ -2470,23 +2491,26 @@ def swap_decide(request, swap_id):
     if action == ShiftSwap.Status.APPROVED:
         queue_notice(organization=request.organization, recipients={swap.replacement.user_id} - {None},
             event_type="shift.swap_approved", subject="You're scheduled — " + str(shift.site),
-            body=f"{shift.site} on {shift.starts_at:%a %b %d, %H:%M} to {shift.ends_at:%H:%M} is yours."
+            body=f"{shift.site} on {shift_when(shift)} is yours."
                  + (f" Note: {note}" if note else ""),
-            dedup_key=f"shift-swap-approved:{swap.pk}:{stamp}")
+            dedup_key=f"shift-swap-approved:{swap.pk}:{stamp}",
+            sms={"shift": shift, "note": note})
         queue_notice(organization=request.organization, recipients={swap.requester.user_id} - {None},
             event_type="shift.swap_approved", subject="Your swap was approved",
-            body=f"{swap.replacement.full_name} is standing {shift.site} on {shift.starts_at:%a %b %d, %H:%M}."
+            body=f"{swap.replacement.full_name} is standing {shift.site} on {shift_when(shift)}."
                  + (" Your punches for time already worked stay on your timecard." if Punch.objects.filter(shift=shift, person=swap.requester).exists() else ""),
-            dedup_key=f"shift-swap-approved-requester:{swap.pk}:{stamp}")
+            dedup_key=f"shift-swap-approved-requester:{swap.pk}:{stamp}",
+            sms={"notice": "shift.swap_approved.requester", "shift": shift, "officer": swap.replacement})
         for advisory in shift_advisories(shift):
             messages.warning(request, advisory)
     else:
         queue_notice(organization=request.organization,
             recipients={swap.requester.user_id, swap.replacement.user_id} - {None},
             event_type="shift.swap_refused", subject="Swap refused — " + str(shift.site),
-            body=f"The swap of {shift.site} on {shift.starts_at:%a %b %d, %H:%M} was not approved."
+            body=f"The swap of {shift.site} on {shift_when(shift)} was not approved."
                  + (f" Reason: {note}" if note else " You are still scheduled."),
-            dedup_key=f"shift-swap-refused:{swap.pk}:{stamp}")
+            dedup_key=f"shift-swap-refused:{swap.pk}:{stamp}",
+            sms={"shift": shift, "note": note or "You're still scheduled."})
     AuditEvent.objects.create(organization=request.organization, actor=request.user,
         action=f"shift.swap_{swap.status}", target_type="shift_swap", target_id=str(swap.pk),
         metadata={"shift": str(shift.pk), "requester": str(swap.requester_id),
@@ -2504,7 +2528,8 @@ def _decide_swap(swap, request, notify=False):
         queue_notice(organization=swap.organization, recipients={swap.replacement.user_id},
             event_type="shift.swap_refused", subject="A swap offer closed",
             body=f"{swap.review_note} No action needed from you.",
-            dedup_key=f"shift-swap-closed:{swap.pk}")
+            dedup_key=f"shift-swap-closed:{swap.pk}",
+            sms={"notice": "shift.swap_closed", "shift": swap.shift, "note": swap.review_note})
 
 
 def _time_off_managers(organization, person):
@@ -2594,8 +2619,9 @@ def my_time_off(request):
         queue_notice(organization=request.organization, recipients=_time_off_managers(request.organization, person),
                      event_type="timeoff.requested",
                      subject=f"{person.full_name} asked for time off",
-                     body=f"{person.full_name} requested {item.starts_at:%b %d} to {item.ends_at:%b %d} off." + (f" Reason: {item.reason}" if item.reason else ""),
-                     dedup_key=f"timeoff-requested:{item.pk}")
+                     body=f"{person.full_name} requested {date_span(request.organization, item.starts_at, item.ends_at)} off." + (f" Reason: {item.reason}" if item.reason else ""),
+                     dedup_key=f"timeoff-requested:{item.pk}",
+                     sms={"officer": person, "dates": (item.starts_at, item.ends_at), "note": item.reason})
         AuditEvent.objects.create(organization=request.organization, actor=request.user, action="timeoff.requested", target_type="time_off_request", target_id=str(item.pk), metadata={"person": str(person.pk), "starts_at": item.starts_at.isoformat(), "ends_at": item.ends_at.isoformat()})
         messages.success(request, "Time off requested. A manager will decide it.")
         return redirect("my_time_off")
@@ -2680,9 +2706,10 @@ def time_off_decide(request, request_id):
     queue_notice(organization=request.organization, recipients=({item.person.user_id} if item.person.user_id else set()),
                  event_type=f"timeoff.{action}",
                  subject=("Time off approved — " if action == TimeOffRequest.Status.APPROVED else "Time off declined — ") + item.person.full_name,
-                 body=(f"Your request for {item.starts_at:%b %d} to {item.ends_at:%b %d} was {action}."
+                 body=(f"Your request for {date_span(request.organization, item.starts_at, item.ends_at)} was {action}."
                        + (f" Note: {note}" if note else "")),
-                 dedup_key=f"timeoff-decision:{item.pk}:{stamp}")
+                 dedup_key=f"timeoff-decision:{item.pk}:{stamp}",
+                 sms={"dates": (item.starts_at, item.ends_at), "note": note})
     AuditEvent.objects.create(organization=request.organization, actor=request.user, action=f"timeoff.{action}", target_type="time_off_request", target_id=str(item.pk), metadata={"person": str(item.person_id), "note": note, "starts_at": item.starts_at.isoformat(), "ends_at": item.ends_at.isoformat()})
     collisions = colliding_posts(item) if action == TimeOffRequest.Status.APPROVED else []
     if collisions:
@@ -3618,7 +3645,9 @@ def disposition_request(request,document_id):
         queue_notice(organization=request.organization,recipients=set(role_recipients(request.organization,PRIVILEGED))-{request.user.pk},event_type="retention.disposition_requested",
             subject=f"Second approval needed: {item.get_action_display().lower()} “{document.original_name}”",
             body=f"{request.user} asked to {item.action.lower()} “{document.original_name}” ({document.document_type.name}). Reason: {item.reason}. A second owner or administrator must authorize it.",
-            dedup_key=f"retention.requested:{item.pk}")
+            dedup_key=f"retention.requested:{item.pk}",
+            sms={"item": document.original_name, "action": item.get_action_display().lower(),
+                 "actor": request.user, "note": item.reason})
         messages.success(request,"Disposition request created.");return redirect("retention_review")
     return render(request,"core/form.html",{"form":form,"title":"Request record disposition","eyebrow":"Retention"})
 
@@ -3645,7 +3674,9 @@ def legal_hold_toggle(request,document_id):
         subject=f"Legal hold {'applied' if document.legal_hold else 'released'}: {document.original_name}",
         body=(f"{request.user} {'placed' if document.legal_hold else 'removed'} a legal hold on “{document.original_name}” "
               f"({document.document_type.name}). Disposition is {'blocked while the hold stands' if document.legal_hold else 'possible again'}."),
-        dedup_key=f"retention.hold:{document.pk}:{document.legal_hold}")
+        dedup_key=f"retention.hold:{document.pk}:{document.legal_hold}",
+        sms={"status": "applied" if document.legal_hold else "released", "item": document.original_name,
+             "actor": request.user})
     messages.success(request,"Legal hold updated.");return redirect("retention_review")
 
 @membership_required(*MANAGERS)
@@ -3999,6 +4030,86 @@ def messaging_rule_remove(request, rule_id):
     messages.success(request, f"{label} notices about {scope} go back to the default channels.")
     return redirect("messaging_settings")
 
+
+def _sms_rows(organization):
+    from .models import SmsTemplate
+    from . import sms as sms_text
+    custom = dict(SmsTemplate.objects.filter(organization=organization).values_list("notice_key", "body"))
+    groups = {}
+    for notice in sms_text.SMS_NOTICES.values():
+        wording = custom.get(notice.key) or notice.default
+        preview = sms_text.preview_sms(organization, notice, wording)
+        groups.setdefault(sms_text.FAMILY_LABELS.get(notice.family, "Other"), []).append({
+            "notice": notice, "wording": wording, "custom": notice.key in custom,
+            "preview": preview, "size": sms_text.segment_info(preview)})
+    return groups
+
+
+@membership_required(*PRIVILEGED)
+def sms_templates(request):
+    """Every text this company can send, in the words it will actually use."""
+    from . import sms as sms_text
+    organization = request.organization
+    groups = _sms_rows(organization)
+    rows = [row for items in groups.values() for row in items]
+    return render(request, "core/sms_templates.html", {
+        "groups": groups.items(), "prefix": sms_text.company_prefix(organization),
+        "base_url": sms_text.public_base_url(organization),
+        "custom_count": sum(1 for row in rows if row["custom"]),
+        "multi_count": sum(1 for row in rows if row["size"]["segments"] > 1)})
+
+
+@membership_required(*PRIVILEGED)
+def sms_template_edit(request, notice_key):
+    """Reword one text, with the placeholders it may use and a preview of what a phone shows."""
+    from .models import SmsTemplate
+    from . import sms as sms_text
+    organization = request.organization
+    notice = sms_text.notice_for(notice_key)
+    if notice is None:
+        raise Http404
+    row = SmsTemplate.objects.filter(organization=organization, notice_key=notice.key).first()
+    wording = row.body if row else notice.default
+    errors = []
+    if request.method == "POST":
+        if request.POST.get("action") == "reset":
+            if row:
+                row.delete()
+                AuditEvent.objects.create(organization=organization, actor=request.user,
+                    action="message.sms_template_reset", target_type="sms_template", target_id=notice.key,
+                    metadata={"notice": notice.key, "previous": row.body})
+            messages.success(request, f"“{notice.label}” texts use the built-in wording again.")
+            return redirect("sms_templates")
+        wording = (request.POST.get("body") or "").replace("\r\n", "\n").strip()
+        errors = sms_text.validate_template(notice, wording)
+        if not errors:
+            previous = row.body if row else None
+            if wording == notice.default:
+                if row:
+                    row.delete()
+            else:
+                SmsTemplate.objects.update_or_create(organization=organization, notice_key=notice.key,
+                    defaults={"body": wording, "updated_by": request.user})
+            AuditEvent.objects.create(organization=organization, actor=request.user,
+                action="message.sms_template_updated", target_type="sms_template", target_id=notice.key,
+                metadata={"notice": notice.key, "previous": previous, "body": wording})
+            preview = sms_text.preview_sms(organization, notice, wording)
+            size = sms_text.segment_info(preview)
+            messages.success(request, f"Saved. A typical “{notice.label}” text is now {size['characters']} "
+                f"characters ({size['segments']} segment{'s' if size['segments'] != 1 else ''}).")
+            return redirect("sms_templates")
+    preview = sms_text.preview_sms(organization, notice, wording)
+    return render(request, "core/sms_template_edit.html", {
+        "notice": notice, "wording": wording, "default": notice.default, "custom": row is not None,
+        "errors": errors, "preview": preview, "size": sms_text.segment_info(preview),
+        "prefix": sms_text.company_prefix(organization), "base_url": sms_text.public_base_url(organization),
+        "placeholders": [(name, sms_text.PLACEHOLDERS[name], sms_text.SAMPLE_VALUES.get(name, ""))
+                         for name in notice.allowed],
+        "link_sample": sms_text.sample_link(organization, notice),
+        "samples": {**{name: sms_text.SAMPLE_VALUES.get(name, "") for name in notice.allowed},
+                    "link": sms_text.sample_link(organization, notice)},
+        "max_length": sms_text.MAX_TEMPLATE_LENGTH})
+
 @require_POST
 @membership_required(*PRIVILEGED)
 @transaction.atomic
@@ -4259,9 +4370,11 @@ def adjustment_request(request,punch_id):
             event_type="punch.correction_requested",
             subject=f"Time correction from {person.full_name}",
             body=(f"{person} asked to move a {punch.get_kind_display().lower()} on "
-                  f"{timezone.localtime(punch.occurred_at):%d %b %Y %H:%M} to {timezone.localtime(item.proposed_at):%d %b %Y %H:%M}."
+                  f"{moment_label(request.organization, punch.occurred_at)} to {moment_label(request.organization, item.proposed_at)}."
                   f" Reason: {item.reason}"),
-            dedup_key=f"punch.correction:{item.pk}")
+            dedup_key=f"punch.correction:{item.pk}",
+            sms={"officer": person, "kind": punch.get_kind_display().lower(), "at": item.proposed_at,
+                 "note": item.reason})
         messages.success(request,"Correction requested."); return redirect("clock")
     return render(request,"core/form.html",{"form":form,"title":"Request time correction","eyebrow":"Timekeeping"})
 
@@ -4289,10 +4402,11 @@ def adjustment_review(request,adjustment_id):
         event_type=f"punch.correction_{status}",
         subject=f"Time correction {'approved' if status==PunchAdjustment.Status.APPROVED else 'declined'}",
         body=(f"Your correction for the {item.punch.get_kind_display().lower()} on "
-              f"{timezone.localtime(item.punch.occurred_at):%d %b %Y %H:%M} was "
-              f"{'approved at ' + format(timezone.localtime(item.proposed_at), '%d %b %Y %H:%M') if status==PunchAdjustment.Status.APPROVED else 'declined'}."
+              f"{moment_label(request.organization, item.punch.occurred_at)} was "
+              f"{'approved at ' + moment_label(request.organization, item.proposed_at) if status==PunchAdjustment.Status.APPROVED else 'declined'}."
               + (f" Note: {note}" if note else "")),
-        dedup_key=f"punch.correction:{item.pk}:{status}")
+        dedup_key=f"punch.correction:{item.pk}:{status}",
+        sms={"kind": item.punch.get_kind_display().lower(), "at": item.proposed_at, "note": note})
     messages.success(request,"Correction review saved.")
     return redirect(return_url)
 
@@ -4521,7 +4635,8 @@ def payroll_run_export(request,run_id):
         event_type="payroll.exported",
         subject=f"Payroll exported for {run.period_start.date()} – {run.period_end.date()}",
         body=f"{request.user} downloaded the {format.upper()} for {len(run.snapshot)} employee row(s). The period is now marked exported.",
-        dedup_key=f"payroll.exported:{run.pk}:{format}")
+        dedup_key=f"payroll.exported:{run.pk}:{format}",
+        sms={"period": (run.period_start, run.period_end), "actor": request.user, "count": len(run.snapshot)})
     response=HttpResponse(output,content_type=content_type);response["Content-Disposition"]=f'attachment; filename="payroll-{run.period_start.date()}-{run.period_end.date()}.{format}"';return response
 
 @membership_required(Membership.Role.OWNER,Membership.Role.ADMIN)
@@ -4939,7 +5054,8 @@ def onboarding_task_decide(request, task_id):
                      body=(f"{'It is marked complete. ' if task.status == OnboardingTask.Status.DONE else 'It has been waived for you: '}"
                            + f"{task.item.name} for {org.display_name or org.legal_name}."
                            + (f" Reason recorded: {task.note}" if task.note else "")),
-                     dedup_key=f"onboarding-decision:{task.pk}:{task.status}")
+                     dedup_key=f"onboarding-decision:{task.pk}:{task.status}",
+                     sms={"item": task.item.name, "note": task.note})
     messages.success(request, {"done": f"{task.item.name} is complete.",
                                "waived": f"{task.item.name} is waived for {task.person.full_name}.",
                                "open": f"{task.item.name} is outstanding again."}[task.status])
@@ -5012,7 +5128,9 @@ def credential_registry_check(request, credential_id):
                            f"{credential.person.full_name} was checked against the registry on {checked_on:%d %b %Y} "
                            f"and the result was “{check.get_result_display()}”. The credential has not been changed — "
                            "somebody has to decide what the file should now say."),
-                     dedup_key=f"credential-registry:{check.pk}")
+                     dedup_key=f"credential-registry:{check.pk}",
+                     sms={"officer": credential.person, "item": credential.credential_type.name,
+                          "status": check.get_result_display().lower()})
         messages.warning(request, f"Recorded: the registry says {check.get_result_display().lower()}. The credential status was left as it was for a person to decide.")
     else:
         messages.success(request, ("Registry check recorded." + (" The credential is now marked verified."

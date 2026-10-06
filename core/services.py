@@ -24,6 +24,7 @@ from django.db import DatabaseError, connection, transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 from .scope import ActorScope, dispatch_recipients_for_shift, manager_recipients_by_person
+from .sms import moment_label, shift_when
 from .models import (
     AUDIENCE_ROLES, AuditEvent, AuditRedaction, AuditSeal, audit_event_hash, audit_seal_path, AvailabilityRule, ChannelAudience, ChannelRule, ClockKiosk, ComplianceRule, Credential, CredentialRegistryCheck, CredentialType,
     DeliveryEvent, MessageConsent, Suppression,
@@ -408,7 +409,9 @@ def apply_recurring_plan(template, range_start, range_end, status, actor=None):
                 subject=f"{len(created)} recurring posts added to your schedule",
                 body=f"{template.name} at {template.site} from {created[0].starts_at:%a %b %d} "
                      f"({template.window_label}). Open your shifts to see them.",
-                dedup_key=f"series:{template.pk}:{range_start}:{range_end}")
+                dedup_key=f"series:{template.pk}:{range_start}:{range_end}",
+                sms={"notice": "shift.published.series", "site": template.site,
+                     "starts_at": created[0].starts_at, "count": len(created)})
     plan["created"] = created
     plan["count"] = len(created)
     return plan
@@ -1829,10 +1832,12 @@ def record_punch(*, organization, person, client_event_id, kind, occurred_at, ac
             subject=f"Timecard exception: {person.full_name}",
             body=("{} at {} — {}. {}".format(
                     "Clock-in" if kind == Punch.Kind.IN else "Clock-out",
-                    occurred_at.strftime("%d %b %Y %H:%M"), " ".join(exceptions),
+                    moment_label(organization, occurred_at), " ".join(exceptions),
                     "Synchronised from an offline device, so compare it against the device log." if offline
                     else "Review it in Time review.")),
-            dedup_key=f"punch.exception:{punch.pk}")
+            dedup_key=f"punch.exception:{punch.pk}",
+            sms={"officer": person, "kind": "clock-in" if kind == Punch.Kind.IN else "clock-out",
+                 "at": occurred_at, "note": " ".join(exceptions)})
     return punch,True
 
 def round_minutes(minutes, policy):
@@ -2204,7 +2209,8 @@ def reopen_payroll_run(run, actor, reason):
         subject=f"Payroll reopened for {run.period_start.date()} – {run.period_end.date()}",
         body=(f"Reopened by {actor} (time {run.reopen_count}): {run.reopen_reason} "
               f"The approved figure for this period no longer stands; the snapshot has to be regenerated and re-approved."),
-        dedup_key=f"payroll.reopened:{run.pk}:{run.reopen_count}")
+        dedup_key=f"payroll.reopened:{run.pk}:{run.reopen_count}",
+        sms={"period": (run.period_start, run.period_end), "actor": actor, "note": run.reopen_reason})
     return run
 
 @transaction.atomic
@@ -2220,7 +2226,8 @@ def approve_payroll_run(run,actor):
     queue_notice(organization=run.organization,recipients=payroll_recipients(run.organization)-{actor.pk},event_type="payroll.locked",
         subject=f"Payroll locked for {run.period_start.date()} – {run.period_end.date()}",
         body=f"{len(run.snapshot)} employee row(s) approved and locked by {actor}. Corrections now require the period to be reopened.",
-        dedup_key=f"payroll.locked:{run.pk}")
+        dedup_key=f"payroll.locked:{run.pk}",
+        sms={"period": (run.period_start, run.period_end), "actor": actor, "count": len(run.snapshot)})
     return run
 
 
@@ -2829,7 +2836,7 @@ def audience_reaches_role(audience, role):
     return role in AUDIENCE_ROLES.get(audience, ())
 
 
-def queue_notice(*, organization, recipients, event_type, subject, body, dedup_key, channels=(Notification.Channel.IN_APP, Notification.Channel.EMAIL), mandatory=None, subject_user_ids=()):
+def queue_notice(*, organization, recipients, event_type, subject, body, dedup_key, channels=(Notification.Channel.IN_APP, Notification.Channel.EMAIL), mandatory=None, subject_user_ids=(), sms=None):
     """Queue one durable notification per recipient and channel.
 
     Deduplication is what keeps a re-published schedule or a daily reminder pass from
@@ -2845,7 +2852,13 @@ def queue_notice(*, organization, recipients, event_type, subject, body, dedup_k
     themselves pass it, and that is what lets NTF-1 route their copy differently from the manager's.
     ``channels`` stays the caller's answer for any recipient no rule speaks for, so a company with no
     rules delivers exactly what it delivered before this function knew about audiences.
+
+    ``sms`` is what the text-message wording needs: the shift, the people and the short values its
+    placeholders draw on, plus an optional ``notice`` key when one event reaches two people who need
+    different sentences. An SMS row stores that rendered text as its body, never the email paragraph,
+    because the body is exactly what the provider sends (see `core.sms`).
     """
+    from .sms import render_sms, resolve_key
     if mandatory is None:
         mandatory = event_is_mandatory(event_type)
     recipients = set(recipients)
@@ -2855,14 +2868,27 @@ def queue_notice(*, organization, recipients, event_type, subject, body, dedup_k
     # queues per credential, and a handful of rules re-queried once per officer per rung would cost
     # more than the deliveries it is deciding.
     rules = list(organization.channel_rules.all())
+    sms_key = resolve_key(event_type, sms)
+    first_names = None
+    texts = {}
     created = 0
     for user_id in recipients:
         audience = notification_audience(roles.get(user_id), is_subject=user_id in subjects)
         for channel in rule_channels(rules, event_type, audience, channels):
+            text = body
+            if channel == Notification.Channel.SMS:
+                if first_names is None:
+                    from django.contrib.auth import get_user_model
+                    first_names = dict(get_user_model().objects.filter(pk__in=recipients)
+                                       .values_list("pk", "first_name"))
+                first = first_names.get(user_id) or ""
+                if first not in texts:
+                    texts[first] = render_sms(organization, sms_key, sms, subject, first)
+                text = texts[first]
             _, was_created = Notification.objects.get_or_create(
                 organization=organization, recipient_id=user_id, channel=channel,
                 deduplication_key=f"{dedup_key}:{channel}",
-                defaults={"event_type": event_type, "subject": subject, "body": body,
+                defaults={"event_type": event_type, "subject": subject, "body": text,
                           "mandatory": mandatory},
             )
             created += int(was_created)
@@ -3029,12 +3055,12 @@ def expire_stale_moves(organization=None, now=None):
         swap.decided_at = now
         swap.review_note = "The post started before this was answered."
         swap.save(update_fields=["status", "decided_at", "review_note"])
-        queue_notice(organization=organization,
+        queue_notice(organization=swap.organization,
             recipients={swap.requester.user_id, swap.replacement.user_id} - {None},
             event_type="shift.swap_expired", subject="A swap offer expired",
-            body=f"{swap.shift.site} on {swap.shift.starts_at:%a %b %d, %H:%M} started before this was "
+            body=f"{swap.shift.site} on {shift_when(swap.shift)} started before this was "
                  "answered. The post stays with the officer scheduled on it.",
-            dedup_key=f"shift-swap-expired:{swap.pk}")
+            dedup_key=f"shift-swap-expired:{swap.pk}", sms={"shift": swap.shift})
         closed += 1
     for exchange in exchanges:
         earliest = min([row.starts_at for row in (exchange.initiator_shift, exchange.partner_shift) if row] or [None])
@@ -3044,12 +3070,15 @@ def expire_stale_moves(organization=None, now=None):
         exchange.decided_at = now
         exchange.review_note = "A post in this exchange started before it was answered."
         exchange.save(update_fields=["status", "decided_at", "review_note"])
-        queue_notice(organization=organization,
-            recipients={exchange.initiator.user_id, exchange.partner.user_id} - {None},
-            event_type="shift.exchange_expired", subject="A shift trade expired",
-            body=f"The trade between {exchange.initiator.full_name} and {exchange.partner.full_name} was not "
-                 "answered before the post started. Both officers keep their current assignments.",
-            dedup_key=f"shift-exchange-expired:{exchange.pk}")
+        # One call per officer so the text can name the *other* person in the trade.
+        for officer, other in ((exchange.initiator, exchange.partner), (exchange.partner, exchange.initiator)):
+            queue_notice(organization=exchange.organization,
+                recipients={officer.user_id} - {None},
+                event_type="shift.exchange_expired", subject="A shift trade expired",
+                body=f"The trade between {exchange.initiator.full_name} and {exchange.partner.full_name} was not "
+                     "answered before the post started. Both officers keep their current assignments.",
+                dedup_key=f"shift-exchange-expired:{exchange.pk}",
+                sms={"shift": exchange.initiator_shift, "officer": officer, "other": other})
         closed += 1
     return closed
 
@@ -3086,9 +3115,11 @@ def fill_active_series(organization=None):
                 recipients=dispatch_recipients_for_shift(probe, template.officer),
                 event_type="shift.series_blocked",
                 subject=f"A recurring post could not be placed — {template.site}",
-                body=f"{template.name}: {timezone.localtime(row['starts_at']):%a %b %d, %H:%M} was not "
+                body=f"{template.name}: {moment_label(template.organization, row['starts_at'])} was not "
                      "generated — " + " ".join(row["reasons"]) + ". Fix the cause and the next run places it.",
-                dedup_key=f"series-blocked:{template.pk}:{row['starts_at']:%Y%m%d}")
+                dedup_key=f"series-blocked:{template.pk}:{row['starts_at']:%Y%m%d}",
+                sms={"site": template.site, "starts_at": row["starts_at"], "ends_at": row["ends_at"],
+                     "note": " ".join(row["reasons"])})
             reported += 1
     return created_total, reported
 
@@ -3138,13 +3169,13 @@ def queue_missing_punch_reports(now=None, days=None, organizations=None):
             created_total += queue_notice(organization=organization, recipients=recipients,
                 event_type="punch.missing",
                 subject=f"Missing {', '.join(gaps)} for {officer.full_name}",
-                body=("{name} was stood at {post} from {start} to {end} with no {gaps} recorded."
+                body=("{name} was scheduled at {post} {when} with no {gaps} recorded."
                       " Correct the timecard or confirm the hours were not worked.").format(
                         name=officer.full_name,
-                        post=f"{shift.site} · {shift.post_name}" if shift.post_name else str(shift.site),
-                        start=shift.starts_at.strftime("%d %b %Y %H:%M"), end=shift.ends_at.strftime("%d %b %Y %H:%M"),
-                        gaps=", ".join(gaps)),
-                dedup_key=f"punch.missing:{shift.pk}:{'-'.join(gaps)}")
+                        post=f"{shift.site.name} ({shift.post_name})" if shift.post_name else shift.site.name,
+                        when=shift_when(shift), gaps=" or ".join(gaps)),
+                dedup_key=f"punch.missing:{shift.pk}:{'-'.join(gaps)}",
+                sms={"shift": shift, "officer": officer, "gaps": " and ".join(gaps)})
     return created_total
 
 
@@ -3246,11 +3277,11 @@ def queue_compliance_reminders(today=None):
     today = today or timezone.localdate()
     created = 0
 
-    def queue(*, organization, event_type, subject, body, dedup_key, recipients, subject_user_ids=()):
+    def queue(*, organization, event_type, subject, body, dedup_key, recipients, subject_user_ids=(), sms=None):
         nonlocal created
         created += queue_notice(organization=organization, recipients=recipients, event_type=event_type,
                                 subject=subject, body=body, dedup_key=dedup_key,
-                                subject_user_ids=subject_user_ids)
+                                subject_user_ids=subject_user_ids, sms=sms)
 
     for organization in Organization.objects.all():
         types = list(organization.credential_types.filter(active=True))
@@ -3278,7 +3309,9 @@ def queue_compliance_reminders(today=None):
                       subject=f"Credential attention: {credential.credential_type.name}",
                       body=f"{person.full_name}'s {credential.credential_type.name} is {state}.",
                       dedup_key=f"credential:{credential.pk}:state:{state}:{today.strftime('%Y-%m')}",
-                      recipients=recipients, subject_user_ids={person.user_id} if person.user_id else ())
+                      recipients=recipients, subject_user_ids={person.user_id} if person.user_id else (),
+                      sms={"notice": "credential.reminder.state", "officer": person,
+                           "item": credential.credential_type.name, "status": state})
                 continue
             if days is None:
                 if credential.credential_type.evidence_required:
@@ -3286,7 +3319,9 @@ def queue_compliance_reminders(today=None):
                           subject=f"No expiry recorded: {credential.credential_type.name}",
                           body=f"{person.full_name}'s {credential.credential_type.name} is {state} with no renewal date, so nothing can warn before it lapses.",
                           dedup_key=f"credential:{credential.pk}:no-expiry:{today.strftime('%Y-%m')}",
-                          recipients=recipients, subject_user_ids={person.user_id} if person.user_id else ())
+                          recipients=recipients, subject_user_ids={person.user_id} if person.user_id else (),
+                          sms={"notice": "credential.reminder.no_expiry", "officer": person,
+                               "item": credential.credential_type.name, "status": state})
                 continue
             if days < 0:
                 continue
@@ -3297,7 +3332,9 @@ def queue_compliance_reminders(today=None):
                   subject=f"Credential renewal: {credential.credential_type.name}",
                   body=f"{person.full_name}'s {credential.credential_type.name} expires on {credential.expires_on} ({days} days).",
                   dedup_key=f"credential:{credential.pk}:renew:{credential.expires_on}:{level}",
-                  recipients=recipients, subject_user_ids={person.user_id} if person.user_id else ())
+                  recipients=recipients, subject_user_ids={person.user_id} if person.user_id else (),
+                  sms={"officer": person, "item": credential.credential_type.name,
+                       "due": credential.expires_on, "days": days})
             # NTF-2. The rung that fires is itself the proof that every rung above it went unanswered:
             # the ladder only reaches here while the expiry date is still the old one, so a renewal
             # recorded at 60 days stops the 90-day notice from ever becoming a missed one. The
@@ -3317,7 +3354,9 @@ def queue_compliance_reminders(today=None):
                           subject=f"Escalated — still no renewal: {requirement.name}",
                           body=detail,
                           dedup_key=f"credential:{credential.pk}:escalated:{credential.expires_on}:{level}",
-                          recipients=escalation)
+                          recipients=escalation,
+                          sms={"officer": person, "item": requirement.name,
+                               "due": credential.expires_on, "days": days})
 
         for person in roster.values():
             for credential_type, credential, state in credential_obligations(person, types, held.get(person.pk, {})):
@@ -3328,7 +3367,8 @@ def queue_compliance_reminders(today=None):
                       body=f"{person.full_name} has no {credential_type.name} record, which their role requires. They cannot be assigned a post that blocks on it.",
                       dedup_key=f"credential-missing:{person.pk}:{credential_type.pk}:{today.strftime('%Y-%m')}",
                       recipients=compliance_recipients(organization, person, managers=coverage.get(person.pk, ())),
-                      subject_user_ids={person.user_id} if person.user_id else ())
+                      subject_user_ids={person.user_id} if person.user_id else (),
+                      sms={"officer": person, "item": credential_type.name})
 
         for record in organization.training_records.select_related("person", "person__user"):
             if not record.expires_on or record.person_id not in roster:
@@ -3340,7 +3380,9 @@ def queue_compliance_reminders(today=None):
                       body=f"{record.person.full_name}'s {record.course_name} training expires on {record.expires_on} ({days} days).",
                       dedup_key=f"training:{record.pk}:renew:{record.expires_on}:{today.strftime('%Y-%m')}",
                       recipients=compliance_recipients(organization, record.person, managers=coverage.get(record.person_id, ())),
-                      subject_user_ids={record.person.user_id} if record.person.user_id else ())
+                      subject_user_ids={record.person.user_id} if record.person.user_id else (),
+                      sms={"officer": record.person, "item": record.course_name,
+                           "due": record.expires_on, "days": days})
     return created
 
 
@@ -3522,7 +3564,8 @@ def apply_csv_import(batch,actor):
     queue_notice(organization=org,recipients={actor.pk},event_type="import.completed",
         subject=f"Import finished: {count} {batch.entity} row(s)",
         body=f"{batch.source_name} applied {count} row(s) of {len(batch.rows)} parsed. The rows are live in the registers they touched.",
-        dedup_key=f"import.completed:{batch.pk}")
+        dedup_key=f"import.completed:{batch.pk}",
+        sms={"count": count, "item": batch.entity})
     return count
 
 @transaction.atomic
@@ -3549,7 +3592,8 @@ def execute_disposition(request,actor):
         subject=f"Retention request executed: {document.original_name}",
         body=(f"{actor} approved the {request.action.lower()} of “{document.original_name}” "
               f"({document.document_type.name}). Reason: {request.reason}"),
-        dedup_key=f"retention.disposition:{request.pk}")
+        dedup_key=f"retention.disposition:{request.pk}",
+        sms={"item": document.original_name, "action": request.get_action_display().lower(), "actor": actor})
     return document
 
 @transaction.atomic
@@ -4040,7 +4084,8 @@ def queue_onboarding_assignment(person, tasks):
         subject=f"Your first steps at {organization.display_name or organization.legal_name}",
         body=(f"{len(tasks)} step{'' if len(tasks) == 1 else 's'} are owed: {names}"
               + (f". Due {due}." if due else ". No hire date is recorded yet, so no date is set.")),
-        dedup_key=f"onboarding-plan:{person.pk}")
+        dedup_key=f"onboarding-plan:{person.pk}",
+        sms={"count": len(tasks)})
 
 
 def queue_onboarding_reminders(today=None, organizations=None):
@@ -4080,7 +4125,8 @@ def queue_onboarding_reminders(today=None, organizations=None):
                 subject=f"{person.full_name}: {task.item.name} is past its date",
                 body=(f"{task.item.name} was due {task.due_on:%d %b %Y} ({days} day{'' if days == 1 else 's'} ago) "
                       f"for {person.full_name}. The step is still open."),
-                dedup_key=f"onboarding-overdue:{task.pk}:{task.due_on}")
+                dedup_key=f"onboarding-overdue:{task.pk}:{task.due_on}",
+                sms={"officer": person, "item": task.item.name, "due": task.due_on, "days": days})
     return created_total
 
 

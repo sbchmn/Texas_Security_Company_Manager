@@ -37,6 +37,8 @@ ALLOWED_HOSTS = ["*"]
 if not PLATFORM_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS is required when DEBUG is false")
 CSRF_TRUSTED_ORIGINS = [u.strip() for u in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if u.strip()]
+# Where links in text messages point (core.sms.public_base_url); a verified company domain wins.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 INSTALLED_APPS = [
     "django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes",
@@ -79,6 +81,8 @@ TEMPLATES = [{
 WSGI_APPLICATION = "config.wsgi.application"
 
 if os.getenv("MYSQL_DATABASE") and not HERMETIC_TEST:
+    from .db_tls import mysql_tls_options
+    _mysql_options = {"charset": "utf8mb4", **mysql_tls_options()}
     DATABASES = {"default": {
         "ENGINE": "django.db.backends.mysql",
         "NAME": os.environ["MYSQL_DATABASE"],
@@ -86,7 +90,7 @@ if os.getenv("MYSQL_DATABASE") and not HERMETIC_TEST:
         "PASSWORD": os.getenv("MYSQL_PASSWORD", "tscm"),
         "HOST": os.getenv("MYSQL_HOST", "db"),
         "PORT": os.getenv("MYSQL_PORT", "3306"),
-        "OPTIONS": {"charset": "utf8mb4"},
+        "OPTIONS": _mysql_options,
         # A test run wraps each case in a transaction; an idle-connection expiry then closes
         # the connection from request_finished inside that transaction and poisons it.
         "CONN_MAX_AGE": 0 if IS_TEST else int(os.getenv("CONN_MAX_AGE", "60")),

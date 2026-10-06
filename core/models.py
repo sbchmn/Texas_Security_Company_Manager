@@ -1467,6 +1467,31 @@ class ChannelRule(models.Model):
                 "In-app is delivered on every notice and cannot be chosen here — this rule decides what goes *out*."})
 
 
+class SmsTemplate(models.Model):
+    """One company's own wording for one kind of text message.
+
+    The built-in wording lives in `core.sms.SMS_NOTICES`; a row here replaces it for this company
+    only, and deleting the row is "reset to default". Keyed by the notice key rather than the event
+    type because one event can reach two people who need different sentences — the officer whose
+    swap was approved and the colleague now covering it.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="sms_templates")
+    notice_key = models.CharField(max_length=100)
+    body = models.TextField()
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="sms_templates")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["notice_key"]
+        constraints = [models.UniqueConstraint(fields=["organization", "notice_key"],
+                                               name="one_sms_template_per_notice")]
+
+    def __str__(self):
+        return f"{self.organization} · {self.notice_key}"
+
+
 class Notification(models.Model):
     class Channel(models.TextChoices):
         IN_APP="in_app","In app"

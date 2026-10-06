@@ -232,6 +232,7 @@ def _queue_invitation(request):
             organization=request.organization, recipients={request.task.person.user_id},
             subject_user_ids={request.task.person.user_id}, event_type="onboarding.signature_requested",
             subject="Document ready to sign", body=body, dedup_key=key, mandatory=True,
+            sms={"item": request.task.item.name},
         )
         # Keep the email destination bound to the signer, without overriding channel rules.
         Notification.objects.filter(
@@ -473,6 +474,7 @@ def _file_completed(request, submission, client, created_files):
             body="Your signed document and its signing audit certificate are now in your personnel file.",
             dedup_key=f"onboarding-signed:{request.pk}",
             subject_user_ids={task.person.user_id},
+            sms={"item": task.item.name},
         )
 
 

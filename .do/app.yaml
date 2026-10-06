@@ -24,6 +24,8 @@ services:
         value: "https://${APP_DOMAIN}"
       - key: ALLOWED_HOSTS
         value: ${APP_DOMAIN}
+      - key: PUBLIC_BASE_URL
+        value: "https://${APP_DOMAIN}"
       - key: MYSQL_HOST
         value: ${tscm-db.HOSTNAME}
       - key: MYSQL_PORT
@@ -34,6 +36,11 @@ services:
         value: ${tscm-db.USERNAME}
       - key: MYSQL_PASSWORD
         value: ${tscm-db.PASSWORD}
+      # Verify the managed cluster's certificate (the driver alone would accept any certificate).
+      - key: MYSQL_SSL_CA_PEM
+        value: ${tscm-db.CA_CERT}
+      - key: MYSQL_SSL_MODE
+        value: verify_identity
       - key: REDIS_URL
         value: ${tscm-cache.DATABASE_URL}
       # App Platform has no ClamAV sidecar (the scanner is not an HTTP service), so this
@@ -109,6 +116,8 @@ workers:
         type: SECRET
       - key: ALLOWED_HOSTS
         value: ${APP_DOMAIN}
+      - key: PUBLIC_BASE_URL
+        value: "https://${APP_DOMAIN}"
       - key: MYSQL_HOST
         value: ${tscm-db.HOSTNAME}
       - key: MYSQL_PORT
@@ -119,6 +128,11 @@ workers:
         value: ${tscm-db.USERNAME}
       - key: MYSQL_PASSWORD
         value: ${tscm-db.PASSWORD}
+      # Verify the managed cluster's certificate (the driver alone would accept any certificate).
+      - key: MYSQL_SSL_CA_PEM
+        value: ${tscm-db.CA_CERT}
+      - key: MYSQL_SSL_MODE
+        value: verify_identity
       - key: REDIS_URL
         value: ${tscm-cache.DATABASE_URL}
       - key: RUN_MIGRATIONS
