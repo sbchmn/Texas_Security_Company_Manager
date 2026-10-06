@@ -342,6 +342,9 @@ class Person(models.Model):
     @property
     def full_name(self): return f"{self.first_name} {self.last_name}"
 
+    def __str__(self):
+        return f"{self.full_name} ({self.employee_id})" if self.employee_id else self.full_name
+
     @property
     def personnel_categories(self):
         """Category keys this person holds; a person may hold several at once."""
@@ -1117,6 +1120,12 @@ class PersonDocument(models.Model):
     class Meta:
         ordering=["-created_at"]
         indexes=[models.Index(fields=["organization","person","deleted_at"])]
+
+    def __str__(self):
+        person = self.person
+        subject = person.full_name if person is not None else "Company record"
+        return f"{self.document_type.name} - {subject} - {self.original_name}"
+
     @property
     def is_current(self):
         """Nothing supersedes this row, so it is the version the roster is being asked to sign."""
@@ -1564,6 +1573,15 @@ class Shift(models.Model):
         ordering = ["starts_at"]
         indexes = [models.Index(fields=["organization", "starts_at"])]
         constraints = [models.UniqueConstraint(fields=["template", "starts_at"], name="one_generated_post_per_occurrence")]
+
+    def __str__(self):
+        start = timezone.localtime(self.starts_at) if timezone.is_aware(self.starts_at) else self.starts_at
+        end = timezone.localtime(self.ends_at) if timezone.is_aware(self.ends_at) else self.ends_at
+        assigned = self.officer
+        officer = assigned.full_name if assigned is not None else "Open post"
+        post = f" / {self.post_name}" if self.post_name else ""
+        return f"{self.site}{post} - {start:%b %d, %Y %H:%M} to {end:%b %d, %Y %H:%M} - {officer}"
+
     def clean(self):
         if self.ends_at and self.starts_at and self.ends_at <= self.starts_at:
             raise ValidationError("Shift end must be after shift start.")
@@ -2575,7 +2593,7 @@ class AuditEvent(models.Model):
     metadata = models.JSONField(default=dict, blank=True)
     previous_hash = models.CharField(max_length=64,blank=True)
     event_hash = models.CharField(max_length=64,blank=True)
-    occurred_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    occurred_at = models.DateTimeField(default=timezone.now, editable=False, db_index=True)
     objects = AppendOnlyAuditQuerySet.as_manager()
     class Meta:
         ordering = ["-occurred_at"]
@@ -2588,6 +2606,11 @@ class AuditEvent(models.Model):
             Organization.objects.select_for_update().get(pk=self.organization_id)
             previous=type(self).objects.filter(organization_id=self.organization_id).order_by("-occurred_at","-id").first()
             self.previous_hash=previous.event_hash if previous else ""
+            # The verifier walks (occurred_at, id). A timestamp tie with the head would be ordered by
+            # random uuid and could put this row before its own predecessor, so step strictly past it.
+            self.occurred_at=timezone.now()
+            if previous and self.occurred_at<=previous.occurred_at:
+                self.occurred_at=previous.occurred_at+timedelta(microseconds=1)
             self.event_hash=audit_event_hash(id=self.pk,organization=self.organization_id,actor=self.actor_id,
                 action=self.action,target_type=self.target_type,target_id=self.target_id,
                 metadata=self.metadata,previous_hash=self.previous_hash)

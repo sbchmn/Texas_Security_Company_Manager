@@ -17,3 +17,7 @@ artifacts/
 # a probe that has been copied into the repo tends to carry a throwaway container's password in it.
 .qwen/tmp/
 .qwen/worktrees/
+
+# Local trust anchors for development, such as Caddy's public root certificate.
+certs/*
+!certs/.gitkeep

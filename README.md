@@ -15,6 +15,65 @@ step. The current implementation boundary is explicit in the
 domain in [development roadmap](docs/development-roadmap.md), and the baseline engineering
 security review is recorded in [SECURITY.md](SECURITY.md).
 
+## Workflow navigation
+
+The sidebar groups work into Today, People, Schedule, Time & Payroll, Compliance & Records,
+and Reports, filtered by the current membership's permissions. Timeclock and My shifts are
+pinned quick links. Add person lives in People, rather than competing with the main menu.
+Settings shares the menu's single scroll region and opens automatically on configuration pages;
+account controls remain outside that region.
+
+Today separates team actions from personal work, so an owner, dispatcher, or supervisor linked
+to a personnel record can still clock in and complete their own onboarding. Supervisors see
+Time review without company payroll; dispatchers reach coverage, moves, time-off requests, and
+sites from Schedule. Employees reach their checklist (including document signing), documents,
+availability, and time-off requests from Today. These links do not grant additional permissions:
+existing role and authority-scope checks still apply at each destination.
+
+Schedule starts with a paginated action queue for requests to fill open posts, hand-offs,
+trades, and time off across all dates in the manager's authority scope. Moves waiting for
+employee consent are distinguished from requests awaiting manager review. Today summarizes
+the same queue, with a direct link to review it. Decisions remain on their existing review
+pages, where eligibility, consent, and coverage effects are checked.
+
+People starts with outstanding onboarding tasks and unissued checklists across active and
+onboarding employees, with office/employee, evidence, and overdue filters. Personnel-record
+staff can open Signing operations to explicitly send ready requests, reconcile uncertain
+creation, resolve failures, or view signed-and-filed documents. No queue auto-sends documents,
+waives evidence, or treats an unverified signature as complete.
+
+Today summarizes scoped work by responsible party, age, and next action while each workspace
+retains its authoritative decisions. Schedule separates published open posts, drafts to prepare,
+and at-risk assignments; move and time-off queue links select the particular request. Compliance
+provides evidence-resolution links, Reports leads with operational exceptions, and retention
+decisions precede collapsed archive/deletion history. Settings includes a permission-filtered
+setup checklist: configuration state is not live integration health or legal certification.
+
+My shifts puts response-required offers ahead of the roster and exposes assigned-post briefs,
+including available post orders and authorized site/contact details. Employee consent and
+manager approval remain separate steps. Notifications provide record-specific next actions
+only when the recipient can access the destination; marking a notice read does not resolve
+the underlying task.
+
+Time review starts with pending punches and correction requests, counted consistently on Today
+and Time & Payroll. Each queue has independent pagination and explicit reviewed-history filters.
+Payroll links select an exact company-bound run; its snapshot, blockers, review links, decisions,
+and exports retain that period. Approval still checks current pending time evidence and snapshot
+exceptions. An oldest-first, paginated draft-period queue keeps unfinished runs discoverable
+beyond the recent-run preview. Partial lock controls are secondary to the selected-period workflow; open slices
+continue to prevent export.
+
+Workspace summary cards share equal heights across desktop rows and a bottom-aligned primary
+action. Secondary links appear above that action in a dedicated footer; inline preview
+actions remain beside their records. On narrow screens cards stack with content-driven
+heights rather than leaving large blank spaces.
+
+Forms share labeled controls, grouped workflow sections, help text, and linked validation
+summaries that preserve entered values. Personnel choices show names and employee IDs;
+tour choices show the site, local times, and assigned officer. Site pickers group options
+under client headings while displaying only the site name as the selected value. Pickers
+retain organization and authority-scope filtering.
+
 ## Deployment requirement
 
 The application must support both a production Docker/Compose deployment and

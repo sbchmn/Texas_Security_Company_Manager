@@ -1,4 +1,5 @@
 import copy
+import tempfile
 from io import StringIO
 from unittest.mock import patch
 
@@ -462,6 +463,39 @@ class DocumentSigningTest(TestCase):
         self.issue()
         self.client.force_login(self.owner)
         self.assertEqual(self.client.get(reverse("signing_open", args=[self.task.pk])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("signing_return", args=[self.task.pk])).status_code, 404)
+
+    def test_send_asks_docuseal_to_return_the_signer_to_tscm(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("signing_send", args=[self.task.pk]))
+        post = next(call for call in self.api.call_args_list if call.args[0] == "POST")
+        self.assertEqual(post.kwargs["payload"]["submitters"][0]["completed_redirect_url"],
+                         "http://testserver" + reverse("signing_return", args=[self.task.pk]))
+
+    def test_issue_without_return_url_sends_no_redirect(self):
+        self.issue()
+        post = next(call for call in self.api.call_args_list if call.args[0] == "POST")
+        self.assertNotIn("completed_redirect_url", post.kwargs["payload"]["submitters"][0])
+
+    def test_return_from_docuseal_reconciles_and_lands_on_my_onboarding(self):
+        request = self.issue()
+        self.complete_provider()
+        self.client.force_login(self.employee)
+        response = self.client.get(reverse("signing_return", args=[self.task.pk]))
+        self.assertRedirects(response, reverse("my_onboarding"), fetch_redirect_response=False)
+        request.refresh_from_db()
+        self.assertEqual(request.status, SigningRequest.Status.COMPLETED)
+        self.assertTrue(PersonDocument.objects.filter(person=self.person).exists())
+
+    def test_return_before_docuseal_confirms_does_not_complete(self):
+        request = self.issue()
+        self.client.force_login(self.employee)
+        response = self.client.get(reverse("signing_return", args=[self.task.pk]), follow=True)
+        self.assertContains(response, "still finishing")
+        request.refresh_from_db()
+        self.assertEqual(request.status, SigningRequest.Status.SENT)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, OnboardingTask.Status.OPEN)
 
     def test_cross_tenant_task_is_hidden(self):
         other = Organization.objects.create(legal_name="Other", display_name="Other", slug="other-signing")
@@ -622,6 +656,20 @@ class DocuSealTransportTest(TestCase):
         with patch("core.document_signing.requests.request", side_effect=requests.exceptions.SSLError()):
             with self.assertRaisesMessage(ValidationError, "certificate verification failed"):
                 self.client_api.api("GET", "/templates")
+
+    def test_docuseal_ca_bundle_is_scoped_to_signing_requests(self):
+        self.assertIs(self.client_api.verify, True)
+        with tempfile.NamedTemporaryFile() as bundle, override_settings(DOCUSEAL_CA_BUNDLE=bundle.name):
+            client = DocuSealClient(SigningSettings(base_url=ORIGIN, encrypted_api_key=encrypt_api_key("key")))
+            with patch("core.document_signing.requests.request", return_value=Response(b'{"data":[]}')) as api:
+                client.api("GET", "/templates")
+            with patch("core.document_signing.requests.get", return_value=Response(PDF)) as download:
+                client.pdf(ORIGIN + "/file/pdf")
+        self.assertEqual(api.call_args.kwargs["verify"], bundle.name)
+        self.assertEqual(download.call_args.kwargs["verify"], bundle.name)
+        with override_settings(DOCUSEAL_CA_BUNDLE="/missing/caddy-root.crt"):
+            with self.assertRaisesMessage(ValidationError, "DOCUSEAL_CA_BUNDLE"):
+                DocuSealClient(SigningSettings(base_url=ORIGIN, encrypted_api_key=encrypt_api_key("key")))
 
     def test_file_redirect_cannot_leave_signing_origin(self):
         redirect = Response(b"", status=302, headers={"Location": "https://evil.example.com/file.pdf"})

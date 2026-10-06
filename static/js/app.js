@@ -1,5 +1,16 @@
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js'));
-document.querySelector('[data-menu]')?.addEventListener('click', event => { const open=document.body.classList.toggle('menu-open'); event.currentTarget.setAttribute('aria-expanded', String(open)); });
+const menuButton = document.querySelector('[data-menu]');
+const menuClose = document.querySelector('[data-menu-close]');
+const setMenuOpen = open => {
+  document.body.classList.toggle('menu-open', open);
+  menuButton?.setAttribute('aria-expanded', String(open));
+  (open ? menuClose : menuButton)?.focus();
+};
+menuButton?.addEventListener('click', () => setMenuOpen(!document.body.classList.contains('menu-open')));
+menuClose?.addEventListener('click', () => setMenuOpen(false));
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.body.classList.contains('menu-open')) setMenuOpen(false);
+});
 const search = document.querySelector('[data-table-search]');
 search?.addEventListener('input', () => { const q=search.value.toLowerCase(); document.querySelectorAll('[data-search-row]').forEach(row => row.hidden=!row.textContent.toLowerCase().includes(q)); });
 
@@ -214,31 +225,108 @@ if (kiosk) {
 // remembering to wire a button; the access rule is enforced on the route regardless, so this only
 // chooses whether the bytes open here or in a browser download.
 //
-// The frame src is always this app's own /preview/ URL and never a storage link: the redirect to any
-// signed link happens in the network layer after the permission check, not in markup a page could get
-// wrong. Escape and the backdrop close it.
+// Every source is this app's own /preview/ URL and never a storage link. PDFs are drawn by the
+// self-hosted PDF.js onto canvases: no browser PDF plugin, so nothing for a sandbox or an extension
+// to block, and the page's own CSP (script-src 'self', no wasm) still governs. Text is fetched into a
+// <pre>. Images use <img>, the one kind the route may redirect to a signed storage link. Escape and the
+// backdrop close it.
 const preview=document.getElementById('record-preview');
 if(preview){
-  const frame=preview.querySelector('#record-preview-object'),image=preview.querySelector('#record-preview-image'),
-        text=preview.querySelector('#record-preview-text'),title=preview.querySelector('#record-preview-title'),
-        note=preview.querySelector('#record-preview-note'),download=preview.querySelector('#record-preview-download');
-  const show=kind=>{[frame,image,text].forEach(node=>node.hidden=true);({pdf:frame,image:image,text:text})[kind].hidden=false;};
-  const close=()=>{preview.hidden=true;};
+  const pages=preview.querySelector('#record-preview-pages'),image=preview.querySelector('#record-preview-image'),
+        text=preview.querySelector('#record-preview-text'),status=preview.querySelector('#record-preview-status'),
+        title=preview.querySelector('#record-preview-title'),note=preview.querySelector('#record-preview-note'),
+        download=preview.querySelector('#record-preview-download');
+  let pdfjs=null,loading=null,generation=0;
+  const viewers=[];
+  const say=message=>{status.textContent=message;status.hidden=!message;};
+  const show=node=>{[pages,image,text].forEach(item=>item.hidden=item!==node);};
+  const failed=()=>{show(null);say('This document could not be shown here. Use Download to open it.');};
+  const reset=()=>{
+    generation++;
+    viewers.splice(0).forEach(observer=>observer.disconnect());
+    if(loading){loading.destroy();loading=null;}
+    pages.replaceChildren();image.removeAttribute('src');text.textContent='';show(null);say('');
+  };
+  const close=()=>{preview.hidden=true;reset();};
+  const library=()=>pdfjs||(pdfjs=import(pages.dataset.pdfjs).then(lib=>{
+    lib.GlobalWorkerOptions.workerSrc=pages.dataset.pdfjsWorker;return lib;
+  }).catch(error=>{pdfjs=null;throw error;}));
+  const renderPdf=async(url,mine)=>{
+    say('Loading document…');
+    const lib=await library();
+    if(mine!==generation)return;
+    const assets=pages.dataset.pdfjsAssets;
+    // useWasm:false keeps the JPEG 2000 / JBIG2 decoders on their plain-JS fallbacks, so the CSP never
+    // needs 'wasm-unsafe-eval'. No scripting or XFA: this is a reader, not a form filler.
+    loading=lib.getDocument({url,withCredentials:false,useWasm:false,enableXfa:false,
+      wasmUrl:`${assets}wasm/`,standardFontDataUrl:`${assets}standard_fonts/`,cMapUrl:`${assets}cmaps/`});
+    const pdf=await loading.promise;
+    if(mine!==generation)return;
+    show(pages);say('');
+    // Pages are sized placeholders drawn only near the viewport and released when far from it: a
+    // 2x canvas is ~17 MB, so a long packet drawn eagerly would exhaust a phone.
+    const slots=[];
+    for(let number=1;number<=pdf.numPages;number++){
+      const page=await pdf.getPage(number);
+      if(mine!==generation)return;
+      const base=page.getViewport({scale:1});
+      const slot=document.createElement('div');
+      slot.className='preview-page';
+      slot.style.aspectRatio=`${base.width} / ${base.height}`;
+      slot.setAttribute('role','img');slot.setAttribute('aria-label',`Page ${number} of ${pdf.numPages}`);
+      slot.pdfPage=page;
+      pages.append(slot);slots.push(slot);
+    }
+    const draw=async slot=>{
+      if(slot.drawing||slot.firstChild)return;
+      slot.drawing=true;
+      try{
+        const page=slot.pdfPage,ratio=Math.min(window.devicePixelRatio||1,2);
+        const viewport=page.getViewport({scale:(slot.clientWidth/page.getViewport({scale:1}).width)*ratio});
+        const canvas=document.createElement('canvas');
+        canvas.width=Math.floor(viewport.width);canvas.height=Math.floor(viewport.height);
+        // ENABLE draws stored annotation appearances (signatures, filled fields) into the page itself,
+        // since there is no separate annotation layer here.
+        slot.task=page.render({canvas,canvasContext:canvas.getContext('2d'),viewport,annotationMode:lib.AnnotationMode.ENABLE});
+        await slot.task.promise;
+        if(mine===generation&&slot.isConnected)slot.append(canvas);
+      }catch(error){
+        if(error?.name!=='RenderingCancelledException'&&mine===generation)throw error;
+      }finally{slot.drawing=false;slot.task=null;}
+    };
+    const observer=new IntersectionObserver(entries=>entries.forEach(entry=>{
+      const slot=entry.target;
+      if(entry.isIntersecting){draw(slot).catch(()=>{if(mine===generation)failed();});}
+      else{slot.task?.cancel();slot.replaceChildren();slot.pdfPage.cleanup();}
+    }),{root:pages,rootMargin:'150% 0px'});
+    slots.forEach(slot=>observer.observe(slot));
+    viewers.push(observer);
+  };
   preview.addEventListener('click',event=>{if(event.target===preview||event.target.closest('[data-preview-close]'))close();});
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!preview.hidden)close();});
   document.querySelectorAll('[data-preview]').forEach(button=>button.addEventListener('click',()=>{
     const url=button.dataset.preview,kind=button.dataset.previewKind||'pdf';
+    reset();
+    const mine=generation;
     preview.hidden=false;
     title.textContent=button.dataset.previewTitle||'Document';
     note.textContent=button.dataset.previewNote||'';
     // Derived from the route we were handed rather than recomposed from the row's data, so the
     // preview and its own Download link can never end up pointing at different records.
     if(download)download.href=url.replace(/\/preview\/$/,'/download/');
-    if(kind==='text'){
-      fetch(url,{credentials:'same-origin'}).then(response=>{if(!response.ok)throw new Error(response.status);return response.text();})
-        .then(body=>{text.textContent=body;show('text');}).catch(()=>{show('image');frame.src=url;});
+    if(kind==='pdf'){
+      renderPdf(url,mine).catch(()=>{if(mine===generation)failed();});
+    }else if(kind==='text'){
       // Fetched rather than framed so it renders as characters in the <pre> and nothing along the way
       // can decide it is a document.
-    }else{show(kind);frame.src=url;}
+      say('Loading document…');
+      fetch(url,{credentials:'same-origin'}).then(response=>{if(!response.ok)throw new Error(response.status);return response.text();})
+        .then(body=>{if(mine!==generation)return;text.textContent=body;show(text);say('');})
+        .catch(()=>{if(mine===generation)failed();});
+    }else{
+      image.onload=()=>{if(mine===generation)say('');};
+      image.onerror=()=>{if(mine===generation)failed();};
+      say('Loading document…');show(image);image.src=url;
+    }
   }));
 }

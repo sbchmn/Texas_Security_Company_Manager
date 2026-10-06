@@ -21,3 +21,4 @@ core/tests.py
 .gitattributes
 .gitignore
 .gitkeep
+certs

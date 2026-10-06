@@ -1,9 +1,8 @@
-{# One viewer for every record list, included from base.html so a page cannot forget it.
-
-   The frame always points at this application's own /preview/ route and never at a storage URL:
-   the route re-checks the access ladder on every request and only then redirects to the signed
-   link. That ordering is what keeps a hand-edited src from reaching another tenant's document,
-   and it is why the modal has no idea what a bucket is. #}
+{% load static %}{% comment %}
+The shared viewer uses the permission-checked preview route, never a storage URL. PDFs are drawn
+onto canvases by the self-hosted PDF.js in static/vendor/pdfjs, so no browser PDF plugin (and no
+framed document) is involved.
+{% endcomment %}
 <div class="preview-modal" id="record-preview" hidden role="dialog" aria-modal="true" aria-labelledby="record-preview-title">
   <div class="preview-frame">
     <div class="preview-head">
@@ -13,12 +12,16 @@
       <a class="button secondary button-small" id="record-preview-download" href="#">Download</a>
     </div>
     <div class="preview-body">
-      <iframe id="record-preview-object" title="Document preview" sandbox=""></iframe>
+      <div id="record-preview-pages" class="preview-pages" role="document" aria-label="Document pages" tabindex="0" hidden
+           data-pdfjs="{% static 'vendor/pdfjs/pdf.min.mjs' %}"
+           data-pdfjs-worker="{% static 'vendor/pdfjs/pdf.worker.min.mjs' %}"
+           data-pdfjs-assets="{% get_static_prefix %}vendor/pdfjs/"></div>
       <img id="record-preview-image" alt="Document preview" hidden>
       <pre id="record-preview-text" hidden></pre>
+      <p id="record-preview-status" class="preview-status" role="status" hidden></p>
     </div>
-    <p class="muted">Shown inside the page only for record types this app can serve without scripting.
-      Anything else — a Word or Excel file, or a record whose bytes were stored before type
-      verification existed — is offered as a download instead.</p>
+    <p class="muted">PDF, PNG, JPEG and plain-text records open here. Anything else — a Word or Excel
+      file, or a record whose bytes were stored before type verification existed — is offered as a
+      download instead.</p>
   </div>
 </div>

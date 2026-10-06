@@ -1,0 +1,13 @@
+<section class="panel table-panel" id="onboarding-actions">
+  <div class="panel-head"><div><h2>Onboarding work queue</h2><p>{{ onboarding_actions.total }} outstanding tasks or unissued checklists &middot; {{ onboarding_actions.overdue }} overdue. Includes active employees with unfinished steps.</p></div></div>
+  {% if show_onboarding_filters %}<nav class="tabs" aria-label="Onboarding work filters"><a href="?work=all#onboarding-actions">All outstanding</a><a href="?work=office#onboarding-actions">Office-owned</a><a href="?work=employee#onboarding-actions">Employee-owned</a><a href="?work=blocked#onboarding-actions">Missing evidence</a><a href="?work=unissued#onboarding-actions">Unissued</a><a href="?work=overdue#onboarding-actions">Overdue</a></nav>{% endif %}
+  <div class="table-wrap"><table><thead><tr><th>Person / step</th><th>Responsible party</th><th>Due / age</th><th>Evidence / next action</th></tr></thead><tbody>
+    {% for item in onboarding_queue %}<tr>
+      <td><strong>{{ item.person.full_name }}</strong><small>{{ item.name }}</small></td>
+      <td>{{ item.owner }}</td>
+      <td>{{ item.due_on|default:"No deadline recorded" }}{% if item.overdue %}<span class="pill attention">Overdue</span>{% endif %}{% if item.created_at %}<small>Issued {{ item.created_at|timesince }} ago</small>{% endif %}</td>
+      <td><strong>{{ item.state }}</strong><small>{{ item.next_step }}</small><a class="button secondary button-small" href="{{ item.url }}">{{ item.action_label|default:"Open checklist" }}</a>{% if item.task %}<p><a href="{% url 'person_detail' item.person.pk %}?tab=onboarding#task-{{ item.task.pk }}">Checklist context</a></p>{% endif %}</td>
+    </tr>{% empty %}<tr><td colspan="4">No outstanding onboarding work in your scope. Check setup readiness if no steps have been configured.</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% include 'core/pagination.html' with page=onboarding_queue %}
+</section>

@@ -1,20 +1,20 @@
 {% extends 'base.html' %}
-{% block title %}Time & Payroll{% endblock %}
+{% block title %}{% if can_payroll %}Time & Payroll{% else %}Time review{% endif %}{% endblock %}
 
 {% block content %}
 <div class="page">
   <div class="page-heading">
     <div>
-      <h1>Time & Payroll</h1>
-      <p>Review punches, manage payroll, and approve time exceptions.</p>
+      <h1>{% if can_payroll %}Time & Payroll{% else %}Time review{% endif %}</h1>
+      <p>{% if can_payroll %}Review time exceptions, then generate and approve payroll.{% else %}Review your team's punches and correction requests.{% endif %}</p>
     </div>
   </div>
 
   <section class="workspace-grid">
     <article class="card card-primary">
       <h2>Pending review</h2>
-      <p class="metric">{{ pending_count }} punch{{ pending_count|pluralize }}</p>
-      <p class="muted">Awaiting time review decision.</p>
+      <p class="metric">{{ pending_count }} item{{ pending_count|pluralize }}</p>
+      <p class="muted">{{ pending_punch_count }} punch{{ pending_punch_count|pluralize:"es" }} and {{ pending_correction_count }} correction request{{ pending_correction_count|pluralize }} awaiting a decision in your authority scope.</p>
       {% if pending_punches %}
         <ul class="punches-list">
           {% for punch in pending_punches|slice:":3" %}
@@ -25,38 +25,61 @@
           {% endfor %}
         </ul>
       {% endif %}
-      <a class="button button-small" href="{% url 'time_review' %}">Review punches</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'time_review' %}">Review time queue</a></div>
     </article>
 
+    {% if can_payroll %}
     {% if latest_run %}
       <article class="card">
         <h2>Latest payroll</h2>
         <p class="metric">{{ latest_run.period_start|date:"M d" }} – {{ latest_run.period_end|date:"M d" }}</p>
         <p class="muted">{{ latest_run.get_status_display }}</p>
-        <a class="button button-small" href="{% url 'payroll' %}">View period</a>
+        <div class="card-actions"><a class="button button-small" href="{% url 'payroll' %}?run={{ latest_run.pk }}">View period</a></div>
       </article>
     {% else %}
       <article class="card">
         <h2>Payroll</h2>
         <p class="muted">Generate and manage payroll runs.</p>
-        <a class="button button-small" href="{% url 'payroll' %}">Open payroll</a>
+        <div class="card-actions"><a class="button button-small" href="{% url 'payroll' %}">Open payroll</a></div>
       </article>
+    {% endif %}
     {% endif %}
 
     {% if can_approve %}
       <article class="card">
         <h2>Approvals</h2>
         <p class="muted">Approve and export payroll.</p>
-        <a class="button button-small" href="{% url 'payroll' %}">Approve runs</a>
+        <div class="card-actions"><a class="button button-small" href="{% url 'payroll' %}">Approve runs</a></div>
       </article>
     {% endif %}
 
+    {% if can_configure %}
     <article class="card">
       <h2>Time policy</h2>
       <p class="muted">Rounding, policies, and rates.</p>
-      <a class="button button-small" href="{% url 'settings' %}">View settings</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'time_policy' %}">Configure time policy</a></div>
     </article>
+    {% endif %}
+    {% if can_manage_kiosks %}
+    <article class="card">
+      <h2>Clock stations</h2>
+      <p class="muted">Shared kiosks officers punch in on at a post, and the PINs they use.</p>
+      <div class="card-actions"><a class="button button-small" href="{% url 'clock_kiosks' %}">Manage clock stations</a></div>
+    </article>
+    {% endif %}
   </section>
+
+  {% if can_payroll %}
+    <section class="panel table-panel" id="payroll-drafts">
+      <h2>Draft payroll periods <span class="pill pending">{{ draft_queue.paginator.count }}</span></h2>
+      <p class="muted">All outstanding drafts, oldest first. Open a period to review current time blockers and its generated snapshot before approving.</p>
+      <div class="table-wrap"><table><thead><tr><th>Period</th><th>Age</th><th>Snapshot exceptions</th><th>Next action</th></tr></thead><tbody>
+        {% for run in draft_queue %}<tr><td>{{ run.period_start|date:"M j" }}&ndash;{{ run.period_end|date:"M j, Y" }}</td><td>{{ run.created_at|timesince }}</td><td>{{ run.exceptions|length }}</td><td><a class="button secondary button-small" href="{% url 'payroll' %}?run={{ run.pk }}">Review this period</a></td></tr>
+        {% empty %}<tr><td colspan="4">No draft payroll periods awaiting review.</td></tr>{% endfor %}
+      </tbody></table></div>
+      {% if draft_queue.has_other_pages %}<nav class="pagination" aria-label="Draft payroll pages"><span>Page {{ draft_queue.number }} of {{ draft_queue.paginator.num_pages }}</span><div class="actions">{% if draft_queue.has_previous %}<a href="?draft_page={{ draft_queue.previous_page_number }}#payroll-drafts">Previous</a>{% endif %}{% if draft_queue.has_next %}<a href="?draft_page={{ draft_queue.next_page_number }}#payroll-drafts">Next</a>{% endif %}</div></nav>{% endif %}
+    </section>
+  {% endif %}
 
   {% if runs %}
     <section class="panel table-panel">
@@ -79,7 +102,7 @@
                 </td>
                 <td>{{ run.get_status_display }}</td>
                 <td>{% if run.approved_by %}{{ run.approved_by.get_full_name }}{% else %}—{% endif %}</td>
-                <td><a class="button secondary button-small" href="{% url 'payroll' %}">View</a></td>
+                <td><a class="button secondary button-small" href="{% url 'payroll' %}?run={{ run.pk }}">View</a></td>
               </tr>
             {% endfor %}
           </tbody>

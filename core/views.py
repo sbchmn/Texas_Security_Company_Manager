@@ -11,6 +11,7 @@ from django.core import signing
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
+from django.db.models.manager import BaseManager
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -24,7 +25,7 @@ from .forms import AuditRedactionForm, AuthorityScopeForm, AvailabilityRuleForm,
 from .models import AuditEvent, AuditRedaction, AuthorityScope, AvailabilityRule, BrandVersion, Checkpoint, Client, ClockKiosk, ComplianceRule, Credential, CredentialRegistryCheck, CredentialType, CustomFieldDefinition, DispositionRequest, DOCUMENT_TYPE_READERS, DocumentAcknowledgment, DocumentType, HoldOver, ImportBatch, Membership, MembershipInvitation, MessageConsent, DeliveryEvent, Notification, OnboardingItem, OnboardingTask, OfflineClockDevice, Organization, OrganizationDomain, PayCategory, PayCode, PayrollRun, Person, PersonCustomValue, PersonDocument, PayrollLockSegment, Punch, PunchAdjustment, record_readable, record_visibility_filter, ReportSnapshot, RuleRevision, Shift, ShiftClaim, ShiftExchange, ShiftHourDesignation, ShiftSwap, ShiftTemplate, Site, TimeOffRequest, TimePolicy, TimePolicyOverride, TrainingRecord
 from .scope import SCOPE_CAPABLE_ROLES, ActorScope, dispatch_recipients_for_shift, scope_for
 from decimal import Decimal
-from .services import COMPLIANCE_KINDS, RULE_WATCHED, SNAPSHOT_WINDOW_DAYS, apply_csv_import, apply_recurring_plan, approve_payroll_run, assignment_impact, audit_retention_state, bump_policy_revision, bump_rule_revision, capture_report_snapshots, clear_kiosk_pin_failures, clock_pin_lockout, close_clock_kiosk, clock_policy_coverage, coerce_custom_value, compliance_attendance, compliance_recipients, compliance_summary, credential_registry_state, coverage_report, coverage_state, create_brand_version, create_payroll_run, decide_onboarding_task, describe_hold_over, effective_clock_policy, effective_pay_code, effective_rates, ensure_pay_categories, ensure_rule_history, execute_disposition, expire_stale_moves, find_person_by_pin, haversine_meters, KIOSK_IDENTITY_SECONDS, kiosk_identity, kiosk_identity_token, kiosk_policy_refusal, kiosk_shifts, lock_subject, onboarding_board, onboarding_progress, open_clock_kiosk, open_lock_segments, open_post_candidates, outstanding_acknowledgments, overrun_prompt, payroll_csv, payroll_lock_state, payroll_recipients, payroll_totals, payroll_snapshot_csv, payroll_snapshot_pdf, payroll_snapshot_xlsx, parse_punch_timestamp, person_snapshot, personnel_file_bundle, personnel_file_zip, post_requirements, preview_filename, PreviewUnavailable, preview_source, preview_csv_import, process_brand_image, provision_onboarding_tasks, purge_sealed_audit, queue_acknowledgment_reminders, queue_notice, queue_onboarding_assignment, record_rule_revision, record_registry_check, recurring_plan, record_hold_over, record_person_history, record_punch, registry_checks_by_credential, reopen_payroll_run, report_breakdown, resolve_rule_version, restore_disposition, revise_pay_category, role_domain_gate, role_recipients, rounding_preview, rule_snapshot, saved_report_history, schedule_week_start, seal_audit_period, set_clock_pin, set_payroll_lock_segment, set_shift_designation, shift_advisories, shift_eligibility, shift_participants, signature_lineage, snapshot_csv, store_person_document, swap_candidates, tour_completion, uncovered_advisory, uncovered_windows, verify_audit_chain, verify_clock_pin, verify_seal_archive
+from .services import COMPLIANCE_KINDS, RULE_WATCHED, SNAPSHOT_WINDOW_DAYS, apply_csv_import, apply_recurring_plan, approve_payroll_run, assignment_impact, audit_retention_state, bump_policy_revision, bump_rule_revision, capture_report_snapshots, clear_kiosk_pin_failures, clock_pin_lockout, close_clock_kiosk, clock_policy_coverage, coerce_custom_value, compliance_attendance, compliance_recipients, compliance_summary, credential_registry_state, coverage_report, coverage_state, create_brand_version, create_payroll_run, decide_onboarding_task, describe_hold_over, effective_clock_policy, effective_pay_code, effective_rates, ensure_pay_categories, ensure_rule_history, execute_disposition, expire_stale_moves, find_person_by_pin, haversine_meters, KIOSK_IDENTITY_SECONDS, kiosk_identity, kiosk_identity_token, kiosk_policy_refusal, kiosk_shifts, lock_subject, onboarding_board, onboarding_progress, open_clock_kiosk, open_lock_segments, open_post_candidates, outstanding_acknowledgments, overrun_prompt, payroll_csv, payroll_lock_state, payroll_recipients, payroll_totals, payroll_snapshot_csv, payroll_snapshot_pdf, payroll_snapshot_xlsx, parse_punch_timestamp, person_snapshot, personnel_file_bundle, personnel_file_zip, post_requirements, preview_filename, PreviewUnavailable, preview_source, preview_csv_import, process_brand_image, provision_onboarding_tasks, purge_sealed_audit, queue_acknowledgment_reminders, queue_notice, queue_onboarding_assignment, record_rule_revision, record_registry_check, recurring_plan, record_hold_over, record_person_history, record_punch, registry_checks_by_credential, reopen_payroll_run, report_breakdown, resolve_rule_version, restore_disposition, revise_pay_category, role_domain_gate, role_recipients, rounding_preview, rule_snapshot, saved_report_history, schedule_week_start, seal_audit_period, set_clock_pin, set_payroll_lock_segment, set_shift_designation, shift_advisories, shift_eligibility, shift_participants, signature_lineage, snapshot_csv, store_person_document, swap_candidates, tour_completion, uncovered_advisory, uncovered_windows, verify_audit_chain, verify_clock_pin, verify_seal_archive, week_offset_for
 # NTF-4, kept on its own line so the messaging surface's imports read as one group.
 from .services import (active_suppression, callback_is_signed, callback_requires_signature,
                        current_consent, handle_inbound_message, ingest_provider_events, normalize_destination,
@@ -96,6 +97,8 @@ def _page(request, queryset, size=PAGE_SIZE):
 
 def _audit_value(value):
     """JSON-safe form of a field value for audit metadata (mirrors services.person_snapshot)."""
+    if isinstance(value, BaseManager):
+        return sorted(str(pk) for pk in value.values_list("pk", flat=True))
     return None if value is None else str(value)
 
 def _compliance_matrix(org):
@@ -235,6 +238,7 @@ def settings(request):
         {"title":"Organisation structure","items":[
             link("Clients and sites","Contract clients, posts, and geofences.","locations",manager),
             link("Branches","Operating locations that group personnel and sites.","branches",manager),
+            link("Clock stations","Shared kiosks for punching in at a post, and officer PINs.","clock_kiosks",manager),
             link("Time and payroll policy","Workweek, overtime, rounding, and the contract or site rules that differ.","time_policy",privileged),
             link("Pay codes","Job and cost-centre codes customer payroll keys an hour on.","pay_codes",manager),
             link("Hour categories","What a break, holiday, training, travel or double-time hour pays, and whether it counts toward overtime.","settings_pay_categories",role in PAYROLL or privileged),
@@ -256,7 +260,15 @@ def settings(request):
             link("Bulk imports","Templates, dry-run preview, and apply.","imports",role in RECORD_WRITERS),
         ]},
     ]
-    return render(request,"core/settings.html",{"sections":[item for item in sections if any(entry["allowed"] for entry in item["items"])]})
+    visible_sections = [
+        {**section, "items": [entry for entry in section["items"] if entry["allowed"]]}
+        for section in sections
+    ]
+    from .workflow_actions import setup_readiness
+    return render(request, "core/settings.html", {
+        "sections": [section for section in visible_sections if section["items"]],
+        "setup_checks": setup_readiness(request),
+    })
 
 def health(request):
     return JsonResponse({"status": "ok", "service": "texas-security-company-manager"})
@@ -307,60 +319,6 @@ def brand_logo(request):
     response["X-Content-Type-Options"] = "nosniff"
     response["Content-Disposition"] = 'inline; filename="logo"'
     return response
-
-@membership_required()
-def dashboard(request):
-    org = request.organization
-    manager = request.membership.role in MANAGERS
-    scope = scope_for(request)
-    today = timezone.localdate()
-    now = timezone.now()
-    person = org.people.select_related("branch").filter(user=request.user).first()
-    context = {
-        "people_count": scope.filter_people(org.people).count(),
-        "branch_count": scope.filter_branches(org.branches.filter(active=True)).count(),
-        "onboarding_count": scope.filter_people(org.people.filter(status=Person.Status.ONBOARDING)).count(),
-        "recent_people": scope.filter_people(org.people.select_related("branch"))[:5],
-        # Audit is a company-level function and this panel is a window into it: a supervisor
-        # bounded to one branch cannot open /audit/, so the overview must not read it for them.
-        "recent_events": org.audit_events.select_related("actor")[:6] if request.membership.role in AUDIT_READERS else [],
-        "person": person, "manager": manager,
-        "can_view_audit": request.membership.role in AUDIT_READERS,
-        "authority_scope": scope if scope.restricted else None,
-    }
-    # NTF-4's first-login capture. Asked once, with the number already filled in and two buttons, and
-    # only when a number is on file with no decision against it: a company that imported a phone list
-    # has no consent for a single one of those numbers, and the officer who answers either way makes
-    # the prompt disappear for good. Silence is not a no — it is an absence, and it stays askable.
-    context["text_prompt"] = None
-    if person is not None and person.mobile_phone:
-        decided = current_consent(org, person.mobile_phone)
-        if decided is None:
-            context["text_prompt"] = {"phone": person.mobile_phone, "wording": sms_consent_wording(org)}
-    if manager:
-        built = compliance_attendance(org, scope, reader=_record_reader(request))
-        visible = {name: value for name, value in built.items() if name != "documents" or request.membership.role in RECORD_READERS}
-        context["attention_count"] = sum(value["attention"] for value in visible.values())
-        context["requirement_count"] = sum(value["total"] for value in visible.values())
-        context["open_posts"] = scope.filter_shifts(org.shifts.filter(
-            officer__isnull=True, status__in=[Shift.Status.DRAFT, Shift.Status.PUBLISHED],
-            ends_at__gte=now, starts_at__lt=now + timedelta(days=7))).count()
-        context["pending_punches"] = scope.filter_punches(org.punches.filter(
-            review_status=Punch.Review.PENDING, occurred_at__gte=now - timedelta(days=30))).count()
-        context["pending_swaps"] = len(_open_swaps(org, scope)) + len(_open_exchanges(org, scope))
-    elif person:
-        issued = PersonDocument.objects.filter(
-            _workforce_documents(), deleted_at__isnull=True,
-            scan_status=PersonDocument.ScanStatus.CLEAN,
-            document_type__acknowledgment_required=True)
-        signed = DocumentAcknowledgment.objects.filter(person=person, document__in=issued).values_list("document_id", flat=True)
-        context["next_shift"] = person.shifts.filter(
-            status=Shift.Status.PUBLISHED, ends_at__gte=now).select_related("site__client").order_by("starts_at").first()
-        context["acknowledgment_count"] = issued.exclude(pk__in=list(signed)).count()
-        context["my_pending_punches"] = person.punches.filter(review_status=Punch.Review.PENDING).count()
-        context["open_offers"] = (person.swaps_received.filter(status=ShiftSwap.Status.OFFERED).count()
-            + person.exchanges_invited.filter(status=ShiftExchange.Status.PROPOSED).count())
-    return render(request, "core/dashboard.html", context)
 
 @membership_required(*PRIVILEGED)
 @transaction.atomic
@@ -590,9 +548,15 @@ def people(request):
     scope = scope_for(request)
     records = _search(request, scope.filter_people(request.organization.people.select_related("branch")),
                       ("first_name", "last_name", "email", "employee_id", "job_title", "city"))
+    status = request.GET.get("status", "")
+    if status in Person.Status.values:
+        records = records.filter(status=status)
+    else:
+        status = ""
     records = _page(request, records.order_by("last_name","first_name"))
     return render(request, "core/people.html", {"people": records, "paginator": records.paginator, "is_paginated": records.has_other_pages(),
                                                 "q": request.GET.get("q","").strip(),
+                                                "status": status, "statuses": Person.Status.choices,
                                                 "authority_scope": scope if scope.restricted else None})
 
 @membership_required(*MANAGERS)
@@ -653,11 +617,15 @@ def person_detail(request, person_id):
         "can_read_records": can_read_records,
         "can_write_credentials": manager,
         "can_write_records": request.membership.role in RECORD_WRITERS,
+        "availability_url": (reverse("person_availability", args=[person.pk]) if manager
+                             else reverse("availability") if is_self else ""),
+        "time_off_url": reverse("time_off") if manager else reverse("my_time_off") if is_self else "",
         "tab": tab,
         # The checklist is a management surface and a self surface; an officer with no reason to see
         # another company officer's onboarding state does not get a tab that 404s when opened.
         "tabs": [(name, "Schedule & time" if name == "time" else name.capitalize()) for name in PERSON_TABS
-                 if (name == "documents" and can_read_records) or (name == "onboarding" and (manager or is_self)) or (name not in ("documents", "onboarding"))],
+                 if (name == "documents" and can_read_records) or (name == "onboarding" and (manager or is_self))
+                 or (name == "history" and manager) or (name not in ("documents", "onboarding", "history"))],
     }
     if tab == "documents" and not can_read_records:
         raise Http404
@@ -835,7 +803,15 @@ def _scope_querysets(form, organization, scope=None):
         querysets["person"] = scope.filter_people(organization.people)
     for field, model in querysets.items():
         if field in form.fields:
-            form.fields[field].queryset=model.filter(active=True) if hasattr(model.model,"active") else model.all()
+            choices = model.filter(active=True) if hasattr(model.model, "active") else model.all()
+            if choices.model is Site:
+                choices = choices.select_related("client").order_by("client__name", "client_id", "name")
+            form.fields[field].queryset = choices
+    if "relief_for" in form.fields:
+        shifts = form.fields["relief_for"].queryset.select_related("site__client", "officer")
+        if form.instance.pk:
+            shifts = shifts.exclude(pk=form.instance.pk)
+        form.fields["relief_for"].queryset = shifts
     return form
 
 def _scoped_form(form_class, organization, *args, scope=None, **kwargs):
@@ -853,11 +829,13 @@ def _catalog_edit(request, *, form_class, instance, name, action, title, eyebrow
     window, a requirement whose applicability changed, or a branch closure an admin-database
     edit — invisible to the people who actually own the record.
     """
-    watched=list(form_class._meta.fields)+(["approved_at","approved_by_id"] if approval else [])
-    before={field:_audit_value(getattr(instance,field)) for field in watched}
+    model_fields = {field.name for field in instance._meta.get_fields()}
+    watched = [field for field in form_class._meta.fields if field in model_fields]
+    watched += ["approved_at", "approved_by_id"] if approval else []
+    before: dict[str, object] = {field: _audit_value(getattr(instance, field)) for field in watched}
     prior_revision = getattr(instance, "revision", None)
     prior_snapshot = rule_snapshot(revision_kind, instance) if revision_kind is not None else None
-    if revision_kind is not None:
+    if prior_snapshot is not None:
         # Snapshot the watched rule values before validation writes them onto the instance, so the
         # revision number moves only when something an evaluation depends on actually moved.
         before.update(prior_snapshot)
@@ -983,6 +961,15 @@ def compliance(request):
         built.pop("documents",None)
     data=built[kind]
     rows=[row for row in data["rows"] if show=="all" or row["_needs"]]
+    from .workflow_actions import compliance_actions
+    actionable = compliance_actions(request, {kind: data})
+    for row in rows:
+        match = next((item for item in actionable if item["person"] == row["person"]
+                      and item["subject"] == row["subject"] and item["reference"] == row["reference"]), None)
+        if match:
+            row["action_url"] = match["url"]
+            row["action_label"] = match["action_label"]
+            row["impact"] = match["impact"]
     page=_page(request, rows)
     return render(request,"core/compliance.html",{
         "sections":{name:value for name,value in built.items()},
@@ -1248,12 +1235,20 @@ def schedule(request):
     site = org.sites.filter(pk=site_id).first() if site_id else None
     if site_id and (not site or not scope.permits_site(site)):
         raise Http404
-    week_start = schedule_week_start(today, offset)
+    week_start = schedule_week_start(today, offset, organization=org)
     start_at = timezone.make_aware(datetime.combine(week_start, datetime.min.time()))
     end_at = start_at + timedelta(days=7)
     window = scope.filter_shifts(org.shifts.filter(starts_at__lt=end_at, ends_at__gte=start_at)).exclude(status=Shift.Status.CANCELLED)
     if site:
         window = window.filter(site=site)
+    show = request.GET.get("show", "all")
+    if show not in ("all", "open", "draft", "risk"):
+        messages.error(request, "Choose a supported schedule filter.")
+        show = "all"
+    if show == "open":
+        window = window.filter(status=Shift.Status.PUBLISHED, officer__isnull=True)
+    elif show == "draft":
+        window = window.filter(status=Shift.Status.DRAFT)
     shifts = list(window.select_related("site__client__default_pay_code", "officer", "template", "pay_code",
         "site__default_pay_code").prefetch_related("required_credentials", "claims__officer").order_by("starts_at"))
     policies = {}
@@ -1281,18 +1276,100 @@ def schedule(request):
     for shift in shifts:
         shift.leave_conflict = next((row for row in leaves.get(shift.officer_id, ())
                                      if row.starts_at < shift.ends_at and row.ends_at > shift.starts_at), None)
+        if show == "risk":
+            shift.assignment_eligible, shift.assignment_reasons = shift_eligibility(shift) if shift.officer_id else (False, ["No officer assigned"])
+    if show == "risk":
+        shifts = [shift for shift in shifts if shift.status == Shift.Status.PUBLISHED and shift.officer_id
+                  and (not shift.assignment_eligible or shift.leave_conflict)]
     days = {}
     for shift in shifts:
         days.setdefault(timezone.localtime(shift.starts_at).date(), []).append(shift)
     labelled = sorted(days.items(), key=lambda item: item[0])
+    layout = "list" if request.GET.get("layout") == "list" else "grid"
+    grid = (_schedule_grid(org, scope, shifts, week_start, leaves, today=today, everyone=show == "all" and site is None)
+            if layout == "grid" else None)
     return render(request, "core/schedule.html", {
-        "shifts": shifts, "days": labelled, "week_start": week_start, "week_end": end_at, "site": site,
-        "offset": offset, "is_current": offset == 0,
+        "shifts": shifts, "days": labelled, "week_start": week_start, "week_end": end_at, "week_last": week_start + timedelta(days=6), "site": site,
+        "offset": offset, "is_current": offset == 0, "layout": layout, "grid": grid,
+        "keep": "".join(f"&{key}={value}" for key, value in (("site", site.pk if site else None), ("layout", "list" if layout == "list" else None)) if value),
+        "show": show,
         "open_posts": sum(1 for shift in shifts if not shift.officer_id),
         "published_count": sum(1 for shift in shifts if shift.status == Shift.Status.PUBLISHED),
         "draft_count": sum(1 for shift in shifts if shift.status == Shift.Status.DRAFT),
         "authority_scope": scope if scope.restricted else None,
     })
+
+def _schedule_grid(org, scope, shifts, week_start, leaves, *, today, everyone):
+    """The week as a roster: one row per officer, one column per day, open posts on top.
+
+    A dispatcher filling a week reads it across (is this guard over hours, off on Thursday?) and
+    down (who is on Tuesday night?). Unfiltered, everyone in scope gets a row even with no posts,
+    because an empty row is the officer who can still be given one. A post sits on the day it
+    starts, which is the day an overnight tour is booked against.
+    """
+    week_days = [week_start + timedelta(days=offset) for offset in range(7)]
+    column = {day: index for index, day in enumerate(week_days)}
+    bounds = [(timezone.make_aware(datetime.combine(day, datetime.min.time())),
+               timezone.make_aware(datetime.combine(day + timedelta(days=1), datetime.min.time()))) for day in week_days]
+    open_cells = [[] for _ in week_days]
+    placed = {}
+    for shift in shifts:
+        index = column.get(timezone.localtime(shift.starts_at).date())
+        if index is None:
+            continue
+        if shift.officer_id:
+            placed.setdefault(shift.officer_id, [[] for _ in week_days])[index].append(shift)
+        else:
+            open_cells[index].append(shift)
+    roster = {person.pk: person for person in (shift.officer for shift in shifts if shift.officer_id)}
+    if everyone:
+        for person in scope.filter_people(org.people.exclude(status=Person.Status.INACTIVE)):
+            roster.setdefault(person.pk, person)
+    rows = []
+    for person in sorted(roster.values(), key=lambda person: (person.last_name.lower(), person.first_name.lower())):
+        cells = placed.get(person.pk, [[] for _ in week_days])
+        hours = sum((shift.ends_at - shift.starts_at).total_seconds() for cell in cells for shift in cell) / 3600
+        rows.append({"person": person, "hours": round(hours, 2), "cells": [
+            {"day": day, "shifts": cell, "leave": any(row.starts_at < end and row.ends_at > start for row in leaves.get(person.pk, ()))}
+            for day, cell, (start, end) in zip(week_days, cells, bounds)]})
+    counts = [sum(1 for row in rows for _ in row["cells"][index]["shifts"]) + len(open_cells[index]) for index in range(7)]
+    return {
+        "days": [{"date": day, "count": counts[index], "open": len(open_cells[index]), "today": day == today}
+                 for index, day in enumerate(week_days)],
+        "open": [{"day": day, "shifts": cell} for day, cell in zip(week_days, open_cells)],
+        "rows": rows,
+    }
+
+def _schedule_return(shift):
+    """The schedule week a post sits in, so saving a post next week does not land on this one."""
+    offset = week_offset_for(timezone.localtime(shift.starts_at).date(), organization=shift.organization)
+    if offset == 0 or abs(offset) > WEEK_WINDOW:
+        return reverse("schedule")
+    return f"{reverse('schedule')}?week={offset}"
+
+def _shift_prefill(request, scope):
+    """Starting values from the grid's "+" on an empty cell: that day, and that officer's row."""
+    initial = {}
+    try:
+        day = datetime.strptime(request.GET.get("date", ""), "%Y-%m-%d").date()
+    except ValueError:
+        day = None
+    if day:
+        initial["starts_at"] = f"{day:%Y-%m-%d}T08:00"
+        initial["ends_at"] = f"{day:%Y-%m-%d}T16:00"
+    officer = request.organization.people.exclude(status=Person.Status.INACTIVE).filter(pk=_uuid_or_none(request.GET.get("officer"))).first()
+    if officer and scope.permits_person(officer):
+        initial["officer"] = officer.pk
+    site = request.organization.sites.filter(pk=_uuid_or_none(request.GET.get("site")), active=True).first()
+    if site and scope.permits_site(site):
+        initial["site"] = site.pk
+    return initial
+
+def _uuid_or_none(value):
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 def _persist_shift(request, form, previous_status):
     """Write a shift, then tell whoever the change concerns.
@@ -1505,13 +1582,14 @@ def shift_claim_decide(request, claim_id):
 @membership_required(*MANAGERS)
 @transaction.atomic
 def shift_create(request):
-    form=_scoped_form(ShiftForm,request.organization,request.POST or None,scope=scope_for(request))
+    scope=scope_for(request)
+    form=_scoped_form(ShiftForm,request.organization,request.POST or None,scope=scope,initial=_shift_prefill(request,scope) if request.method!="POST" else None)
     if request.method=="POST" and form.is_valid():
         item=_persist_shift(request,form,Shift.Status.DRAFT)
         if item is not None:
             AuditEvent.objects.create(organization=request.organization,actor=request.user,action="shift.created",target_type="shift",target_id=str(item.pk),metadata={"status":item.status,"site":str(item.site_id)})
-            messages.success(request,"Shift saved."); return redirect("schedule")
-    return render(request,"core/form.html",{"form":form,"title":"Create shift","eyebrow":"Scheduling"})
+            messages.success(request,"Shift saved."); return redirect(_schedule_return(item))
+    return render(request,"core/form.html",{"form":form,"title":"Create shift","eyebrow":"Scheduling","cancel_url":reverse("schedule")})
 
 @membership_required(*MANAGERS)
 @transaction.atomic
@@ -1525,8 +1603,8 @@ def shift_edit(request,shift_id):
         item=_persist_shift(request,form,previous_status)
         if item is not None:
             AuditEvent.objects.create(organization=request.organization,actor=request.user,action="shift.updated",target_type="shift",target_id=str(item.pk),metadata={"status":item.status,"previous_status":previous_status})
-            messages.success(request,"Shift updated."); return redirect("schedule")
-    return render(request,"core/form.html",{"form":form,"title":"Edit shift","eyebrow":"Scheduling","cancel_url":reverse("schedule")})
+            messages.success(request,"Shift updated."); return redirect(_schedule_return(item))
+    return render(request,"core/form.html",{"form":form,"title":"Edit shift","eyebrow":"Scheduling","cancel_url":_schedule_return(shift)})
 
 @require_POST
 @membership_required(*MANAGERS)
@@ -1568,7 +1646,7 @@ def shift_cancel(request,shift_id):
                          dedup_key=f"shift-gap:{shift.pk}")
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="shift.cancelled",target_type="shift",target_id=str(shift.pk),metadata={"reason":reason,"site":str(shift.site_id),"uncovered_hours":hours,"uncovered_windows":len(gap["gaps"])})
     messages.success(request,"Shift cancelled and the officer notified." + (f" {gap['text']} Post it as open, or find relief before {timezone.localtime(shift.starts_at):%a %H:%M}." if gap["gaps"] else ""))
-    return redirect("schedule")
+    return redirect(_schedule_return(shift))
 
 @membership_required(*MANAGERS)
 def shift_templates(request):
@@ -1725,6 +1803,63 @@ def _linked_person(request):
     return request.organization.people.filter(user=request.user).first()
 
 
+MY_WEEK_BACK = 4
+MY_WEEK_AHEAD = 8
+
+def _my_week(org, person, offset, upcoming_ids):
+    """One officer's workweek as seven days: their posts, leave, stated availability and open work.
+
+    Built on the same workweek the dispatcher's grid and payroll use, so the hours total a guard
+    reads here is the number overtime will be counted against.
+    """
+    today = timezone.localdate()
+    week_start = schedule_week_start(today, offset, organization=org)
+    days = [week_start + timedelta(days=index) for index in range(7)]
+    bounds = [(timezone.make_aware(datetime.combine(day, datetime.min.time())),
+               timezone.make_aware(datetime.combine(day + timedelta(days=1), datetime.min.time()))) for day in days]
+    start_at, end_at = bounds[0][0], bounds[-1][1]
+    shifts = list(person.shifts.filter(organization=org, site__organization=org, starts_at__lt=end_at, starts_at__gte=start_at)
+                  .exclude(status=Shift.Status.CANCELLED).select_related("site").order_by("starts_at"))
+    ids = [shift.pk for shift in shifts]
+    moving = set(ShiftSwap.objects.filter(organization=org, requester=person, status__in=SWAP_OPEN, shift_id__in=ids).values_list("shift_id", flat=True))
+    for pair in ShiftExchange.objects.filter(Q(initiator_shift_id__in=ids) | Q(partner_shift_id__in=ids), organization=org,
+                                             status__in=EXCHANGE_OPEN).values_list("initiator_shift_id", "partner_shift_id"):
+        moving.update(pair)
+    leave = list(person.time_off_requests.filter(organization=org, starts_at__lt=end_at, ends_at__gt=start_at,
+                 status__in=(TimeOffRequest.Status.APPROVED, TimeOffRequest.Status.REQUESTED)))
+    windows = {}
+    for rule in person.availability_rules.all():
+        windows.setdefault(rule.weekday, []).append(rule)
+    now = timezone.now()
+    open_by_day = {}
+    claimed = set(person.shift_claims.filter(status=ShiftClaim.Status.REQUESTED).values_list("shift_id", flat=True))
+    # Only what /open-posts/ lists, so the link from a day always lands on posts that are there.
+    for shift in org.shifts.filter(status=Shift.Status.PUBLISHED, officer__isnull=True, ends_at__gte=now,
+                                   starts_at__lt=min(end_at, now + timedelta(days=OPEN_POST_HORIZON_DAYS)),
+                                   starts_at__gte=start_at).prefetch_related("required_credentials"):
+        allowed, _ = shift_eligibility(shift, officer=person)
+        if allowed or shift.pk in claimed:
+            open_by_day.setdefault(timezone.localtime(shift.starts_at).date(), []).append(shift.pk in claimed)
+    policy = TimePolicy.objects.filter(organization=org).only("overtime_after_hours").first()
+    cells = []
+    for day, (start, end) in zip(days, bounds):
+        mine = [shift for shift in shifts if timezone.localtime(shift.starts_at).date() == day]
+        for shift in mine:
+            shift.moving = shift.pk in moving
+            shift.listed = shift.pk in upcoming_ids
+        away = next((row for row in leave if row.starts_at < end and row.ends_at > start), None)
+        offers = open_by_day.get(day, [])
+        cells.append({"date": day, "today": day == today, "past": day < today, "shifts": mine, "leave": away,
+                      "availability": windows.get(day.weekday(), []),
+                      "open_count": len(offers), "requested_count": sum(offers)})
+    hours = round(sum((shift.ends_at - shift.starts_at).total_seconds() for shift in shifts) / 3600, 2)
+    threshold = policy.overtime_after_hours if policy else None
+    return {"days": cells, "start": week_start, "last": days[-1], "offset": offset, "hours": hours,
+            "threshold": threshold, "over": threshold is not None and hours > threshold,
+            "stated_availability": bool(windows),
+            "can_back": offset > -MY_WEEK_BACK, "can_ahead": offset < MY_WEEK_AHEAD}
+
+
 @membership_required()
 def my_shifts(request):
     """An officer's own roster, and the one way to move a post they are already stood on.
@@ -1738,13 +1873,17 @@ def my_shifts(request):
         return render(request, "core/my_shifts.html", {"person": None, "upcoming": [], "incoming": [],
                                                    "outgoing": [], "proposals": [], "outgoing_exchanges": []})
     now = timezone.now()
-    upcoming = list(person.shifts.exclude(status=Shift.Status.CANCELLED).filter(ends_at__gt=now)
+    # Operational client contacts are disclosed only in the employee's own assignment
+    # brief, not in peer offers or a general client directory.
+    upcoming = list(person.shifts.exclude(status=Shift.Status.CANCELLED).filter(
+                    organization=request.organization, site__organization=request.organization,
+                    site__client__organization=request.organization, ends_at__gt=now)
                     .select_related("site__client", "template").order_by("starts_at")[:40])
     open_rows = {}
-    for row in ShiftSwap.objects.filter(requester=person, status__in=SWAP_OPEN).select_related("replacement"):
+    for row in ShiftSwap.objects.filter(organization=request.organization, requester=person, status__in=SWAP_OPEN).select_related("replacement"):
         open_rows.setdefault(row.shift_id, row)
     open_exchanges = {}
-    for row in ShiftExchange.objects.filter(Q(initiator=person) | Q(partner=person), status__in=EXCHANGE_OPEN).select_related(
+    for row in ShiftExchange.objects.filter(Q(initiator=person) | Q(partner=person), organization=request.organization, status__in=EXCHANGE_OPEN).select_related(
             "initiator", "partner", "initiator_shift", "partner_shift"):
         open_exchanges.setdefault(row.initiator_shift_id, row)
         if row.partner_shift_id:
@@ -1753,27 +1892,53 @@ def my_shifts(request):
         shift.swap = open_rows.get(shift.pk)
         shift.exchange = open_exchanges.get(shift.pk)
         shift.can_offer = shift.status == Shift.Status.PUBLISHED and shift.swap is None and shift.exchange is None
-    incoming = list(ShiftSwap.objects.filter(replacement=person, status=ShiftSwap.Status.OFFERED)
+    incoming = list(ShiftSwap.objects.filter(organization=request.organization, replacement=person,
+                    shift__organization=request.organization, requester__organization=request.organization,
+                    shift__site__organization=request.organization, shift__site__client__organization=request.organization,
+                    status=ShiftSwap.Status.OFFERED, shift__status=Shift.Status.PUBLISHED, shift__starts_at__gt=now)
                     .select_related("shift__site__client", "requester").order_by("shift__starts_at"))
     for row in incoming:
         # Someone deciding whether they *want* the post should know whether they can stand it —
         # the rule that actually moves the assignment is still the manager's check at approval.
         row.eligible, row.reasons = shift_eligibility(row.shift, officer=person)
-    proposals = list(ShiftExchange.objects.filter(partner=person, status=ShiftExchange.Status.PROPOSED)
+    proposals = list(ShiftExchange.objects.filter(organization=request.organization, partner=person,
+        initiator__organization=request.organization, initiator_shift__organization=request.organization,
+        initiator_shift__site__organization=request.organization, initiator_shift__site__client__organization=request.organization,
+        status=ShiftExchange.Status.PROPOSED, initiator_shift__status=Shift.Status.PUBLISHED, initiator_shift__starts_at__gt=now)
         .select_related("initiator_shift__site__client", "initiator").order_by("initiator_shift__starts_at"))
     for row in proposals:
         row.eligible, row.reasons = shift_eligibility(row.initiator_shift, officer=person)
         # The colleague has to name which of their own posts goes into the trade, so the accept
         # panel needs the list at the moment the decision is made (Deputy and When I Work both let
         # the responder choose among several rather than making the proposer pick for them).
-        row.tradeable = list(person.shifts.filter(status=Shift.Status.PUBLISHED, starts_at__gt=now)
+        row.tradeable = list(person.shifts.filter(organization=request.organization,
+            site__organization=request.organization, site__client__organization=request.organization,
+            status=Shift.Status.PUBLISHED, starts_at__gt=now)
             .exclude(pk=row.initiator_shift_id).select_related("site__client").order_by("starts_at"))
-    outgoing = list(person.swaps_offered.select_related("shift__site", "replacement")[:20])
-    outgoing_exchanges = list(ShiftExchange.objects.filter(initiator=person).select_related(
+    outgoing = list(person.swaps_offered.filter(organization=request.organization,
+        shift__organization=request.organization, shift__site__organization=request.organization,
+        replacement__organization=request.organization).select_related("shift__site", "replacement")[:20])
+    outgoing_exchanges = list(ShiftExchange.objects.filter(organization=request.organization, initiator=person,
+        initiator_shift__organization=request.organization, initiator_shift__site__organization=request.organization,
+        partner__organization=request.organization).select_related(
         "partner", "initiator_shift", "partner_shift")[:20])
-    return render(request, "core/my_shifts.html", {"person": person, "upcoming": upcoming,
+    received = list(ShiftSwap.objects.filter(organization=request.organization, replacement=person,
+        shift__organization=request.organization, shift__site__organization=request.organization,
+        requester__organization=request.organization)
+        .exclude(status=ShiftSwap.Status.OFFERED).select_related("shift__site", "requester")[:20])
+    received_exchanges = list(ShiftExchange.objects.filter(organization=request.organization, partner=person,
+        initiator_shift__organization=request.organization, initiator_shift__site__organization=request.organization,
+        initiator__organization=request.organization)
+        .exclude(status=ShiftExchange.Status.PROPOSED).select_related("initiator", "initiator_shift__site", "partner_shift__site")[:20])
+    try:
+        offset = max(-MY_WEEK_BACK, min(MY_WEEK_AHEAD, int(request.GET.get("week", "0"))))
+    except ValueError:
+        offset = 0
+    week = _my_week(request.organization, person, offset, {shift.pk for shift in upcoming})
+    return render(request, "core/my_shifts.html", {"person": person, "upcoming": upcoming, "week": week,
         "incoming": incoming, "outgoing": outgoing, "proposals": proposals,
-        "outgoing_exchanges": outgoing_exchanges})
+        "outgoing_exchanges": outgoing_exchanges, "received": received,
+        "received_exchanges": received_exchanges})
 
 
 @membership_required()
@@ -2189,6 +2354,12 @@ def swaps(request):
     scope = scope_for(request)
     now = timezone.now()
     pending = _open_swaps(request.organization, scope)
+    selected_swap = request.GET.get("swap")
+    selected_exchange = request.GET.get("exchange")
+    if selected_swap:
+        pending = [row for row in pending if str(row.pk) == selected_swap]
+        if not pending:
+            raise Http404
     for row in pending:
         # A manager weighing a move has to see whether the colleague can actually stand the post
         # now, whether the officer who offered it still holds it, and whether anyone has already
@@ -2199,6 +2370,14 @@ def swaps(request):
         row.has_run = row.shift.ends_at <= now
         row.impact = assignment_impact(request.organization, [(row.shift, row.requester, row.replacement)])
     exchanges = _open_exchanges(request.organization, scope)
+    if selected_exchange:
+        exchanges = [row for row in exchanges if str(row.pk) == selected_exchange]
+        if not exchanges:
+            raise Http404
+    if selected_swap:
+        exchanges = []
+    elif selected_exchange:
+        pending = []
     for row in exchanges:
         if row.partner_shift_id:
             # Both directions are shown because both are refused if either fails; the manager is
@@ -2450,6 +2629,16 @@ def time_off(request):
     scope = scope_for(request)
     show = request.GET.get("show", "open")
     items = scope.filter_by_person(request.organization.time_off_requests.select_related("person"))
+    if request.GET.get("request"):
+        try:
+            request_id = uuid.UUID(request.GET["request"])
+        except ValueError:
+            raise Http404
+        selected = items.filter(pk=request_id).first()
+        if selected is None:
+            raise Http404
+        items = items.filter(pk=selected.pk)
+        show = "open" if selected.status == TimeOffRequest.Status.REQUESTED else "decided"
     if show == "decided":
         items = items.exclude(status=TimeOffRequest.Status.REQUESTED)
     else:
@@ -3147,6 +3336,7 @@ def documents(request):
     return render(request,"core/documents.html",{"documents": records, "paginator": records.paginator, "is_paginated": records.has_other_pages(),
                                                  "q": request.GET.get("q","").strip(), "show_archived": show_archived,
                                                  "archived_count":request.organization.person_documents.filter(
+                                                     _record_visibility(request),
                                                      deleted_at__isnull=True,archived_at__isnull=False).count(),
                                                  "types":request.organization.document_types.all()})
 
@@ -3175,7 +3365,12 @@ def document_upload(request,person_id=None):
     # Only a version nobody has already replaced can be superseded, or the chain would fork.
     form.fields["revises"].queryset=request.organization.person_documents.filter(deleted_at__isnull=True,revisions__isnull=True)
     bound=_profile_person(request,person_id) if person_id else None
-    if bound: form.bind_person(bound)
+    form.fields["revises"].queryset = form.fields["revises"].queryset.filter(
+        _record_visibility(request)
+    ).select_related("person", "document_type")
+    if bound:
+        form.bind_person(bound)
+        form.fields["revises"].queryset = form.fields["revises"].queryset.filter(person=bound)
     if request.method=="POST" and form.is_valid():
         person=bound or form.cleaned_data["person"]
         try:
@@ -3209,11 +3404,12 @@ def document_preview(request,document_id):
     """Show a record inside the page. Owner ruling of 2026-10-03: permission to read is permission
     to view — the access decision is the same one the download route makes, not a weaker copy of it.
 
-    Two transports, one policy. Where the object store can produce a genuinely signed link, the
-    response is a redirect to it: the bytes never pass through this process, the link expires in
+    Two transports, one policy. For an image, where the object store can produce a genuinely signed
+    link, the response is a redirect to it: the bytes never pass through this process, the link expires in
     `PREVIEW_URL_SECONDS`, and the fetch is served with *this application's* content type because the
-    signature overrides the object's own metadata. Where it cannot — local disk in development, or a
-    custom domain whose `url()` would come back unsigned — the view streams the file itself and puts
+    signature overrides the object's own metadata. PDFs and text are read by page script and so always
+    stream (see `preview_source`), as does everything on local disk or a custom domain whose `url()`
+    would come back unsigned: the view streams the file itself and puts
     the equivalent headers on the response, re-reading the head bytes first.
 
     Either way the served type is from the verified allowlist, never from the uploader's declaration,
@@ -3235,9 +3431,10 @@ def document_preview(request,document_id):
         response=FileResponse(handle,as_attachment=False,filename=preview_filename(document),content_type=content_type)
     # The browser-side policy that made "never inline" the safe answer, restored here rather than
     # waived: no scripting, no plugins, no navigation from these bytes, and no sniffing into a type we
-    # did not choose. `frame-ancestors 'self'` is the one deliberate widening — the modal on our own
-    # page has to be able to frame it — and it replaces the global `frame-ancestors 'none'`, which the
-    # security middleware applies with setdefault and so does not overwrite.
+    # did not choose. The page's PDF.js reads these bytes with fetch and draws them itself, so nothing
+    # here is ever rendered by a plugin. `frame-ancestors 'self'` remains for a same-origin opener and
+    # replaces the global `frame-ancestors 'none'`, which the security middleware applies with
+    # setdefault and so does not overwrite.
     response["Content-Security-Policy"]=("default-src 'none'; base-uri 'none'; form-action 'none'; "
         "script-src 'none'; object-src 'none'; frame-ancestors 'self'; img-src 'self' data:; media-src 'self'")
     response["X-Content-Type-Options"]="nosniff"
@@ -3530,7 +3727,10 @@ def import_apply(request,batch_id):
 
 @membership_required()
 def notifications(request):
+    from .notification_actions import notification_action
     items=_page(request,request.user.workforce_notifications.filter(organization=request.organization).order_by("-created_at"))
+    for item in items:
+        item.action = notification_action(request, item)
     return render(request,"core/notifications.html",{"notifications":items,"paginator":items.paginator,"is_paginated":items.has_other_pages()})
 
 @require_POST
@@ -3568,6 +3768,60 @@ def _capture_signup_text_consent(request, invitation, form, user):
         state=MessageConsent.State.GRANTED, source=MessageConsent.Source.SIGNUP,
         wording=sms_consent_wording(invitation.organization),
         evidence={"surface": "invitation_accept", "ip": client_ip(request)}, actor=user)
+
+@login_required
+def about(request):
+    """The release number and the open-source notices every component here obliges us to show.
+
+    Any signed-in user may read it, including one not yet placed in a company, because the
+    attribution duty runs to everyone using the software. It stays behind sign-in so the exact
+    dependency versions are not handed to anonymous visitors.
+    """
+    import platform
+    from .about import SERVICES, bundled_components, python_components, runtime_license
+    packages = python_components()
+    bundled = bundled_components()
+    return render(request, "core/about.html", {
+        "packages": packages, "bundled": bundled, "services": SERVICES,
+        "python_version": platform.python_version(), "python_license": runtime_license(),
+        "component_count": len(packages) + len(bundled),
+    })
+
+@membership_required()
+def my_account(request):
+    """One place for everything a signed-in person owns about themselves."""
+    organization = request.organization
+    person = organization.people.select_related("branch").filter(user=request.user).first()
+    consent = current_consent(organization, person.mobile_phone) if person and person.mobile_phone else None
+    from allauth.mfa.utils import is_mfa_enabled
+    return render(request, "core/my_account.html", {
+        "person": person, "consent": consent,
+        "mfa_enabled": is_mfa_enabled(request.user),
+        "has_password": request.user.has_usable_password(),
+        "pin_set": bool(person and person.pin_set_at),
+    })
+
+@membership_required()
+@transaction.atomic
+def my_contact_edit(request):
+    """Self-service contact details, written to the personnel history exactly as a manager edit is."""
+    from .forms import SelfContactForm
+    person = request.organization.people.filter(user=request.user).first()
+    if not person:
+        messages.error(request, "This sign-in is not linked to a personnel record. Ask HR to link it.")
+        return redirect("my_account")
+    before = person_snapshot(person)
+    form = SelfContactForm(request.POST or None, instance=person)
+    if request.method == "POST" and form.is_valid():
+        person = form.save()
+        changes = record_person_history(person, before, request.user)
+        messages.success(request, "Contact details updated." if changes else "Nothing changed.")
+        return redirect("my_account")
+    return render(request, "core/form.html", {
+        "form": form, "title": "Update my contact details", "eyebrow": "My account",
+        "note": "Name, employee ID, licensing, pay and branch are kept by HR — ask them to correct those. Every change here is recorded in your personnel history.",
+        "cancel_url": reverse("my_account"),
+    })
 
 @membership_required()
 @transaction.atomic
@@ -3853,10 +4107,67 @@ def provider_callback(request, provider, token):
         return HttpResponse(twiml_reply(reply), content_type="application/xml")
     return JsonResponse({"stored": len(stored), "applied": sum(1 for row in stored if row.applied)})
 
+def _time_review_run(request):
+    run_id = request.GET.get("run")
+    if not run_id:
+        return None
+    if request.membership.role not in PAYROLL:
+        raise Http404
+    try:
+        run_id = uuid.UUID(run_id)
+    except (TypeError, ValueError, AttributeError):
+        raise Http404
+    run = request.organization.payroll_runs.filter(pk=run_id).first()
+    if run is None:
+        raise Http404
+    return run
+
+
+def _time_review_query(request, run=None):
+    from urllib.parse import urlencode
+    params = {
+        name: request.GET.get(name) if request.GET.get(name) in ("pending", "history", "all") else "pending"
+        for name in ("punches", "adjustments")
+    }
+    for name in ("punch_page", "adjustment_page"):
+        value = request.GET.get(name, "")
+        if value.isdigit():
+            params[name] = value
+    if run is not None:
+        params["run"] = str(run.pk)
+    return urlencode(params)
+
+
 @membership_required(*TIME_REVIEWERS)
 def time_review(request):
     scope=scope_for(request)
-    punches=_page(request,scope.filter_punches(request.organization.punches.select_related("person","shift__site","selfie__document_type")).order_by("-occurred_at"))
+    from .time_workflow import pending_time_review_counts
+    run = _time_review_run(request)
+
+    filter_choices = {"pending", "history", "all"}
+    punch_filter = request.GET.get("punches", "pending")
+    adjustment_filter = request.GET.get("adjustments", "pending")
+    if punch_filter not in filter_choices:
+        punch_filter = "pending"
+        messages.error(request, "Unknown punch filter; showing pending punches.")
+    if adjustment_filter not in filter_choices:
+        adjustment_filter = "pending"
+        messages.error(request, "Unknown correction filter; showing pending requests.")
+
+    punch_queryset = scope.filter_punches(
+        request.organization.punches.select_related(
+            "person", "shift__site", "selfie__document_type"
+        )
+    ).order_by("-occurred_at")
+    if run is not None:
+        punch_queryset = punch_queryset.filter(
+            occurred_at__gte=run.period_start, occurred_at__lt=run.period_end,
+        )
+    if punch_filter == "pending":
+        punch_queryset = punch_queryset.filter(review_status=Punch.Review.PENDING)
+    elif punch_filter == "history":
+        punch_queryset = punch_queryset.exclude(review_status=Punch.Review.PENDING)
+    punches = Paginator(punch_queryset, PAGE_SIZE).get_page(request.GET.get("punch_page", request.GET.get("page")))
     # CLK-2. A reviewer deciding whether to accept a punch needs to know it came off a shared pad, and
     # needs the station's *name* rather than a uuid they cannot interpret. One query for the page (a
     # device_id may equally be an offline device, which simply is not in this map), attached to the
@@ -3875,14 +4186,40 @@ def time_review(request):
         # can open it, and says nothing at all to the rest.
         row.selfie_visible=bool(row.selfie_id) and _record_open(request, row.selfie)
     punches.object_list=rows
-    adjustments=scope.filter_adjustments(request.organization.punch_adjustments.select_related("punch__person","requested_by","reviewed_by")).order_by("-created_at")[:100]
-    return render(request,"core/time_review.html",{"punches":punches,"adjustments":adjustments,"paginator":punches.paginator,
-                                                   "is_paginated":punches.has_other_pages(),"authority_scope":scope if scope.restricted else None})
+    adjustment_queryset = scope.filter_adjustments(
+        request.organization.punch_adjustments.select_related(
+            "punch__person", "requested_by", "reviewed_by"
+        )
+    ).order_by("-created_at")
+    if run is not None:
+        adjustment_queryset = adjustment_queryset.filter(
+            punch__occurred_at__gte=run.period_start, punch__occurred_at__lt=run.period_end,
+        )
+    if adjustment_filter == "pending":
+        adjustment_queryset = adjustment_queryset.filter(status=PunchAdjustment.Status.REQUESTED)
+    elif adjustment_filter == "history":
+        adjustment_queryset = adjustment_queryset.exclude(status=PunchAdjustment.Status.REQUESTED)
+    adjustments = Paginator(adjustment_queryset, PAGE_SIZE).get_page(
+        request.GET.get("adjustment_page")
+    )
+    pending_counts = pending_time_review_counts(request.organization, scope, run=run)
+    return render(request, "core/time_review.html", {
+        "punches": punches,
+        "adjustments": adjustments,
+        "punch_filter": punch_filter,
+        "adjustment_filter": adjustment_filter,
+        "pending_count": pending_counts["punches"],
+        "pending_corrections_count": pending_counts["corrections"],
+        "selected_run": run, "review_query": _time_review_query(request, run),
+        "authority_scope": scope if scope.restricted else None,
+    })
 
 @require_POST
 @membership_required(*TIME_REVIEWERS)
 @transaction.atomic
 def punch_review(request,punch_id):
+    run = _time_review_run(request)
+    return_url = f"{reverse('time_review')}?{_time_review_query(request, run)}"
     punch=request.organization.punches.select_related("person","shift__site").filter(pk=punch_id).first()
     if not punch: raise Http404
     if not scope_for(request).permits_punch(punch):
@@ -3891,10 +4228,12 @@ def punch_review(request,punch_id):
         raise Http404
     action=request.POST.get("action"); reason=request.POST.get("reason","").strip()
     if action not in (Punch.Review.ACCEPTED,Punch.Review.REJECTED) or (action==Punch.Review.REJECTED and len(reason)<5):
-        messages.error(request,"Choose approve/reject and provide a rejection reason."); return redirect("time_review")
+        messages.error(request,"Choose approve/reject and provide a rejection reason.")
+        return redirect(return_url)
     before=punch.review_status;punch.review_status=action;punch.exception_reason=reason;punch.save(update_fields=["review_status","exception_reason"])
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="punch.reviewed",target_type="punch",target_id=str(punch.pk),metadata={"before":before,"after":action,"reason":reason})
-    messages.success(request,"Punch review saved."); return redirect("time_review")
+    messages.success(request,"Punch review saved.")
+    return redirect(return_url)
 
 @membership_required()
 @transaction.atomic
@@ -3930,13 +4269,19 @@ def adjustment_request(request,punch_id):
 @membership_required(*TIME_REVIEWERS)
 @transaction.atomic
 def adjustment_review(request,adjustment_id):
+    run = _time_review_run(request)
+    return_url = f"{reverse('time_review')}?{_time_review_query(request, run)}"
     item=request.organization.punch_adjustments.select_related("punch__person","punch__shift__site").filter(pk=adjustment_id,status=PunchAdjustment.Status.REQUESTED).first()
     if not item: raise Http404
     if not scope_for(request).permits_punch(item.punch): raise Http404
     status=request.POST.get("action"); note=request.POST.get("note","").strip()
-    if status not in (PunchAdjustment.Status.APPROVED,PunchAdjustment.Status.REJECTED): messages.error(request,"Invalid review action."); return redirect("time_review")
+    if status not in (PunchAdjustment.Status.APPROVED,PunchAdjustment.Status.REJECTED):
+        messages.error(request,"Invalid review action.")
+        return redirect(return_url)
     state = payroll_lock_state(request.organization, item.punch.occurred_at, *lock_subject(item.punch))
-    if state["locked"]: messages.error(request,f"This payroll period is locked — {state['by']}."); return redirect("time_review")
+    if state["locked"]:
+        messages.error(request,f"This payroll period is locked — {state['by']}.")
+        return redirect(return_url)
     item.status=status;item.reviewed_by=request.user;item.reviewed_at=timezone.now();item.review_note=note;item.save(update_fields=["status","reviewed_by","reviewed_at","review_note"])
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="punch_adjustment.reviewed",target_type="punch_adjustment",target_id=str(item.pk),metadata={"status":status,"note":note})
     # The officer is the only party who does not have a screen to check, so the outcome is pushed.
@@ -3948,30 +4293,112 @@ def adjustment_review(request,adjustment_id):
               f"{'approved at ' + format(timezone.localtime(item.proposed_at), '%d %b %Y %H:%M') if status==PunchAdjustment.Status.APPROVED else 'declined'}."
               + (f" Note: {note}" if note else "")),
         dedup_key=f"punch.correction:{item.pk}:{status}")
-    messages.success(request,"Correction review saved."); return redirect("time_review")
+    messages.success(request,"Correction review saved.")
+    return redirect(return_url)
 
 @membership_required(*PAYROLL)
 def payroll(request):
-    form=PayrollPeriodForm(request.POST or None)
+    organization = request.organization
+    requested_run_id = request.GET.get("run")
+    run_queryset = organization.payroll_runs.select_related(
+        "approved_by", "reopened_by"
+    ).prefetch_related(
+        "lock_segments__branch", "lock_segments__client", "lock_segments__decided_by"
+    )
+    if requested_run_id:
+        try:
+            requested_run_id = uuid.UUID(requested_run_id)
+        except (TypeError, ValueError, AttributeError):
+            raise Http404
+        selected_run = run_queryset.filter(pk=requested_run_id).first()
+        if selected_run is None:
+            raise Http404
+    else:
+        selected_run = run_queryset.first()
+
+    initial = {}
+    if selected_run and selected_run.status == PayrollRun.Status.DRAFT:
+        initial = {
+            "period_start": timezone.localtime(selected_run.period_start),
+            "period_end": timezone.localtime(selected_run.period_end),
+        }
+    form=PayrollPeriodForm(request.POST or None, initial=initial)
     if request.method=="POST" and form.is_valid():
-        run=create_payroll_run(organization=request.organization,start=form.cleaned_data["period_start"],end=form.cleaned_data["period_end"],actor=request.user)
-        messages.success(request,"Payroll draft generated."); return redirect("payroll")
-    policy=TimePolicy.objects.filter(organization=request.organization).first()
-    latest = request.organization.payroll_runs.order_by("-period_start").first()
-    # Grouped totals come from the generated snapshot rather than a fresh calculation, so the
-    # figures on the screen and the figures in the file the clerk downloads are the same numbers —
-    # a second, live computation is how a summary starts disagreeing with its own export.
-    snapshot = latest.snapshot if latest else []
+        run=create_payroll_run(organization=organization,start=form.cleaned_data["period_start"],end=form.cleaned_data["period_end"],actor=request.user)
+        if run.status == PayrollRun.Status.DRAFT:
+            messages.success(request,"Payroll draft refreshed from the selected period.")
+        else:
+            messages.warning(request,"This period is already locked; its approved snapshot was not changed.")
+        return redirect(f"{reverse('payroll')}?run={run.pk}")
+    policy=TimePolicy.objects.filter(organization=organization).first()
+    runs = list(run_queryset[:30])
+    if selected_run is None:
+        selected_run = runs[0] if runs else None
+    elif all(run.pk != selected_run.pk for run in runs):
+        runs.insert(0, selected_run)
+    snapshot = selected_run.snapshot if selected_run else []
+    pending_punch_count = pending_correction_count = 0
+    exception_rows = []
+    open_segments = []
+    if selected_run:
+        period_punches = organization.punches.filter(
+            occurred_at__gte=selected_run.period_start,
+            occurred_at__lt=selected_run.period_end,
+        )
+        pending_punch_count = period_punches.filter(
+            review_status=Punch.Review.PENDING
+        ).count()
+        pending_correction_count = organization.punch_adjustments.filter(
+            punch__occurred_at__gte=selected_run.period_start,
+            punch__occurred_at__lt=selected_run.period_end,
+            status=PunchAdjustment.Status.REQUESTED,
+        ).count()
+        open_segments = open_lock_segments(selected_run)
+        for exception in selected_run.exceptions or []:
+            reason = str(exception.get("reason", ""))
+            lower_reason = reason.lower()
+            if "await review" in lower_reason:
+                destination = f"{reverse('time_review')}?punches=pending&adjustments=pending&run={selected_run.pk}"
+                destination_label = "Review pending time"
+            elif "reopen" in lower_reason or "regenerate" in lower_reason:
+                destination = "#generate-draft"
+                destination_label = "Regenerate this period"
+            elif any(word in lower_reason for word in ("category", "leave", "designated")):
+                destination = reverse("settings_pay_categories")
+                destination_label = "Review hour categories"
+            elif "hold" in lower_reason:
+                destination = reverse("schedule")
+                destination_label = "Review the schedule"
+            else:
+                destination = f"{reverse('time_review')}?punches=all&adjustments=all&run={selected_run.pk}"
+                destination_label = "Review time evidence"
+            exception_rows.append({
+                "employee": exception.get("employee", ""),
+                "reason": reason,
+                "destination": destination,
+                "destination_label": destination_label,
+            })
+    approval_blocked = bool(
+        selected_run
+        and (selected_run.exceptions or pending_punch_count or pending_correction_count)
+    )
+    stage = (
+        selected_run.status if selected_run else "generate"
+    )
+    # The selected run's generated snapshot is the source for both the page and its export.
     return render(request,"core/payroll.html",{
-        "form":form,"runs":request.organization.payroll_runs.select_related("approved_by","reopened_by")
-            .prefetch_related("lock_segments__branch","lock_segments__client","lock_segments__decided_by")[:30],
+        "form":form,"runs":runs,
         # The picker for a lock slice: whoever decides "which part is agreed" chooses from the same two
         # axes the rest of the product divides work by, rather than typing a name.
-        "lock_branches": request.organization.branches.filter(active=True).order_by("name"),
-        "lock_clients": request.organization.clients.order_by("name"),
+        "lock_branches": organization.branches.filter(active=True).order_by("name"),
+        "lock_clients": organization.clients.order_by("name"),
         "lock_statuses": PayrollLockSegment.Status.choices,
         "can_reopen":bool(policy and policy.allow_reopen),"privileged":request.membership.role in PRIVILEGED,
-        "latest":latest,"by_pay_code":payroll_totals(snapshot,by="pay_code"),
+        "selected_run":selected_run,"latest":selected_run,"stage":stage,
+        "exception_rows":exception_rows,"pending_punch_count":pending_punch_count,
+        "pending_correction_count":pending_correction_count,"open_segments":open_segments,
+        "approval_blocked":approval_blocked,
+        "by_pay_code":payroll_totals(snapshot,by="pay_code"),
         "by_category":payroll_totals(snapshot,by="pay_category"),
     })
 
@@ -3989,7 +4416,7 @@ def payroll_reopen(request,run_id):
     try: reopen_payroll_run(run,request.user,request.POST.get("reason",""))
     except ValidationError as exc: messages.error(request,str(exc))
     else: messages.warning(request,f"{run.period_start:%b %d} – {run.period_end:%b %d} reopened. Generate the draft again to pick up the corrected time, then approve it.")
-    return redirect("payroll")
+    return redirect(f"{reverse('payroll')}?run={run.pk}")
 
 @require_POST
 @membership_required(*(MANAGERS + PAYROLL))
@@ -4012,7 +4439,7 @@ def payroll_segment_lock(request, run_id):
     status = request.POST.get("status")
     if status == PayrollLockSegment.Status.OPEN and request.membership.role not in PRIVILEGED:
         messages.error(request, "Only an owner or administrator can open part of an approved period.")
-        return redirect("payroll")
+        return redirect(f"{reverse('payroll')}?run={run.pk}")
     # One select, prefixed by axis: an operator picking "which slice" should not have to know that a
     # branch and a contract live in different tables, and empty means the catch-all slice that covers
     # everywhere the named ones do not.
@@ -4024,32 +4451,49 @@ def payroll_segment_lock(request, run_id):
             branch = org.branches.filter(pk=wanted).first()
             if branch is None:
                 messages.error(request, "That branch is not in this company.")
-                return redirect("payroll")
+                return redirect(f"{reverse('payroll')}?run={run.pk}")
         else:
             client = org.clients.filter(pk=wanted).first()
             if client is None:
                 messages.error(request, "That contract is not in this company.")
-                return redirect("payroll")
+                return redirect(f"{reverse('payroll')}?run={run.pk}")
     try:
         row = set_payroll_lock_segment(run, request.user, status, request.POST.get("reason", ""),
                                        branch=branch, client=client)
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
-        return redirect("payroll")
+        return redirect(f"{reverse('payroll')}?run={run.pk}")
     messages.success(request, f"{row.subject_label} is {row.get_status_display().lower()} for "
                               f"{run.period_start:%b %d} – {run.period_end:%b %d}. "
                               "The rest of the period keeps the run's own status.")
-    return redirect("payroll")
+    return redirect(f"{reverse('payroll')}?run={run.pk}")
 
 @require_POST
 @membership_required(*PAYROLL)
 def payroll_approve(request,run_id):
     run=request.organization.payroll_runs.filter(pk=run_id).first()
     if not run: raise Http404
-    try: approve_payroll_run(run,request.user)
-    except ValidationError as exc: messages.error(request,str(exc))
-    else: messages.success(request,"Payroll approved and locked.")
-    return redirect("payroll")
+    pending_punches = request.organization.punches.filter(
+        occurred_at__gte=run.period_start,
+        occurred_at__lt=run.period_end,
+        review_status=Punch.Review.PENDING,
+    ).count()
+    pending_corrections = request.organization.punch_adjustments.filter(
+        punch__occurred_at__gte=run.period_start,
+        punch__occurred_at__lt=run.period_end,
+        status=PunchAdjustment.Status.REQUESTED,
+    ).count()
+    if pending_punches or pending_corrections:
+        messages.error(
+            request,
+            f"Resolve {pending_punches} pending punch(es) and {pending_corrections} "
+            "correction request(s) for this period before approval.",
+        )
+    else:
+        try: approve_payroll_run(run,request.user)
+        except ValidationError as exc: messages.error(request,str(exc))
+        else: messages.success(request,"Payroll approved and locked.")
+    return redirect(f"{reverse('payroll')}?run={run.pk}")
 
 @membership_required(*PAYROLL)
 @transaction.atomic
@@ -4063,7 +4507,7 @@ def payroll_run_export(request,run_id):
     if pending:
         messages.error(request, "This period cannot be exported while a slice of it is open for correction: "
                                 + ", ".join(item.subject_label for item in pending) + ".")
-        return redirect("payroll")
+        return redirect(f"{reverse('payroll')}?run={run.pk}")
     format=request.GET.get("format","csv").lower()
     exporters={"csv":(payroll_snapshot_csv,"text/csv"),"xlsx":(payroll_snapshot_xlsx,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),"pdf":(payroll_snapshot_pdf,"application/pdf")}
     if format not in exporters: raise Http404
@@ -4415,11 +4859,9 @@ def onboarding_issue(request, person_id=None):
     org = request.organization
     if person_id:
         people = [_profile_person(request, person_id)]
-        destination = ("person_detail", person_id)
     else:
         people = list(scope_for(request).filter_people(
             org.people.filter(status=Person.Status.ONBOARDING)).select_related("user"))
-        destination = ("onboarding_settings",)
     created = 0
     notified = 0
     for person in people:
@@ -4432,7 +4874,7 @@ def onboarding_issue(request, person_id=None):
                               metadata={"people": len(people), "tasks": created, "notices": notified})
     messages.success(request, (f"Issued {created} step{'' if created == 1 else 's'} to {len(people)} officer{'' if len(people) == 1 else 's'}."
                                if created else "Every applicable step is already issued to these officers — nothing was duplicated."))
-    return redirect(destination[0], destination[1]) if destination[1] else redirect(destination[0])
+    return redirect(reverse("person_detail", args=[person_id]) + "?tab=onboarding") if person_id else redirect("onboarding_settings")
 
 
 @membership_required()
@@ -4460,12 +4902,14 @@ def onboarding_task_decide(request, task_id):
     note = (request.POST.get("note") or "").strip()
     staff = role in MANAGERS
     may_waive = role in RECORD_WRITERS
+    checklist_url = (reverse("person_detail", args=[task.person_id]) + "?tab=onboarding"
+                     if staff else reverse("my_onboarding"))
     if action == "waive" and not may_waive:
         messages.error(request, "Only the office that files records can waive a step, and the reason has to be recorded.")
-        return redirect("person_detail", person_id=task.person_id)
+        return redirect(checklist_url)
     if action == "reopen" and not staff:
         messages.error(request, "Only the office can reopen a step somebody else decided.")
-        return redirect("person_detail", person_id=task.person_id)
+        return redirect(checklist_url)
     if not staff and not (is_self and task.item.owner == OnboardingItem.Owner.PERSON and action == "complete"):
         raise Http404
     target = {"complete": OnboardingTask.Status.DONE, "waive": OnboardingTask.Status.WAIVED,
@@ -4483,7 +4927,7 @@ def onboarding_task_decide(request, task_id):
             decide_onboarding_task(task, request.user, target, note)
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
-        return redirect("person_detail", person_id=task.person_id)
+        return redirect(checklist_url)
     AuditEvent.objects.create(organization=org, actor=request.user, action="onboarding.decided",
                               target_type="onboarding_task", target_id=str(task.pk),
                               metadata={"person": str(task.person_id), "item": str(task.item_id),
@@ -4499,7 +4943,7 @@ def onboarding_task_decide(request, task_id):
     messages.success(request, {"done": f"{task.item.name} is complete.",
                                "waived": f"{task.item.name} is waived for {task.person.full_name}.",
                                "open": f"{task.item.name} is outstanding again."}[task.status])
-    return redirect("person_detail", person_id=task.person_id)
+    return redirect(checklist_url)
 
 
 @membership_required()

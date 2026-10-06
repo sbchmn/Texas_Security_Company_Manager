@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% block title %}Signing operations{% endblock %}
+{% block content %}<div class="page">
+  <div class="page-heading"><div><h1>Signing operations</h1><p>Sending remains explicit. A signature is complete only after verified PDFs and the audit certificate are filed.</p></div><div class="actions"><a class="button secondary" href="{% url 'workspace_people' %}#onboarding-actions">Back to onboarding queue</a></div></div>
+  {% include 'core/scope_note.html' %}
+  {% if request.GET.task %}<p class="message">Showing the selected signing task. <a href="{% url 'signing_queue' %}">View all signing tasks</a>.</p>{% endif %}
+  <nav class="tabs" aria-label="Signing stage">{% for option in stages %}<a href="?stage={{ option.value }}" class="{% if stage == option.value %}active{% endif %}">{{ option.label }} <em>{{ option.count }}</em></a>{% endfor %}</nav>
+  <section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Person / document</th><th>Responsible party</th><th>Due / age</th><th>State / next action</th><th>Actions</th></tr></thead><tbody>
+    {% for row in queue %}<tr id="signing-task-{{ row.task.pk }}"><td>{{ row.person.full_name }}<small>{{ row.name }}</small></td><td>{{ row.owner }}</td><td>{{ row.due_on|default:"No deadline" }}{% if row.overdue %}<span class="pill attention">Overdue</span>{% endif %}<small>Issued {{ row.created_at|timesince }} ago</small></td><td>{{ row.state }}<small>{{ row.next_step }}</small>{% if row.signing.last_error %}<p class="message warning">{{ row.signing.last_error }}</p>{% endif %}</td><td>
+      {% include 'core/_onboarding_signing.html' with can_waive=True is_self=False signing_queue_return=True %}
+      {% if row.category == 'completed' %}<a href="{% url 'person_detail' row.person.pk %}?tab=documents">Open personnel file</a>{% else %}<a href="{% url 'person_detail' row.person.pk %}?tab=onboarding#task-{{ row.task.pk }}">Open checklist</a>{% endif %}
+    </td></tr>{% empty %}<tr><td colspan="5">No signing tasks at this stage that your role may read.</td></tr>{% endfor %}
+  </tbody></table></div>{% include 'core/pagination.html' with page=queue %}</section>
+</div>{% endblock %}

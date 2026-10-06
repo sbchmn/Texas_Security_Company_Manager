@@ -1,0 +1,12 @@
+<li class="about-item">
+  <details>
+    <summary><span class="about-name">{{ item.name }}</span> <span class="about-version">{{ item.version }}</span><span class="pill">{{ item.license }}</span>{% if item.url %}<a href="{{ item.url }}" rel="noopener" target="_blank">Project</a>{% endif %}</summary>
+    {% if item.summary %}<p class="muted">{{ item.summary }}</p>{% endif %}
+    {% for text in item.texts %}
+    <h3 class="about-file">{{ text.name }}</h3>
+    <pre class="about-license">{{ text.text }}</pre>
+    {% empty %}
+    <p class="muted">This package does not ship a separate license file; it is distributed under {{ item.license }}{% if item.url %} — see <a href="{{ item.url }}" rel="noopener" target="_blank">the project</a>{% endif %}.</p>
+    {% endfor %}
+  </details>
+</li>

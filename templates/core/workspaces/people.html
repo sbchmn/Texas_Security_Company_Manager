@@ -9,15 +9,17 @@
       <p>Manage personnel, onboarding, and credentials.</p>
     </div>
     <div class="actions">
+      {% if can_signing %}<a class="button secondary" href="{% url 'signing_queue' %}">Signing operations</a>{% endif %}
       <a class="button" href="{% url 'person_create' %}">+ Add person</a>
     </div>
   </div>
 
+  {% include 'core/_onboarding_queue.html' %}
   <section class="workspace-grid">
     <article class="card card-primary">
       <h2>Onboarding</h2>
       <p class="metric">{{ onboarding_count }} officer{{ onboarding_count|pluralize }}</p>
-      <p class="muted">{% if overdue_count %}{{ overdue_count }} overdue{% else %}All on track{% endif %}</p>
+      <p class="muted">{{ overdue_count }} overdue onboarding step{{ overdue_count|pluralize }}.</p>
       {% if onboarding_list %}
         <ul class="person-list">
           {% for person in onboarding_list|slice:":5" %}
@@ -28,31 +30,31 @@
           {% endfor %}
         </ul>
       {% endif %}
-      <a class="button button-small" href="{% url 'workspace_people' %}?status=onboarding">View all onboarding</a>
+      <div class="card-actions"><a class="button button-small" href="#onboarding-actions">Review outstanding steps</a></div>
     </article>
 
     <article class="card">
       <h2>Active officers</h2>
       <p class="metric">{{ active_count }}</p>
-      <a class="button button-small" href="{% url 'people' %}">Manage people</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'people' %}">Manage people</a></div>
     </article>
 
     <article class="card">
       <h2>Total</h2>
       <p class="metric">{{ people_count }}</p>
-      <a class="button button-small" href="{% url 'people' %}">View directory</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'people' %}">View directory</a></div>
     </article>
 
     <article class="card">
       <h2>Credentials & training</h2>
       <p class="muted">Manage requirements and track completion.</p>
-      <a class="button button-small" href="{% url 'compliance' %}">Compliance queue</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'compliance' %}">Compliance queue</a></div>
     </article>
   </section>
 
   {% if people %}
     <section class="panel table-panel">
-      <h2>Recent people</h2>
+      <h2>Personnel directory preview</h2>
       <div class="table-wrap">
         <table>
           <thead>

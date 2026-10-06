@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import os
 import re
 from datetime import timedelta
 from urllib.parse import urljoin, urlsplit
@@ -74,6 +75,15 @@ def signing_config(organization):
     return config
 
 
+def docuseal_tls_verify():
+    path = settings.DOCUSEAL_CA_BUNDLE
+    if not path:
+        return True
+    if not os.path.isfile(path):
+        raise ValidationError("DOCUSEAL_CA_BUNDLE does not name a readable certificate file in the web and worker containers.")
+    return path
+
+
 class SubmissionRejected(ValidationError):
     """A definitive POST rejection, unlike a timeout or unreadable creation response."""
 
@@ -82,6 +92,7 @@ class DocuSealClient:
     def __init__(self, config):
         self.base_url = allowed_origin(config.base_url)
         self.api_key = decrypt_api_key(config.encrypted_api_key)
+        self.verify = docuseal_tls_verify()
 
     @staticmethod
     def _read(response, limit):
@@ -97,6 +108,7 @@ class DocuSealClient:
             with requests.request(
                 method, self.base_url + "/api" + path, headers={"X-Auth-Token": self.api_key},
                 params=params, json=payload, timeout=(5, 30), allow_redirects=False, stream=True,
+                verify=self.verify,
             ) as response:
                 if not 200 <= response.status_code < 300:
                     error = (
@@ -141,7 +153,7 @@ class DocuSealClient:
                 origin = canonical_origin(f"{parts.scheme}://{parts.netloc}")
                 if origin != self.base_url or parts.username or parts.password:
                     raise ValidationError("Signed files must be served from the configured DocuSeal origin.")
-                with requests.get(url, timeout=(5, 30), allow_redirects=False, stream=True) as response:
+                with requests.get(url, timeout=(5, 30), allow_redirects=False, stream=True, verify=self.verify) as response:
                     if response.status_code in (301, 302, 303, 307, 308):
                         location = response.headers.get("Location")
                         if not location:
@@ -235,7 +247,7 @@ def _queue_invitation(request):
         )
 
 
-def issue_signing_request(task, actor):
+def issue_signing_request(task, actor, *, return_url=None):
     if not Membership.objects.filter(
         organization=task.organization, user=actor, active=True,
         role__in=[Membership.Role.OWNER, Membership.Role.ADMIN, Membership.Role.HR],
@@ -288,7 +300,10 @@ def issue_signing_request(task, actor):
         data = client.api("POST", "/submissions", payload={
             "template_id": request.template_id, "send_email": False, "send_sms": False,
             "submitters": [{"name": request.signer_name, "email": email, "role": snapshot["role"],
-                            "external_id": str(request.pk)}],
+                            "external_id": str(request.pk),
+                            # Only a convenience hop back to TSCM; completion is still confirmed by
+                            # reconciling against the DocuSeal API, never by the browser arriving.
+                            **({"completed_redirect_url": return_url} if return_url else {})}],
         })
         if not isinstance(data, list) or len(data) != 1:
             raise ValidationError("DocuSeal returned an invalid creation response. Check status before sending again.")

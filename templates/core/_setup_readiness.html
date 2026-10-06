@@ -1,0 +1,3 @@
+{% if setup_checks %}<section class="panel table-panel" id="setup-readiness"><h2>Setup readiness</h2><p class="muted">Configuration checks, not operational or legal certification. Optional integrations may remain disabled deliberately.</p><div class="table-wrap"><table><thead><tr><th>Area</th><th>Configuration state</th><th>Next step</th></tr></thead><tbody>
+{% for item in setup_checks %}<tr><td>{{ item.label }}</td><td><span class="pill {% if item.configured %}accepted{% else %}pending{% endif %}">{% if item.configured %}Configured{% else %}Needs setup / review{% endif %}</span></td><td>{{ item.detail }}<p><a href="{{ item.url }}">Review {{ item.label|lower }}</a></p></td></tr>{% endfor %}
+</tbody></table></div></section>{% endif %}

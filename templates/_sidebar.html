@@ -1,9 +1,43 @@
-<aside class="sidebar"><a class="brand" href="/">{% if current_organization.logo %}<img src="{% url 'brand_logo' %}" alt="{{ current_organization.display_name }} logo">{% else %}<span class="brand-mark" aria-hidden="true">TS</span>{% endif %}<span><strong>{{ current_organization.display_name|default:"Security Manager" }}</strong>{% if active_workspace %}<small>{{ active_workspace }}</small>{% else %}<small>Workspace</small>{% endif %}</span></a>
+<aside class="sidebar" id="workspace-sidebar">
+  <button type="button" class="sidebar-dismiss" data-menu-close aria-label="Close menu">Close menu</button>
+  <a class="brand" href="{% url 'workspace_today' %}">
+    {% if current_organization.logo %}<img src="{% url 'brand_logo' %}" alt="{{ current_organization.display_name }} logo">{% else %}<span class="brand-mark" aria-hidden="true">TS</span>{% endif %}
+    <span><strong>{{ current_organization.display_name|default:"Security Manager" }}</strong><small>{{ active_workspace|default:"Workspace" }}</small></span>
+  </a>
 
-<nav class="workspace-nav" aria-label="Workspaces">{% if workspaces %}<div class="nav-section">{% for workspace in workspaces %}<a class="workspace-link {% if workspace.active %}active{% endif %}" href="{{ workspace.url }}" title="{{ workspace.label }}">{{ workspace.label }}</a>{% endfor %}</div>{% endif %}</nav>
+  <nav class="sidebar-navigation" aria-label="Main navigation">
+    {% if quick_links %}
+      <section class="nav-section" aria-labelledby="quick-links-heading">
+        <h2 id="quick-links-heading" class="nav-heading">Quick access</h2>
+        {% for item in quick_links %}
+          <a href="{{ item.url }}" class="quick-link{% if item.active %} active{% endif %}"{% if item.active %} aria-current="page"{% endif %}>{{ item.label }}</a>
+        {% endfor %}
+      </section>
+    {% endif %}
+    {% if workspaces %}
+      <section class="nav-section" aria-labelledby="workspaces-heading">
+        <h2 id="workspaces-heading" class="nav-heading">Workspaces</h2>
+        {% for workspace in workspaces %}
+          <a class="workspace-link{% if workspace.active %} active{% endif %}" href="{{ workspace.url }}"{% if workspace.active %} aria-current="{% if workspace.current %}page{% else %}location{% endif %}"{% endif %}>{{ workspace.label }}</a>
+        {% endfor %}
+      </section>
+    {% endif %}
+    {% if settings_nav %}
+      <details class="settings-group"{% if settings_active %} open{% endif %}>
+        <summary>Settings</summary>
+        <div class="settings-list">
+          {% for item in settings_nav %}<a href="{{ item.url }}" class="{% if item.active %}active{% endif %}"{% if item.active %} aria-current="location"{% endif %}>{{ item.label }}</a>{% endfor %}
+        </div>
+      </details>
+    {% endif %}
+  </nav>
 
-<nav class="actions-nav" aria-label="Actions and settings">{% if can_manage_people %}<a class="add-person-btn" href="{% url 'person_create' %}" title="Add new person">+ Add person</a>{% endif %}</nav>
-
-<nav class="settings-nav" aria-label="Settings">{% if settings_nav %}<details class="settings-group"><summary>Settings</summary><div class="settings-list">{% for item in settings_nav %}<a href="{{ item.url }}" class="{% if item.active %}active{% endif %}">{{ item.label }}</a>{% endfor %}</div></details>{% endif %}</nav>
-
-<div class="sidebar-user"><a href="{% url 'tenant_select' %}">Switch company</a><a href="{% url 'notifications' %}">Notifications</a><span>{{ user.get_full_name|default:user.username }}</span><small>{{ current_membership.get_role_display }}</small>{% if authority_scope %}<small class="scope-pill" title="Bounded manager authority">Scope: {{ authority_scope.summary }}</small>{% endif %}<form action="{% url 'account_logout' %}" method="post">{% csrf_token %}<button>Sign out</button></form></div></aside>
+  <div class="sidebar-user">
+    <div class="sidebar-utilities"><a href="{% url 'my_account' %}">My account</a><a href="{% url 'notifications' %}">Notifications</a><a href="{% url 'tenant_select' %}">Switch company</a></div>
+    <a href="{% url 'my_account' %}" class="sidebar-account" title="My account, password and two-factor">{{ user.get_full_name|default:user.username }}</a>
+    <small>{{ current_membership.get_role_display }}</small>
+    {% if authority_scope %}<small class="scope-pill" title="Bounded manager authority">Scope: {{ authority_scope.summary }}</small>{% endif %}
+    <form action="{% url 'account_logout' %}" method="post">{% csrf_token %}<button>Sign out</button></form>
+    <a href="{% url 'about' %}" class="sidebar-version" title="Version and open-source notices">About &middot; v{{ app_version }}</a>
+  </div>
+</aside>

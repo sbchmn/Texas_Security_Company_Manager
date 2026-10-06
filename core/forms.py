@@ -4,15 +4,16 @@ from django import forms
 from django.contrib.auth.password_validation import validate_password
 from .models import PERSONNEL_CATEGORIES, ROTATING_PRESETS, SERIES_MAX_DAYS, WEEKDAY_CHOICES, AuthorityScope, AvailabilityRule, ChannelRule, Checkpoint, Client, ClockKiosk, ComplianceRule, Credential, CredentialType, CustomFieldDefinition, DispositionRequest, DocumentType, Branch, ImportBatch, Membership, MessageConsent, Notification, OnboardingItem, Organization, PayCode, Person, PersonDocument, Shift, ShiftTemplate, Site, TimeOffRequest, TimePolicy, TimePolicyOverride, TrainingRecord
 from .services import normalize_destination, validate_clock_pin
+from .form_ui import WorkflowForm, WorkflowModelForm
 
-class MembershipInvitationForm(forms.Form):
+class MembershipInvitationForm(WorkflowForm):
     email = forms.EmailField(help_text="The invitation is valid for 72 hours.")
     role = forms.ChoiceField(choices=((Membership.Role.OWNER, "Owner"), (Membership.Role.ADMIN, "Administrator")))
 
     def clean_email(self):
         return self.cleaned_data["email"].strip().casefold()
 
-class PersonAccessForm(forms.Form):
+class PersonAccessForm(WorkflowForm):
     """Access level granted when a personnel record is given a sign-in.
 
     Owner and Administrator are deliberately absent: those are issued from Team access, and an
@@ -27,7 +28,7 @@ class PersonAccessForm(forms.Form):
         initial=Membership.Role.OFFICER,
         help_text="Officer is the right level for a guard who only needs the time clock and their own records.")
 
-class AvailabilityRuleForm(forms.ModelForm):
+class AvailabilityRuleForm(WorkflowModelForm):
     """One weekly window an officer is willing to stand."""
     class Meta:
         model = AvailabilityRule
@@ -37,7 +38,7 @@ class AvailabilityRuleForm(forms.ModelForm):
             "ends_at": "Set a time earlier than the start for a window that runs past midnight, such as 18:00 to 06:00.",
         }
 
-class TimeOffRequestForm(forms.ModelForm):
+class TimeOffRequestForm(WorkflowModelForm):
     class Meta:
         model = TimeOffRequest
         fields = ["starts_at", "ends_at", "reason"]
@@ -46,7 +47,7 @@ class TimeOffRequestForm(forms.ModelForm):
             "reason": "Optional. A manager deciding the request sees this, and the schedule warning names the posts it collides with.",
         }
 
-class AuthorityScopeForm(forms.ModelForm):
+class AuthorityScopeForm(WorkflowModelForm):
     """Grant one bounded scope of manager authority.
 
     Exactly one of the three selects is filled; the model's ``clean`` is what makes that a
@@ -66,7 +67,7 @@ class AuthorityScopeForm(forms.ModelForm):
             "follows_own_branch": "Their authority follows the branch on their own personnel file, including after a reassignment. Use this instead of naming a branch, never alongside it.",
         }
 
-class InvitationAcceptanceForm(forms.Form):
+class InvitationAcceptanceForm(WorkflowForm):
     first_name = forms.CharField(max_length=150)
     last_name = forms.CharField(max_length=150)
     password = forms.CharField(widget=forms.PasswordInput, min_length=12, help_text="Use at least 12 characters.")
@@ -96,7 +97,7 @@ class InvitationAcceptanceForm(forms.Form):
             validate_password(data["password"])
         return data
 
-class BrandForm(forms.ModelForm):
+class BrandForm(WorkflowModelForm):
     def __init__(self,*args,**kwargs):
         if args and args[0] is not None and kwargs.get("instance"):
             data=args[0].copy()
@@ -123,18 +124,18 @@ class BrandForm(forms.ModelForm):
         if data.get("accent_color") and data.get("primary_color") and self._contrast(data["accent_color"],data["primary_color"])<3: self.add_error("accent_color","Accent must provide at least 3:1 contrast with the primary color.")
         return data
 
-class BranchForm(forms.ModelForm):
+class BranchForm(WorkflowModelForm):
     class Meta:
         model = Branch
         fields = ["name", "city", "active"]
 
-class CheckpointForm(forms.ModelForm):
+class CheckpointForm(WorkflowModelForm):
     class Meta:
         model = Checkpoint
         fields = ["name", "latitude", "longitude", "radius_meters", "active"]
         help_texts = {"radius_meters": "How close a scan must be to this point to count."}
 
-class PayCodeForm(forms.ModelForm):
+class PayCodeForm(WorkflowModelForm):
     class Meta:
         model = PayCode
         fields = ["name", "code", "cost_centre", "description", "active"]
@@ -144,22 +145,52 @@ class PayCodeForm(forms.ModelForm):
         }
 
 
-class PersonForm(forms.ModelForm):
+class PersonForm(WorkflowModelForm):
+    field_sections = (
+        ("Identity", ("first_name", "last_name", "employee_id", "date_of_birth")),
+        ("Contact", ("email", "mobile_phone", "address_line1", "address_line2", "city", "state", "postal_code")),
+        ("Employment", ("branch", "job_title", "status", "hire_date", "termination_date", "hourly_rate")),
+        ("Emergency contact", ("emergency_contact_name", "emergency_contact_phone")),
+        ("Personnel categories", ("is_unarmed_officer", "is_commissioned_officer", "is_ppo",
+                                  "is_private_investigator", "is_shareholder")),
+    )
     class Meta:
         model = Person
         fields = ["branch", "employee_id", "first_name", "last_name", "email", "mobile_phone", "job_title", "hire_date", "termination_date", "date_of_birth", "address_line1", "address_line2", "city", "state", "postal_code", "emergency_contact_name", "emergency_contact_phone", "hourly_rate", "status", "is_unarmed_officer", "is_commissioned_officer", "is_ppo", "is_private_investigator", "is_shareholder"]
         widgets={name:forms.DateInput(attrs={"type":"date"}) for name in ("hire_date","termination_date","date_of_birth")}
+        labels = {
+            "employee_id": "Employee ID", "address_line1": "Address line 1", "address_line2": "Address line 2",
+            "is_unarmed_officer": "Unarmed officer", "is_commissioned_officer": "Commissioned officer",
+            "is_ppo": "Personal protection officer (PPO)", "is_private_investigator": "Private investigator",
+            "is_shareholder": "Shareholder",
+        }
 
-class CustomFieldDefinitionForm(forms.ModelForm):
+class SelfContactForm(WorkflowModelForm):
+    """What an employee may correct about themselves. Identity, employment, pay and licensing stay HR's."""
+    field_sections = (
+        ("Contact", ("email", "mobile_phone", "address_line1", "address_line2", "city", "state", "postal_code")),
+        ("Emergency contact", ("emergency_contact_name", "emergency_contact_phone")),
+    )
+    class Meta:
+        model = Person
+        fields = ["email", "mobile_phone", "address_line1", "address_line2", "city", "state", "postal_code",
+                  "emergency_contact_name", "emergency_contact_phone"]
+        labels = {"email": "Personal email", "address_line1": "Address line 1", "address_line2": "Address line 2"}
+        help_texts = {
+            "email": "Where the company reaches you. Your sign-in email is changed separately under Sign-in & security.",
+            "mobile_phone": "A new number needs a fresh yes before the company texts it.",
+        }
+
+class CustomFieldDefinitionForm(WorkflowModelForm):
     class Meta:
         model=CustomFieldDefinition
         fields=["name","key","kind","required","sensitive","active"]
 
-class DocumentAcknowledgmentForm(forms.Form):
+class DocumentAcknowledgmentForm(WorkflowForm):
     confirm=forms.BooleanField(label="I acknowledge that I reviewed this document")
     signature_name=forms.CharField(required=False,max_length=160,help_text="Required when the document type requests a signature.")
 
-class ClientForm(forms.ModelForm):
+class ClientForm(WorkflowModelForm):
     class Meta:
         model = Client
         fields = ["name", "contact_name", "contact_email", "required_credentials", "default_pay_rate", "default_bill_rate", "default_pay_code", "active"]
@@ -170,7 +201,7 @@ class ClientForm(forms.ModelForm):
             "default_pay_code": "The job code every post under this contract is paid under, unless a site or post says otherwise.",
         }
 
-class SiteForm(forms.ModelForm):
+class SiteForm(WorkflowModelForm):
     class Meta:
         model = Site
         fields = ["client", "branch", "name", "address", "latitude", "longitude", "geofence_radius_meters", "required_credentials", "default_pay_rate", "default_bill_rate", "default_pay_code", "active"]
@@ -181,7 +212,7 @@ class SiteForm(forms.ModelForm):
             "default_pay_code": "Overrides the contract's code for every post at this site.",
         }
 
-class CredentialTypeForm(forms.ModelForm):
+class CredentialTypeForm(WorkflowModelForm):
     applies_to = forms.MultipleChoiceField(choices=PERSONNEL_CATEGORIES, required=False, widget=forms.CheckboxSelectMultiple(), help_text="Only people in the selected categories are required to hold this credential.")
     reminder_days_before = forms.CharField(required=False, label="Reminder lead times (days)", help_text="Escalating notices before expiry, comma-separated — for example 90, 60, 30, 7. Leave empty to warn once, at the warning window.")
     # NTF-2. Both halves of the escalation sit on the requirement, beside the ladder they extend, so
@@ -223,7 +254,7 @@ class CredentialTypeForm(forms.ModelForm):
             self.add_error("effective_until", "End date must not precede the effective date.")
         return data
 
-class ComplianceRuleForm(forms.ModelForm):
+class ComplianceRuleForm(WorkflowModelForm):
     """Enter a duty that is not a credential, with the same evidence an approver needs."""
 
     applies_to = forms.MultipleChoiceField(choices=PERSONNEL_CATEGORIES, required=False, widget=forms.CheckboxSelectMultiple(), help_text="Only officers in the selected categories must satisfy this rule.")
@@ -284,7 +315,7 @@ class PersonBoundForm:
         return instance
 
 
-class CredentialForm(PersonBoundForm, forms.ModelForm):
+class CredentialForm(PersonBoundForm, WorkflowModelForm):
     class Meta:
         model = Credential
         fields = ["person", "credential_type", "number", "status", "issued_on", "expires_on", "notes"]
@@ -300,11 +331,31 @@ class CredentialForm(PersonBoundForm, forms.ModelForm):
             instance.save()
         return instance
 
-class ShiftForm(forms.ModelForm):
+class ShiftForm(WorkflowModelForm):
+    field_sections = (
+        ("Assignment", ("site", "post_name", "officer", "status", "starts_at", "ends_at")),
+        ("Requirements & instructions", ("required_credentials", "post_orders")),
+        ("Pay & billing overrides", ("pay_rate", "bill_rate", "pay_code")),
+        ("Split tour", ("relief_for",)),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name, label in (("officer", "Unassigned / open post"), ("relief_for", "Not a split tour")):
+            field = self.fields[name]
+            if isinstance(field, forms.ModelChoiceField):
+                field.empty_label = label
+
     class Meta:
         model = Shift
         fields = ["site", "officer", "starts_at", "ends_at", "status", "post_name", "post_orders", "required_credentials", "pay_rate", "bill_rate", "pay_code", "relief_for"]
-        widgets = {"starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "required_credentials": forms.CheckboxSelectMultiple()}
+        widgets = {
+            "starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}),
+            "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}),
+            "required_credentials": forms.CheckboxSelectMultiple(),
+            "post_orders": forms.Textarea(attrs={"rows": 4}),
+        }
+        labels = {"starts_at": "Shift start", "ends_at": "Shift end", "relief_for": "Tour being relieved"}
         help_texts = {
             "officer": "Leave empty to publish the post as open. Officers who qualify can ask to take it and a dispatcher approves the fill.",
             "pay_rate": "Only needed when this post pays differently from the site, contract, or officer rate.",
@@ -315,7 +366,7 @@ class ShiftForm(forms.ModelForm):
             "relief_for": "Only for a half that takes over another officer's tour, or follows it at the same post. Leave empty for an ordinary post.",
         }
 
-class ShiftTemplateForm(forms.ModelForm):
+class ShiftTemplateForm(WorkflowModelForm):
     """A repeating tour, stated the way a contract describes one: a post, a window, and days.
 
     No rate appears here on purpose. Each generated post resolves its own pay and bill rate from
@@ -329,6 +380,12 @@ class ShiftTemplateForm(forms.ModelForm):
     different roster each week. The preset list is a convenience over the same two numbers, not a
     vocabulary: the industry does not agree on what to call these.
     """
+    field_sections = (
+        ("Assignment", ("name", "alias", "site", "officer", "post_name", "active")),
+        ("Repeating pattern", ("start_time", "end_time", "pattern", "weekdays", "preset",
+                              "cycle_days", "cycle_work_days", "series_start", "series_end")),
+        ("Requirements & instructions", ("required_credentials", "post_orders")),
+    )
     weekdays = forms.MultipleChoiceField(choices=WEEKDAY_CHOICES, required=False, widget=forms.CheckboxSelectMultiple(),
         help_text="Which days of the week a weekly or fortnightly series produces.")
     cycle_work_days = forms.CharField(required=False, label="Worked days of the cycle",
@@ -422,7 +479,7 @@ class ShiftTemplateForm(forms.ModelForm):
             self.save_m2m()
         return instance
 
-class ShiftGenerationForm(forms.Form):
+class ShiftGenerationForm(WorkflowForm):
     """Which dates of a series to produce, and whether they land as drafts or as published posts."""
     range_start = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}),
         help_text="The first day to generate. Posts are produced for every pattern day up to the day after this one.")
@@ -444,7 +501,7 @@ class ShiftGenerationForm(forms.Form):
                     f"Generate at most {SERIES_MAX_DAYS} days at a time ({(end - start).days + 1} here).")
         return data
 
-class ShiftSwapForm(forms.Form):
+class ShiftSwapForm(WorkflowForm):
     """Ask one colleague to take a post the officer is already scheduled to stand."""
     replacement = forms.ModelChoiceField(queryset=Person.objects.none(),
         label="Ask which colleague",
@@ -453,7 +510,7 @@ class ShiftSwapForm(forms.Form):
     note = forms.CharField(max_length=255, required=False,
         help_text="Optional reason. Both the colleague and the manager read it.")
 
-class ShiftExchangeForm(forms.Form):
+class ShiftExchangeForm(WorkflowForm):
     """Propose a two-way trade with one named colleague."""
     partner = forms.ModelChoiceField(queryset=Person.objects.none(), label="Trade with which colleague",
         help_text="They choose which of their own posts to put in — proposing a trade does not let you "
@@ -461,14 +518,14 @@ class ShiftExchangeForm(forms.Form):
     note = forms.CharField(max_length=255, required=False,
         help_text="Optional reason. Both the colleague and the manager read it.")
 
-class ExchangeAcceptForm(forms.Form):
+class ExchangeAcceptForm(WorkflowForm):
     """The colleague answers a trade by putting one of their own future posts into it."""
     partner_shift = forms.ModelChoiceField(queryset=Shift.objects.none(), label="Which of your posts do you trade",
         help_text="The manager sees both posts, each officer's hours before and after, and whether either "
                   "would qualify for the other's post, before anything moves.")
     note = forms.CharField(max_length=255, required=False)
 
-class ClockKioskForm(forms.ModelForm):
+class ClockKioskForm(WorkflowModelForm):
     """Standing a shared clock station at a post (CLK-2)."""
     class Meta:
         model = ClockKiosk
@@ -478,7 +535,7 @@ class ClockKioskForm(forms.ModelForm):
             "site": "Where the station physically stands. A punch taken here is placed at this post.",
         }
 
-class TextAlertsForm(forms.Form):
+class TextAlertsForm(WorkflowForm):
     """The officer's own text-message decision (NTF-4), number and consent in one submit.
 
     Split from ``PersonForm`` because the two are answered by different people for different reasons:
@@ -504,7 +561,7 @@ class TextAlertsForm(forms.Form):
             self.add_error("mobile_phone", "A number is needed before texts can be sent to you.")
         return data
 
-class ClockPinForm(forms.Form):
+class ClockPinForm(WorkflowForm):
     """Set or change a clock PIN (CLK-2), used by the officer and by a supervisor alike.
 
     One form for both paths rather than two that can disagree about what a valid PIN is: the shape
@@ -526,7 +583,7 @@ class ClockPinForm(forms.Form):
     def clean_pin(self):
         try:
             return validate_clock_pin(self.cleaned_data.get("pin"))
-        except ValidationError as exc:
+        except forms.ValidationError as exc:
             raise forms.ValidationError(exc.messages[0], code="invalid")
 
     def clean(self):
@@ -535,7 +592,15 @@ class ClockPinForm(forms.Form):
             self.add_error("confirm", "The two PINs do not match.")
         return data
 
-class TimePolicyForm(forms.ModelForm):
+class TimePolicyForm(WorkflowModelForm):
+    workweek_start = forms.TypedChoiceField(
+        choices=WEEKDAY_CHOICES, coerce=int, label="Workweek starts on",
+        help_text="Overtime is counted from this day.",
+    )
+    rounding_minutes = forms.TypedChoiceField(
+        choices=[(value, f"{value} minute{'s' if value != 1 else ''}") for value in (1, 5, 6, 10, 15, 30)],
+        coerce=int, label="Rounding interval",
+    )
     class Meta:
         model = TimePolicy
         fields = ["timezone", "workweek_start", "overtime_after_hours", "rounding_mode", "rounding_minutes", "require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie", "allow_reopen"]
@@ -555,7 +620,7 @@ class TimePolicyForm(forms.ModelForm):
                               "Not asked for at a shared station that has already verified the officer's PIN.",
         }
 
-class TimePolicyOverrideForm(forms.ModelForm):
+class TimePolicyOverrideForm(WorkflowModelForm):
     """One contract's or property's deviation, stated as a delta rather than a copy.
 
     Every field carries an explicit "inherit" so an override can change a single thing. A form
@@ -623,7 +688,7 @@ class TimePolicyOverrideForm(forms.ModelForm):
             self.add_error("rounding_mode", "Choose how to round, or leave both on inherit.")
         return data
 
-class ChannelRuleForm(forms.ModelForm):
+class ChannelRuleForm(WorkflowModelForm):
     """One audience's outbound channels for one notice family (NTF-1).
 
     The organisation is not on the form: the view sets it from the signed-in tenant, so a crafted POST
@@ -664,7 +729,7 @@ class ChannelRuleForm(forms.ModelForm):
                 self.add_error("family", f"A rule for {data['audience']} and {data.get('event_type') or data['family'] + '.*'} already exists. Edit that one instead of adding a second.")
         return data
 
-class OrganizationSecurityForm(forms.ModelForm):
+class OrganizationSecurityForm(WorkflowModelForm):
     mfa_required_roles = forms.MultipleChoiceField(choices=Membership.Role.choices,required=False,widget=forms.CheckboxSelectMultiple())
     # AUTH-3, as one text box rather than a widget that invents a schema: the thing an owner types is a
     # list of domains, and normalizing it here (lowercase, no leading @, any separator) is what keeps
@@ -700,7 +765,7 @@ class OrganizationSecurityForm(forms.ModelForm):
         model=Organization
         fields=["mfa_required_roles"]
 
-class DocumentUploadForm(PersonBoundForm, forms.Form):
+class DocumentUploadForm(PersonBoundForm, WorkflowForm):
     person = forms.ModelChoiceField(queryset=Person.objects.none(), required=False, help_text="Leave empty to file a company record, such as a handbook or licence, that is not part of a personnel file.")
     document_type = forms.ModelChoiceField(queryset=DocumentType.objects.none())
     file = forms.FileField()
@@ -727,12 +792,12 @@ class DocumentUploadForm(PersonBoundForm, forms.Form):
                 self.add_error("revises","A revision replaces the record filed against the same person, or the same company-wide record.")
         return data
 
-class DocumentTypeForm(forms.ModelForm):
+class DocumentTypeForm(WorkflowModelForm):
     class Meta:
         model = DocumentType
         fields = ["name","code","audience","sensitivity","retention_days","acknowledgment_required","signature_required","active"]
 
-class TrainingRecordForm(PersonBoundForm, forms.ModelForm):
+class TrainingRecordForm(PersonBoundForm, WorkflowModelForm):
     class Meta:
         model = TrainingRecord
         fields = ["person","course_name","provider","completed_on","expires_on","certificate_number","hours"]
@@ -746,15 +811,15 @@ class TrainingRecordForm(PersonBoundForm, forms.ModelForm):
             instance.save()
         return instance
 
-class CsvImportForm(forms.Form):
+class CsvImportForm(WorkflowForm):
     entity = forms.ChoiceField(choices=ImportBatch.Entity.choices)
     file = forms.FileField(help_text="UTF-8 CSV, maximum 50 MiB and 10,000 rows.")
 
-class PunchAdjustmentForm(forms.Form):
+class PunchAdjustmentForm(WorkflowForm):
     proposed_at = forms.DateTimeField(widget=forms.DateTimeInput(attrs={"type":"datetime-local"}))
     reason = forms.CharField(widget=forms.Textarea(attrs={"rows":3}), min_length=5)
 
-class PayrollPeriodForm(forms.Form):
+class PayrollPeriodForm(WorkflowForm):
     period_start = forms.DateTimeField(widget=forms.DateTimeInput(attrs={"type":"datetime-local"}))
     period_end = forms.DateTimeField(widget=forms.DateTimeInput(attrs={"type":"datetime-local"}))
     def clean(self):
@@ -762,11 +827,11 @@ class PayrollPeriodForm(forms.Form):
         if data.get("period_start") and data.get("period_end") and data["period_end"]<=data["period_start"]: raise forms.ValidationError("Period end must be after start.")
         return data
 
-class DispositionRequestForm(forms.Form):
+class DispositionRequestForm(WorkflowForm):
     action = forms.ChoiceField(choices=DispositionRequest.Action.choices)
     reason = forms.CharField(widget=forms.Textarea(attrs={"rows":3}),min_length=10)
 
-class DomainForm(forms.Form):
+class DomainForm(WorkflowForm):
     hostname = forms.CharField(max_length=253,help_text="Example: portal.company.com")
     def clean_hostname(self):
         import re
@@ -774,7 +839,7 @@ class DomainForm(forms.Form):
         if not re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}",value): raise forms.ValidationError("Enter a valid fully-qualified hostname.")
         return value
 
-class AuditRedactionForm(forms.Form):
+class AuditRedactionForm(WorkflowForm):
     fields = forms.CharField(help_text="Comma-separated metadata keys to redact from exports.")
     reason = forms.CharField(widget=forms.Textarea(attrs={"rows":3}),min_length=10)
     legal_basis = forms.CharField(max_length=255,min_length=5)
@@ -784,7 +849,7 @@ class AuditRedactionForm(forms.Form):
         return fields
 
 
-class OnboardingItemForm(forms.ModelForm):
+class OnboardingItemForm(WorkflowModelForm):
     """A new-hire step. The evidence it names is chosen, not typed, so the step can be checked.
 
     A step of kind ``document`` or ``credential`` without the matching type named would be a box to

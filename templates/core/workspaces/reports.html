@@ -6,38 +6,45 @@
   <div class="page-heading">
     <div>
       <h1>Reports</h1>
-      <p>Saved reports, metrics, and audit log.</p>
+      <p>Resolve operational exceptions, then inspect trends, snapshots, and audit history.</p>
     </div>
     <div class="actions">
-      <a class="button" href="{% url 'report_capture' %}">+ New report</a>
+      <a class="button" href="{% url 'reports' %}">View operational reports</a>
     </div>
   </div>
 
+  <section class="panel" id="report-actions"><h2>Operational exceptions</h2><div class="actions">
+    <a class="button secondary" href="{% url 'workspace_schedule' %}">{{ coverage.unfilled|length }} published posts unfilled &middot; {{ coverage.at_risk|length }} assignments at risk</a>
+    <a class="button secondary" href="{% url 'reports' %}#tour-evidence">{{ tour.open|length }} tours with incomplete time evidence</a>
+  </div><p class="muted">Coverage: next seven days. Time evidence: past seven days. Operational counts are not payroll approval.</p></section>
+  {% include 'core/_compliance_actions.html' %}
   <section class="workspace-grid">
+    {% if can_capture %}
     <article class="card card-primary">
-      <h2>Capture report</h2>
-      <p class="muted">Generate a new snapshot of metrics for a date range.</p>
-      <a class="button button-small" href="{% url 'report_capture' %}">Create snapshot</a>
+      <h2>Save today's figures</h2>
+      <p class="muted">Capture today's operational metrics. Existing snapshots are not overwritten.</p>
+      <div class="card-actions"><form method="post" action="{% url 'report_capture' %}">{% csrf_token %}<button class="button button-small" type="submit">Save snapshot</button></form></div>
     </article>
+    {% endif %}
 
     <article class="card">
       <h2>Saved reports</h2>
       <p class="muted">Browse previously captured reports.</p>
-      <a class="button button-small" href="{% url 'saved_reports' %}">View history</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'saved_reports' %}">View history</a></div>
     </article>
 
     {% if can_audit %}
       <article class="card">
         <h2>Audit log</h2>
         <p class="muted">Review all organization activity and changes.</p>
-        <a class="button button-small" href="{% url 'audit_log' %}">View audit log</a>
+        <div class="card-actions"><a class="button button-small" href="{% url 'audit_log' %}">View audit log</a></div>
       </article>
     {% endif %}
 
     <article class="card">
-      <h2>Custom reports</h2>
-      <p class="muted">Build and run ad-hoc reports.</p>
-      <a class="button button-small" href="{% url 'reports' %}">Reports builder</a>
+      <h2>Operational reports</h2>
+      <p class="muted">Review coverage, attendance, and compliance for a reporting window.</p>
+      <div class="card-actions"><a class="button button-small" href="{% url 'reports' %}">View reports</a></div>
     </article>
   </section>
 
@@ -82,9 +89,9 @@
           <tbody>
             {% for event in audit_events|slice:":15" %}
               <tr>
-                <td>{{ event.actor.get_full_name }}</td>
+                <td>{{ event.actor.get_full_name|default:event.actor.username|default:"System" }}</td>
                 <td><small>{{ event.action }}</small></td>
-                <td><small>{{ event.created_at|date:"M d H:i" }}</small></td>
+                <td><small>{{ event.occurred_at|date:"M d H:i" }}</small></td>
               </tr>
             {% endfor %}
           </tbody>

@@ -6,7 +6,7 @@
   <div class="page-heading">
     <div>
       <h1>Schedule</h1>
-      <p>Coverage, posts, and recurring series.</p>
+      <p>Review requests first, then fill coverage and prepare upcoming posts.</p>
     </div>
     <div class="actions">
       <a class="button" href="{% url 'shift_create' %}">+ New post</a>
@@ -14,42 +14,90 @@
     </div>
   </div>
 
+  {% include 'core/scope_note.html' %}
+  <section class="panel table-panel" id="schedule-actions" aria-labelledby="schedule-actions-heading">
+    <div class="panel-head">
+      <div>
+        <h2 id="schedule-actions-heading">Scheduling action queue</h2>
+        <p>{{ scheduling_actions.review_count }} request{{ scheduling_actions.review_count|pluralize }} awaiting your review
+          {% if scheduling_actions.waiting_count %}&middot; {{ scheduling_actions.waiting_count }} move{{ scheduling_actions.waiting_count|pluralize }} waiting for employee consent{% endif %}.</p>
+        <p class="muted">Across all dates in your authority scope, not just this week. Review links show eligibility, consent, and coverage impact before you decide.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <span class="pill pending">{{ scheduling_actions.claim_count }} open-post request{{ scheduling_actions.claim_count|pluralize }}</span>
+      <a class="button secondary button-small" href="{% url 'swaps' %}">{{ scheduling_actions.move_count }} open move{{ scheduling_actions.move_count|pluralize }}</a>
+      <a class="button secondary button-small" href="{% url 'time_off' %}">{{ scheduling_actions.leave_count }} time-off request{{ scheduling_actions.leave_count|pluralize }}</a>
+    </div>
+    {% if action_queue %}
+      <div class="table-wrap"><table>
+        <thead><tr><th>Request</th><th>People</th><th>Post / absence</th><th>When</th><th>Next step</th></tr></thead>
+        <tbody>{% for item in action_queue %}<tr>
+          <td><strong>{{ item.kind }}</strong><small>Requested {{ item.requested_at|date:"M j, g:i A" }}</small></td>
+          <td>{{ item.person }}</td>
+          <td>{{ item.details }}{% if item.note %}<small>{{ item.note|truncatechars:160 }}</small>{% endif %}</td>
+          <td>{{ item.starts_at|date:"D M j, g:i A" }}<small>to {{ item.ends_at|date:"D M j, g:i A" }}</small>{% if item.ends_at <= now %}<span class="pill attention">Past date &mdash; resolve request</span>{% endif %}</td>
+          <td><span class="pill {% if item.waiting %}pending{% else %}attention{% endif %}">{{ item.state }}</span><p><a class="button secondary button-small" href="{{ item.url }}">{% if item.waiting %}View consent status{% else %}Review {{ item.kind|lower }}{% endif %}</a></p></td>
+        </tr>{% endfor %}</tbody>
+      </table></div>
+      {% include 'core/pagination.html' with page=action_queue %}
+    {% else %}
+      <p>No pending scheduling requests in your scope. New requests to fill posts, move shifts, or take time off will appear here.</p>
+    {% endif %}
+  </section>
+
   <section class="workspace-grid">
     <article class="card card-primary">
       <h2>Open posts</h2>
       <p class="metric">{{ open_posts_count }}</p>
-      <p class="muted">Needing assignment this week.</p>
+      <p class="muted">{{ published_open_count }} published posts needing coverage. {{ draft_count }} drafts still need preparation or publication.</p>
       {% if open_posts %}
         <ul class="posts-list">
           {% for post in open_posts|slice:":3" %}
             <li>
-              <strong>{{ post.site.client.name }}</strong>
+              <strong>{{ post.site.client.name }} / {{ post.site.name }}</strong>
               <small>{{ post.starts_at|date:"M d H:i" }}–{{ post.ends_at|time:"H:i" }}</small>
+              <small>{{ post.get_status_display }}{% if post.status == 'draft' %} &mdash; not visible to employees{% endif %}</small>
+              <a href="{% url 'shift_requests' post.pk %}">Review requests</a>
             </li>
           {% endfor %}
         </ul>
       {% endif %}
-      <a class="button button-small" href="{% url 'schedule' %}">View all open</a>
+      <div class="card-actions"><a href="{% url 'schedule' %}?show=draft">Prepare drafts</a><a class="button button-small" href="{% url 'schedule' %}?show=open">View all open</a></div>
     </article>
 
     <article class="card">
       <h2>Recurring series</h2>
       <p class="metric">{{ recurring_series_count }}</p>
       <p class="muted">Active repeating posts.</p>
-      <a class="button button-small" href="{% url 'shift_templates' %}">Manage series</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'shift_templates' %}">Manage series</a></div>
     </article>
 
     <article class="card">
       <h2>Shift moves</h2>
       <p class="muted">Swaps, exchanges, and time off.</p>
-      <a class="button button-small" href="{% url 'swaps' %}">Pending moves</a>
+      <div class="card-actions">
+        <a href="{% url 'time_off' %}">Review time-off requests</a>
+        <a class="button button-small" href="{% url 'swaps' %}">Pending moves</a>
+      </div>
     </article>
 
     <article class="card">
       <h2>Week of {{ week_start|date:"M d" }}</h2>
       <p class="metric">{{ shifts|length }} post{{ shifts|length|pluralize }}</p>
-      <a class="button button-small" href="{% url 'schedule' %}">Full schedule</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'schedule' %}">Full schedule</a></div>
     </article>
+  </section>
+  <section class="panel table-panel"><h2>Assignments at risk</h2><p class="muted">Published assignments whose officer no longer qualifies in the remaining week.</p><div class="table-wrap"><table><thead><tr><th>Post</th><th>Officer</th><th>Why / next action</th></tr></thead><tbody>{% for item in at_risk %}<tr><td>{{ item.shift.site.name }}<small>{{ item.shift.starts_at }}</small></td><td>{{ item.shift.officer.full_name }}</td><td>{{ item.reasons|join:' ' }}<p><a href="{% url 'shift_edit' item.shift.pk %}">Review assignment</a></p></td></tr>{% empty %}<tr><td colspan="3">No at-risk assignments in the remaining week.</td></tr>{% endfor %}</tbody></table></div></section>
+
+  <section class="panel">
+    <h2>Prepare coverage</h2>
+    <p class="muted">Maintain the sites you staff and check who is available before assigning a post.</p>
+    <div class="actions">
+      <a class="button secondary" href="{% url 'locations' %}">Clients & sites</a>
+      <a class="button secondary" href="{% url 'people' %}">People & availability</a>
+      <a class="button secondary" href="{% url 'clock_kiosks' %}">Clock stations</a>
+    </div>
   </section>
 
   {% if shifts %}
@@ -76,7 +124,7 @@
                 <td>{{ shift.site.client.name }} / {{ shift.site.name }}</td>
                 <td>{% if shift.officer %}{{ shift.officer.full_name }}{% else %}<span class="pill empty">Open</span>{% endif %}</td>
                 <td>{{ shift.get_status_display }}</td>
-                <td><a class="button secondary button-small" href="{% url 'shift_edit' shift.pk %}">Edit</a></td>
+                <td><div class="actions"><a class="button secondary button-small" href="{% url 'shift_requests' shift.pk %}">Requests</a><a class="button secondary button-small" href="{% url 'shift_edit' shift.pk %}">Edit</a></div></td>
               </tr>
             {% endfor %}
           </tbody>

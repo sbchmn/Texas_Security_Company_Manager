@@ -7,6 +7,11 @@ from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+# The release number lives in one file so the image, the About page and any release tag agree.
+APP_VERSION = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip() if (BASE_DIR / "VERSION").exists() else "unversioned"
+APP_NAME = "Texas Security Company Manager"
+APP_PUBLISHER = {"name": "Bachman Group, LLC", "address": "PO Box 4, Lancaster, TX 75146",
+                 "url": "https://bachman.xyz", "copyright_since": 2026}
 # DOTENV_PATH lets CI or a container point at a different env file; the test runner uses it
 # to avoid importing a developer's deployment values.
 load_dotenv(os.getenv("DOTENV_PATH") or BASE_DIR / ".env")
@@ -162,6 +167,9 @@ MFA_TOTP_ISSUER = "Texas Security Company Manager"
 DOCUSEAL_ALLOWED_ORIGINS = [
     value.strip().rstrip("/") for value in os.getenv("DOCUSEAL_ALLOWED_ORIGINS", "").split(",") if value.strip()
 ]
+# Optional PEM CA file trusted only for DocuSeal requests, e.g. Caddy's local root during testing.
+# A hermetic test run ignores it: the path names a file inside the containers, not on a dev machine.
+DOCUSEAL_CA_BUNDLE = "" if HERMETIC_TEST else os.getenv("DOCUSEAL_CA_BUNDLE", "").strip()
 SOCIALACCOUNT_LOGIN_ON_GET = False
 SOCIALACCOUNT_EMAIL_AUTHENTICATION = False
 SOCIALACCOUNT_PROVIDERS = {

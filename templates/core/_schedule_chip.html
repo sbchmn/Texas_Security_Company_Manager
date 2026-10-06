@@ -1,0 +1,8 @@
+<a class="grid-shift {{ shift.status }}{% if shift.leave_conflict %} conflict{% endif %}" href="{% if not shift.officer_id and shift.status == 'published' and shift.claims.all %}{% url 'shift_requests' shift.pk %}{% else %}{% url 'shift_edit' shift.pk %}{% endif %}" title="{{ shift.site.client.name }} — {{ shift.site.name }}{% if shift.post_name %} · {{ shift.post_name }}{% endif %}">
+  <strong>{{ shift.starts_at|time:'g:iA' }}&ndash;{{ shift.ends_at|time:'g:iA' }}</strong>
+  <span>{{ shift.site.name }}</span>
+  {% if shift.post_name %}<small>{{ shift.post_name }}</small>{% endif %}
+  {% if shift.status == 'draft' %}<small>Draft</small>{% endif %}
+  {% if shift.leave_conflict %}<small>On approved leave</small>{% endif %}
+  {% if not shift.officer_id and shift.status == 'published' %}{% with count=shift.claims.all|length %}<small>{% if count %}{{ count }} request{{ count|pluralize }} &rarr; review{% else %}No requests yet{% endif %}</small>{% endwith %}{% endif %}
+</a>

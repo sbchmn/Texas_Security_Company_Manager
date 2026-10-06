@@ -1244,7 +1244,9 @@ in.
    database/user provisioned as described in `.env.example`.
 2. Configure the DocuSeal hostname with HTTPS. Set `DOCUSEAL_ALLOWED_ORIGINS` to its exact origin,
    such as `https://sign.example.com`, and restart web/worker. Both services must resolve/reach it
-   and trust its certificate. API and file redirects cannot leave that origin; do not configure
+   and trust its certificate. For a private local CA, set `DOCUSEAL_CA_BUNDLE` to its public root
+   certificate as shown in `.env.example`; it applies only to DocuSeal requests. API and file
+   redirects cannot leave that origin; do not configure
    remote-object-storage redirects for this first slice. In **DocuSeal Settings > Account > App URL**,
    set that same HTTPS origin; this controls the URLs DocuSeal returns for signed files.
 3. In DocuSeal's UI, create a template with one signer and a required, writable signature field.

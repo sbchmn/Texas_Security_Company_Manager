@@ -1,0 +1,31 @@
+<section class="panel my-week-panel" id="my-week" aria-label="My week">
+  <div class="schedule-toolbar">
+    <h2>My week</h2>
+    <nav class="segmented" aria-label="Week">
+      {% if week.can_back %}<a href="?week={{ week.offset|add:-1 }}{{ week_anchor }}" aria-label="Previous week">&larr;</a>{% endif %}
+      <a href="?week=0{{ week_anchor }}"{% if week.offset == 0 %} aria-current="page"{% endif %}>This week</a>
+      {% if week.can_ahead %}<a href="?week={{ week.offset|add:1 }}{{ week_anchor }}" aria-label="Next week">&rarr;</a>{% endif %}
+    </nav>
+    <strong class="schedule-range">{{ week.start|date:'M j' }} &ndash; {{ week.last|date:'M j, Y' }}</strong>
+    <span class="my-week-hours{% if week.over %} over{% endif %}">{{ week.hours|floatformat:"-2" }} h scheduled{% if week.over %} &middot; over the {{ week.threshold|floatformat:"-2" }} h overtime line{% endif %}</span>
+  </div>
+  <ol class="my-week">
+    {% for day in week.days %}
+    <li class="my-week-day{% if day.today %} is-today{% endif %}{% if day.past %} is-past{% endif %}{% if day.leave %} on-leave{% endif %}">
+      <header><span>{{ day.date|date:'D' }}</span><strong>{{ day.date|date:'N j' }}</strong>{% if day.today %}<em>Today</em>{% endif %}</header>
+      {% if day.leave %}<span class="grid-leave">{% if day.leave.status == 'approved' %}Approved leave{% else %}Leave requested{% endif %}</span>{% endif %}
+      {% for shift in day.shifts %}
+      {% if shift.listed %}<a class="grid-shift {{ shift.status }}" href="#shift-{{ shift.pk }}">{% else %}<span class="grid-shift {{ shift.status }}">{% endif %}
+        <strong>{{ shift.starts_at|time:'g:i A' }}&ndash;{{ shift.ends_at|time:'g:i A' }}</strong>
+        <span>{{ shift.site.name }}</span>
+        <small>{{ shift.post_name|default:'General post' }}{% if shift.status == 'draft' %} &middot; not published{% endif %}{% if shift.moving %} &middot; move in progress{% endif %}</small>
+      {% if shift.listed %}</a>{% else %}</span>{% endif %}
+      {% empty %}{% if not day.leave %}<p class="my-week-off">{% if day.past %}No post{% else %}Off{% endif %}</p>{% endif %}
+      {% endfor %}
+      {% if day.availability %}<small class="my-week-avail">Available {% for rule in day.availability %}{{ rule.starts_at|time:'g:i A' }}&ndash;{{ rule.ends_at|time:'g:i A' }}{% if not forloop.last %}, {% endif %}{% endfor %}</small>{% endif %}
+      {% if day.open_count %}<a class="my-week-open" href="{% url 'open_posts' %}">{{ day.open_count }} open post{{ day.open_count|pluralize }} you can work{% if day.requested_count %} &middot; {{ day.requested_count }} requested{% endif %}</a>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  <p class="grid-legend muted"><span class="grid-shift published">Published</span><span class="grid-shift draft">Not published</span><span class="grid-shift completed">Completed</span>{% if not week.stated_availability %} You haven't stated when you can work &mdash; <a href="{% url 'availability' %}">set your availability</a> so dispatch can plan around it.{% else %} <a href="{% url 'availability' %}">Edit availability</a>{% endif %}</p>
+</section>

@@ -7,24 +7,29 @@ def organization_brand(request):
     if not membership and getattr(request, "user", None) and request.user.is_authenticated:
         membership = request.user.organization_memberships.filter(active=True).select_related("organization").first()
     organization = membership.organization if membership else None
-    return {"current_organization": organization, "current_membership": membership, "google_sso_enabled": bool(settings.SOCIALACCOUNT_PROVIDERS["google"]["APP"]["client_id"]), "microsoft_sso_enabled": bool(settings.SOCIALACCOUNT_PROVIDERS["microsoft"]["APP"]["client_id"])}
+    from django.utils import timezone as _tz
+    year = _tz.localdate().year
+    since = settings.APP_PUBLISHER["copyright_since"]
+    return {"current_organization": organization, "current_membership": membership, "app_version": settings.APP_VERSION,
+            "app_name": settings.APP_NAME, "app_publisher": settings.APP_PUBLISHER,
+            "copyright_years": str(since) if year <= since else f"{since}–{year}", "google_sso_enabled": bool(settings.SOCIALACCOUNT_PROVIDERS["google"]["APP"]["client_id"]), "microsoft_sso_enabled": bool(settings.SOCIALACCOUNT_PROVIDERS["microsoft"]["APP"]["client_id"])}
 
 
 # Workspace-first navigation: users choose a job, then explore related functions within that workspace.
 # Each workspace has a landing page that surfaces the most urgent work first.
-# (label, url name, roles allowed, url names that also light this link, workspace)
+# (label, url name, roles allowed, url names that also light this link)
 
 WORKSPACES = (
     ("Today", "workspace_today", None, (
-        "workspace_today", "clock", "adjustment_request", "my_shifts", "offer_post", "swap_respond", 
+        "workspace_today", "dashboard", "clock", "adjustment_request", "my_shifts", "offer_post", "swap_respond",
         "swap_withdraw", "exchange_respond", "exchange_withdraw", "my_onboarding", "document_acknowledge",
         "my_documents", "shift_claim", "open_posts", "shift_requests", "my_time_off", "my_time_off_cancel",
-        "text_alerts", "notifications", "notification_read"
+        "text_alerts", "notifications", "notification_read", "my_account", "my_contact_edit"
     )),
     ("People", "workspace_people", "MANAGERS", (
         "workspace_people", "people", "person_detail", "person_edit", "person_create", "person_access_invite",
         "person_availability", "availability_remove", "person_credential_create", "person_training_create",
-        "person_document_upload", "document_acknowledge", "availability"
+        "person_document_upload", "document_acknowledge", "availability", "signing_queue"
     )),
     ("Schedule", "workspace_schedule", "MANAGERS", (
         "workspace_schedule", "schedule", "shift_create", "shift_edit", "shift_cancel", "shift_templates",
@@ -48,6 +53,12 @@ WORKSPACES = (
     )),
 )
 
+QUICK_LINKS = (
+    ("Timeclock", "clock", ("clock", "adjustment_request")),
+    ("My shifts", "my_shifts", ("my_shifts", "offer_post", "swap_respond", "swap_withdraw",
+                                "exchange_respond", "exchange_withdraw")),
+)
+
 # Settings is available to authorized users as a persistent utility, not within a workspace.
 # It appears in the sidebar footer and includes all configuration screens.
 SETTINGS_NAVIGATION = (
@@ -60,8 +71,8 @@ SETTINGS_NAVIGATION = (
         "settings_compliance", "onboarding_settings", "onboarding_item_create", "onboarding_item_edit",
         "credential_type_create", "credential_type_edit", "document_type_create", "document_type_edit"
     )),
-    ("Time & pay rules", "settings", "MANAGERS", (
-        "settings", "pay_codes", "pay_code_create", "pay_code_edit", "pay_code_remove"
+    ("Pay codes", "pay_codes", "MANAGERS", (
+        "pay_codes", "pay_code_create", "pay_code_edit", "pay_code_remove"
     )),
     ("Branding & domains", "branding", "PRIVILEGED", (
         "branding", "brand_rollback", "domains", "domain_verify"
@@ -135,7 +146,7 @@ def navigation(request):
     """
     membership = getattr(request, "membership", None)
     if membership is None:
-        return {"workspaces": [], "settings_nav": [], "can_manage_people": False, "authority_scope": None, "active_workspace": None, "navigation": []}
+        return {"workspaces": [], "quick_links": [], "settings_nav": [], "settings_active": False, "can_manage_people": False, "authority_scope": None, "active_workspace": None, "navigation": []}
     
     from . import views
     from .scope import scope_for
@@ -154,13 +165,13 @@ def navigation(request):
     for label, name, roles, active_names in WORKSPACES:
         if roles is not None and membership.role not in groups[roles]:
             continue
-        is_active = current in active_names
-        if is_active:
-            active_workspace = label
+        if name == "workspace_payroll" and membership.role not in views.PAYROLL:
+            label = "Time review"
         workspaces_rendered.append({
             "label": label,
             "url": reverse(name),
-            "active": is_active,
+            "active": current in active_names,
+            "current": current == name,
             "workspace_name": name
         })
     
@@ -175,6 +186,16 @@ def navigation(request):
             "url": reverse(name),
             "active": is_active,
         })
+
+    settings_active = any(item["active"] for item in settings_rendered)
+    # Personal pages belong to Today; shared management routes prefer their specific workspace.
+    matches = [item for item in workspaces_rendered if item["active"]]
+    selected = next((item for item in matches if item["workspace_name"] != "workspace_today"),
+                    matches[0] if matches else None) if not settings_active else None
+    for item in workspaces_rendered:
+        item["active"] = item is selected
+    if selected:
+        active_workspace = selected["label"]
     
     # Build legacy navigation structure for backward compatibility
     navigation_rendered = []
@@ -198,8 +219,14 @@ def navigation(request):
     scope = scope_for(request)
     return {
         "workspaces": workspaces_rendered,
+        "quick_links": [{"label": label, "url": reverse(name), "active": current in active_names}
+                        for label, name, active_names in QUICK_LINKS],
         "settings_nav": settings_rendered,
+        "settings_active": settings_active,
         "can_manage_people": membership.role in views.MANAGERS,
+        "can_write_records": membership.role in views.RECORD_WRITERS,
+        "can_review_retention": membership.role in views.PRIVILEGED,
+        "can_manage_payroll": membership.role in views.PAYROLL,
         "authority_scope": scope if scope.restricted else None,
         "active_workspace": active_workspace,
         "navigation": navigation_rendered,  # Legacy for old sidebar templates

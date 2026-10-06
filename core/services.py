@@ -757,21 +757,31 @@ def tour_completion(organization, scope, start, end, now=None):
 
 # --------------------------------------------------------------------------- reporting (RPT-1..4)
 
-def schedule_week_start(day=None, offset=0):
-    """The Monday that begins the week the schedule renders.
+def workweek_start_for(organization):
+    """The company's payroll workweek start (Monday 0 … Sunday 6), Monday when no policy is set."""
+    if organization is None:
+        return 0
+    policy = TimePolicy.objects.filter(organization=organization).only("workweek_start").first()
+    return policy.workweek_start if policy else 0
+
+
+def schedule_week_start(day=None, offset=0, organization=None):
+    """The first day of the week the schedule renders: the company's payroll workweek start.
 
     Exposed because the boundary belongs to the page, not to whoever is looking at it: a fixture
     that placed posts at `now + 2 days` and asserted they appeared on the default week was wrong on
     a Saturday run, where +2 days was already next Monday. Anything that needs to name a week should
-    ask this, so the arithmetic exists once.
+    ask this, so the arithmetic exists once. A company paying Sunday–Saturday schedules the same
+    week it pays, so overtime read off the grid is the overtime payroll will compute.
     """
     day = day or timezone.localdate()
-    return day - timedelta(days=day.weekday()) + timedelta(weeks=offset)
+    first = workweek_start_for(organization)
+    return day - timedelta(days=(day.weekday() - first) % 7) + timedelta(weeks=offset)
 
 
-def week_offset_for(day, from_day=None):
+def week_offset_for(day, from_day=None, organization=None):
     """How many weeks away `day` is from the week containing `from_day`, for the `?week=` parameter."""
-    return (schedule_week_start(day) - schedule_week_start(from_day)).days // 7
+    return (schedule_week_start(day, organization=organization) - schedule_week_start(from_day, organization=organization)).days // 7
 
 
 # A window a captured figure describes. Seven days matches the reports page default, so the live
@@ -2620,12 +2630,17 @@ def preview_source(document):
     carries a different protection instead: the served content type is *overridden by us*, so mutated
     or lying object metadata cannot make the browser execute anything. The asymmetry is deliberate and
     recorded in feature-status.md rather than left as a surprise.
+
+    Only images take the signed-link path. PDFs and text are read by the page's own script (PDF.js
+    and a fetch into a <pre>), and a script may only read same-origin bytes under `connect-src 'self'`
+    without CORS on the bucket — so those kinds always stream through this process, with the head
+    re-read, whatever the storage backend.
     """
     kind = PREVIEW_INLINE_TYPES.get(document.verified_type or "")
     if kind is None:
         raise PreviewUnavailable("only PDF, PNG, JPEG and plain text are shown in the page; "
                                  "this record has to be downloaded.")
-    url = presigned_preview_url(document)
+    url = presigned_preview_url(document) if kind == "image" else None
     if url is not None:
         return url, None, document.verified_type, kind
     handle = document.file.open("rb")
@@ -5122,9 +5137,15 @@ def record_consent(*, organization, destination, state, channel=MessageConsent.C
             if channel == MessageConsent.Channel.SMS else "That is not a usable email address."})
     if person is not None and person.organization_id != organization.pk:
         raise ValidationError("Consent must be recorded for an officer in this organization.")
+    decided_at = timezone.now()
+    # "Newest wins" has to be decidable: a STOP landing in the same clock tick as the grant it reverses
+    # would otherwise tie and be ordered arbitrarily.
+    previous = current_consent(organization, normalized, channel)
+    if previous is not None and decided_at <= previous.decided_at:
+        decided_at = previous.decided_at + timedelta(microseconds=1)
     row = MessageConsent(organization=organization, person=person, channel=channel, destination=normalized,
         state=state, source=source, wording=(wording or sms_consent_wording(organization)) if channel == MessageConsent.Channel.SMS else wording,
-        evidence=dict(evidence or {}), recorded_by=actor, decided_at=timezone.now())
+        evidence=dict(evidence or {}), recorded_by=actor, decided_at=decided_at)
     row.save()
     if state == MessageConsent.State.REVOKED:
         set_suppression(organization=organization, destination=normalized, channel=channel,

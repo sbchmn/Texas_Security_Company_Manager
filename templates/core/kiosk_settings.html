@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% block title %}Clock stations{% endblock %}{% block content %}
 <div class="page"><div class="page-heading"><div><p class="eyebrow">Timekeeping</p><h1>Clock stations</h1>
-<p>A shared station is one device many officers use. It records <em>where</em> a punch was made; only the officer's own PIN says <em>who</em>. Neither works without the other, and a station can never clock anyone in on its own.</p></div><div class="actions"><a class="button secondary" href="{% url 'clock' %}">Time clock</a><a class="button secondary" href="{% url 'time_policy' %}">Clock policy</a></div></div>
+<p>A shared station is one device many officers use. It records <em>where</em> a punch was made; only the officer's own PIN says <em>who</em>. Neither works without the other, and a station can never clock anyone in on its own.</p></div><div class="actions"><a class="button secondary" href="{% url 'clock' %}">Time clock</a>{% if request.membership.role == 'owner' or request.membership.role == 'admin' %}<a class="button secondary" href="{% url 'time_policy' %}">Clock policy</a>{% endif %}</div></div>
 
 {% if policy_note %}<p class="message warning">{{ policy_note }}</p>{% endif %}
 
@@ -25,7 +25,7 @@
 <h2>Open a station at a post</h2>
 {% if policy_note %}<p class="helptext">A station can still be named here so it is ready when the rule changes; it will refuse every punch until the clock policy allows one.</p>{% endif %}
 <form method="post" class="data-form">{% csrf_token %}<input type="hidden" name="action" value="open">
-{% for field in form %}<div><label>{{ field.label }}</label>{{ field }}{% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}{% for error in field.errors %}<span class="field-error">{{ error }}</span>{% endfor %}</div>{% endfor %}
+{{ form.as_div }}
 <button class="button">Open station</button></form>
 </section>
 

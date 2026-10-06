@@ -1,0 +1,6 @@
+<section class="panel table-panel" id="compliance-actions"><h2>Obligations needing action</h2><p class="muted">A preview of the earliest recorded deadlines. Use the complete queue for all obligations. Evidence and actions respect your role and authority scope.</p>
+  <div class="table-wrap"><table><thead><tr><th>Person / requirement</th><th>Deadline</th><th>Why / impact</th><th>Responsible party / next action</th></tr></thead><tbody>
+    {% for item in compliance_actions %}<tr><td>{{ item.person.full_name|default:"Company" }}<small>{{ item.subject }}</small></td><td>{{ item.date|default:"No date recorded" }}</td><td>{{ item.state|title }}<small>{{ item.note }}</small><small>{{ item.impact }}</small></td><td>{{ item.owner }}<p><a class="button secondary button-small" href="{{ item.url }}">{{ item.action_label }}</a></p></td></tr>
+    {% empty %}<tr><td colspan="4">No obligations needing action in the configured, visible requirements.</td></tr>{% endfor %}
+  </tbody></table></div><p><a href="{% url 'compliance' %}">Open the complete filtered compliance queue</a></p>
+</section>

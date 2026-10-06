@@ -13,15 +13,17 @@ urlpatterns = [
     path("workspace/reports/", workspace_views.workspace_reports, name="workspace_reports"),
     
     # Signing
+    path("onboarding/signing/", signing_views.signing_queue, name="signing_queue"),
     path("settings/signing/", signing_views.signing_settings, name="signing_settings"),
     path("onboarding/tasks/<uuid:task_id>/signing/send/", signing_views.signing_send, name="signing_send"),
     path("onboarding/tasks/<uuid:task_id>/signing/refresh/", signing_views.signing_refresh, name="signing_refresh"),
     path("onboarding/tasks/<uuid:task_id>/signing/open/", signing_views.signing_open, name="signing_open"),
+    path("onboarding/tasks/<uuid:task_id>/signing/return/", signing_views.signing_return, name="signing_return"),
     
     # Health and utilities
     path("healthz", views.health, name="health"), path("readyz",views.ready,name="ready"), path("theme.css",views.theme_css,name="theme_css"), path("logo",views.brand_logo,name="brand_logo"), path("manifest.webmanifest", views.manifest, name="manifest"),
     path("service-worker.js", views.service_worker, name="service_worker"),
-    path("", views.dashboard, name="dashboard"), path("people/", views.people, name="people"),
+    path("", workspace_views.workspace_today, name="dashboard"), path("people/", views.people, name="people"),
     path("team/", views.team, name="team"), path("team/<int:membership_id>/authority/", views.authority, name="authority"), path("team/authority/<int:scope_id>/revoke/", views.authority_revoke, name="authority_revoke"), path("invitations/<str:token>/", views.invitation_accept, name="invitation_accept"),
     path("people/new/", views.person_create, name="person_create"), path("people/fields/new/",views.custom_field_create,name="custom_field_create"),path("people/fields/<int:field_id>/edit/",views.custom_field_edit,name="custom_field_edit"),path("people/<uuid:person_id>/",views.person_detail,name="person_detail"),path("people/<uuid:person_id>/edit/",views.person_edit,name="person_edit"), path("people/<uuid:person_id>/access/new/",views.person_access_invite,name="person_access_invite"), path("branches/", views.branches, name="branches"), path("branches/new/", views.branch_create, name="branch_create"), path("branches/<int:branch_id>/edit/", views.branch_edit, name="branch_edit"),
     path("people/<uuid:person_id>/credentials/new/", views.credential_create, name="person_credential_create"), path("people/<uuid:person_id>/training/new/", views.training_create, name="person_training_create"), path("people/<uuid:person_id>/documents/new/", views.document_upload, name="person_document_upload"),
@@ -56,7 +58,7 @@ urlpatterns = [
     path("training/",views.training,name="training"),path("training/new/",views.training_create,name="training_create"),path("training/<uuid:record_id>/edit/",views.training_edit,name="training_edit"),
     path("imports/",views.imports,name="imports"),path("imports/templates/<str:entity>.csv",views.import_template,name="import_template"),path("imports/<uuid:batch_id>/errors.csv",views.import_errors,name="import_errors"),path("imports/<uuid:batch_id>/apply/",views.import_apply,name="import_apply"),
     path("notifications/",views.notifications,name="notifications"),path("notifications/<uuid:notification_id>/read/",views.notification_read,name="notification_read"),
-    path("notifications/text/", views.text_alerts, name="text_alerts"), path("settings/messaging/", views.messaging_settings, name="messaging_settings"), path("settings/messaging/rotate/", views.messaging_rotate_token, name="messaging_rotate_token"),
+    path("notifications/text/", views.text_alerts, name="text_alerts"), path("me/", views.my_account, name="my_account"), path("about/", views.about, name="about"), path("me/contact/", views.my_contact_edit, name="my_contact_edit"), path("settings/messaging/", views.messaging_settings, name="messaging_settings"), path("settings/messaging/rotate/", views.messaging_rotate_token, name="messaging_rotate_token"),
     # NTF-1's per-audience channel rules. Add and edit share one view because the form is the same
     # shape and a second copy of it is how the two drift apart.
     path("settings/messaging/rules/", views.messaging_rule_save, name="messaging_rule_add"),

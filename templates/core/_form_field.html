@@ -1,0 +1,15 @@
+<div class="{{ field.css_classes }}">
+  {% if field.use_fieldset %}
+    <fieldset{% if field.aria_describedby %} aria-describedby="{{ field.aria_describedby }}"{% endif %}>
+      {% if field.label %}{{ field.legend_tag }}{% endif %}
+      {{ field }}
+    </fieldset>
+  {% elif field.widget_type == "checkbox" %}
+    <div class="check-field">{{ field }}{{ field.label_tag }}</div>
+  {% else %}
+    {{ field.label_tag }}
+    {{ field }}
+  {% endif %}
+  {% if field.help_text %}<div class="helptext"{% if field.auto_id %} id="{{ field.auto_id }}_helptext"{% endif %}>{{ field.help_text|safe }}</div>{% endif %}
+  {{ field.errors }}
+</div>

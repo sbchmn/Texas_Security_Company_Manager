@@ -1,0 +1,16 @@
+{% if form.errors %}
+  <div class="form-error-summary" role="alert">
+    <strong>Check the highlighted fields.</strong>
+    {{ form.non_field_errors }}
+    <ul>{% for field in form.visible_fields %}{% for error in field.errors %}<li><a href="#{{ field.id_for_label|default:field.auto_id }}">{{ field.label }}: {{ error }}</a></li>{% endfor %}{% endfor %}</ul>
+    {% for field in form.hidden_fields %}{{ field.errors }}{% endfor %}
+  </div>
+{% endif %}
+{% for field in form.hidden_fields %}{{ field }}{% endfor %}
+<div class="form-sections">
+  {% for section in form.layout_sections %}
+    {% if section.title %}<fieldset class="form-section"><legend>{{ section.title }}</legend>{% else %}<div class="form-section">{% endif %}
+      <div class="form-fields">{% for field in section.fields %}{% include "core/_form_field.html" %}{% endfor %}</div>
+    {% if section.title %}</fieldset>{% else %}</div>{% endif %}
+  {% endfor %}
+</div>

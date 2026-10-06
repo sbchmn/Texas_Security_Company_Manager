@@ -1,1 +1,79 @@
-{% extends 'base.html' %}{% block title %}Time review{% endblock %}{% block content %}<div class="page"><div class="page-heading"><div><p class="eyebrow">Time and attendance</p><h1>Review punches</h1><p>Resolve geofence exceptions and correction requests without changing raw evidence.</p></div></div>{% include 'core/scope_note.html' %}<section class="panel table-panel"><h2>Punches</h2><div class="table-wrap"><table><thead><tr><th>Officer</th><th>Event</th><th>Time</th><th>Evidence</th><th>Review</th></tr></thead><tbody>{% for punch in punches %}<tr><td>{{ punch.person.full_name }}</td><td>{{ punch.get_kind_display }}</td><td>{{ punch.occurred_at }}</td><td>{% if punch.station_name %}<div class="tags"><span>{{ punch.station_name }} · PIN-verified</span></div>{% endif %}{% if punch.offline %}<div class="tags"><span>captured offline</span></div>{% endif %}{% if punch.risk_labels %}<div class="tags"><span class="pill pending">location signal: {{ punch.risk_labels|join:' · ' }}</span></div>{% endif %}{% if punch.selfie_visible %}<div class="tags"><a href="{% url 'document_preview' punch.selfie_id %}">photo attached</a></div>{% endif %}{{ punch.exception_reason|default:'No exception' }}</td><td>{% if punch.review_status == 'pending' %}<form method="post" action="{% url 'punch_review' punch.pk %}" class="inline-form">{% csrf_token %}<input name="reason" placeholder="Reason if rejected"><button name="action" value="accepted">Approve</button><button name="action" value="rejected">Reject</button></form>{% else %}<span class="pill {{ punch.review_status }}">{{ punch.get_review_status_display }}</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% include 'core/pagination.html' with page=punches %}</section><section class="panel table-panel"><h2>Correction requests</h2><p class="muted">The most recent 100. Older ones are in the audit log.</p><div class="table-wrap"><table><thead><tr><th>Officer</th><th>Original</th><th>Proposed</th><th>Reason</th><th>Review</th></tr></thead><tbody>{% for item in adjustments %}<tr><td>{{ item.punch.person.full_name }}</td><td>{{ item.punch.occurred_at }}</td><td>{{ item.proposed_at }}</td><td>{{ item.reason }}</td><td>{% if item.status == 'requested' %}<form method="post" action="{% url 'adjustment_review' item.pk %}" class="inline-form">{% csrf_token %}<input name="note" placeholder="Review note"><button name="action" value="approved">Approve</button><button name="action" value="rejected">Reject</button></form>{% else %}<span class="pill {{ item.status }}">{{ item.get_status_display }}</span>{% endif %}</td></tr>{% empty %}<tr><td colspan="5">No correction requests.</td></tr>{% endfor %}</tbody></table></div></section></div>{% endblock %}
+{% extends 'base.html' %}{% block title %}Time review{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-heading"><div><p class="eyebrow">Time and attendance</p><h1>Review punches</h1><p>Resolve geofence exceptions and correction requests without changing raw evidence.</p></div></div>
+  {% include 'core/scope_note.html' %}
+  {% if selected_run %}<section class="panel"><h2>Selected payroll period</h2><p>{{ selected_run.period_start|date:'M j, Y H:i' }} &ndash; {{ selected_run.period_end|date:'M j, Y H:i' }}. Both queues below are limited to this period.</p><a class="button secondary" href="{% url 'payroll' %}?run={{ selected_run.pk }}">Return to this payroll period</a></section>{% endif %}
+  <section class="panel table-panel">
+    <h2>Punches <span class="pill pending">{{ pending_count }} pending</span></h2>
+    <form method="get" class="filter-bar">
+      <label for="punch-filter">Show punches</label>
+      <select id="punch-filter" name="punches">
+        <option value="pending" {% if punch_filter == 'pending' %}selected{% endif %}>Pending only</option>
+        <option value="history" {% if punch_filter == 'history' %}selected{% endif %}>Reviewed history</option>
+        <option value="all" {% if punch_filter == 'all' %}selected{% endif %}>All punches</option>
+      </select>
+      <input type="hidden" name="adjustments" value="{{ adjustment_filter }}">
+      {% if selected_run %}<input type="hidden" name="run" value="{{ selected_run.pk }}">{% endif %}
+      <button class="button secondary button-small" type="submit">Apply</button>
+    </form>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Officer</th><th>Event</th><th>Time</th><th>Evidence</th><th>Review</th></tr></thead>
+      <tbody>{% for punch in punches.object_list %}<tr>
+        <td>{{ punch.person.full_name }}</td><td>{{ punch.get_kind_display }}</td><td>{{ punch.occurred_at }}</td>
+        <td>
+          {% if punch.station_name %}<div class="tags"><span>{{ punch.station_name }} &middot; PIN-verified</span></div>{% endif %}
+          {% if punch.offline %}<div class="tags"><span>captured offline</span></div>{% endif %}
+          {% if punch.risk_labels %}<div class="tags"><span class="pill pending">location signal: {{ punch.risk_labels|join:' · ' }}</span></div>{% endif %}
+          {% if punch.selfie_visible %}<div class="tags"><a href="{% url 'document_preview' punch.selfie_id %}">photo attached</a></div>{% endif %}
+          {{ punch.exception_reason|default:'No exception' }}
+        </td>
+        <td>{% if punch.review_status == 'pending' %}
+          <form method="post" action="{% url 'punch_review' punch.pk %}?{{ review_query }}" class="inline-form">
+            {% csrf_token %}<label>Reason if rejected<input name="reason" placeholder="Explain a rejected punch"></label>
+            <div class="actions"><button class="button button-small" name="action" value="accepted" type="submit">Approve</button><button class="button secondary button-small" name="action" value="rejected" type="submit">Reject</button></div>
+          </form>
+        {% else %}<span class="pill {{ punch.review_status }}">{{ punch.get_review_status_display }}</span>{% endif %}</td>
+      </tr>      {% empty %}<tr><td colspan="5" class="empty-cell">No punches match this filter.</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% if punches.has_other_pages %}
+      <nav class="pagination" aria-label="Punch pages"><span class="muted">{{ punches.paginator.count }} punches · page {{ punches.number }} of {{ punches.paginator.num_pages }}</span><div class="actions">
+        {% if punches.has_previous %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.previous_page_number }}&amp;adjustment_page={{ adjustments.number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">← Previous</a>{% endif %}
+        {% if punches.has_next %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.next_page_number }}&amp;adjustment_page={{ adjustments.number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">Next →</a>{% endif %}
+      </div></nav>
+    {% elif punches.paginator.count %}<p class="muted pagination-total">{{ punches.paginator.count }} punch{{ punches.paginator.count|pluralize:"es" }} on this page.</p>{% endif %}
+  </section>
+  <section class="panel table-panel">
+    <h2>Correction requests <span class="pill pending">{{ pending_corrections_count }} pending</span></h2>
+    <form method="get" class="filter-bar">
+      <label for="adjustment-filter">Show corrections</label>
+      <select id="adjustment-filter" name="adjustments">
+        <option value="pending" {% if adjustment_filter == 'pending' %}selected{% endif %}>Pending only</option>
+        <option value="history" {% if adjustment_filter == 'history' %}selected{% endif %}>Reviewed history</option>
+        <option value="all" {% if adjustment_filter == 'all' %}selected{% endif %}>All requests</option>
+      </select>
+      <input type="hidden" name="punches" value="{{ punch_filter }}">
+      {% if selected_run %}<input type="hidden" name="run" value="{{ selected_run.pk }}">{% endif %}
+      <button class="button secondary button-small" type="submit">Apply</button>
+    </form>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Officer</th><th>Original</th><th>Proposed</th><th>Reason</th><th>Review</th></tr></thead>
+      <tbody>{% for item in adjustments.object_list %}<tr>
+        <td>{{ item.punch.person.full_name }}</td><td>{{ item.punch.occurred_at }}</td><td>{{ item.proposed_at }}</td><td>{{ item.reason }}</td>
+        <td>{% if item.status == 'requested' %}
+          <form method="post" action="{% url 'adjustment_review' item.pk %}?{{ review_query }}" class="inline-form">
+            {% csrf_token %}<label>Review note<input name="note" placeholder="Explain this decision"></label>
+            <div class="actions"><button class="button button-small" name="action" value="approved" type="submit">Approve</button><button class="button secondary button-small" name="action" value="rejected" type="submit">Reject</button></div>
+          </form>
+        {% else %}<span class="pill {{ item.status }}">{{ item.get_status_display }}</span>{% endif %}</td>
+      </tr>      {% empty %}<tr><td colspan="5" class="empty-cell">No correction requests match this filter.</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% if adjustments.has_other_pages %}
+      <nav class="pagination" aria-label="Correction request pages"><span class="muted">{{ adjustments.paginator.count }} requests · page {{ adjustments.number }} of {{ adjustments.paginator.num_pages }}</span><div class="actions">
+        {% if adjustments.has_previous %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.number }}&amp;adjustment_page={{ adjustments.previous_page_number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">← Previous</a>{% endif %}
+        {% if adjustments.has_next %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.number }}&amp;adjustment_page={{ adjustments.next_page_number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">Next →</a>{% endif %}
+      </div></nav>
+    {% elif adjustments.paginator.count %}<p class="muted pagination-total">{{ adjustments.paginator.count }} requests — all of them, on this page.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

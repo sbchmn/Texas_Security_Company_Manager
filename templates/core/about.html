@@ -1,0 +1,74 @@
+{% extends 'base.html' %}
+{% block title %}About{% endblock %}
+{% block content %}
+<div class="page about-page">
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">About</p>
+      <h1>{{ app_name }}</h1>
+      <p>Version {{ app_version }}</p>
+    </div>
+  </div>
+
+  <section class="panel about-product" aria-labelledby="about-product">
+    <h2 id="about-product">A product of {{ app_publisher.name }}</h2>
+    <address>
+      {{ app_publisher.name }}<br>{{ app_publisher.address }}<br>
+      <a href="{{ app_publisher.url }}" rel="noopener" target="_blank">{{ app_publisher.url|cut:"https://" }}</a>
+    </address>
+    <p class="about-copyright">Copyright &copy; {{ copyright_years }} {{ app_publisher.name }}. All rights reserved.</p>
+    <p class="muted">{{ app_name }} and its original source code, design and documentation are the property of {{ app_publisher.name }}. The open-source components listed below remain the property of their respective authors and are used under the licenses shown with each one; nothing on this page changes those licenses.</p>
+    <dl class="about-facts">
+      <div><dt>Version</dt><dd>{{ app_version }}</dd></div>
+      <div><dt>Python</dt><dd>{{ python_version }}</dd></div>
+      <div><dt>Open-source components</dt><dd>{{ component_count }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="panel" aria-labelledby="about-packages">
+    <h2 id="about-packages">Open-source software in this application</h2>
+    <p class="muted">Generated from the packages installed in this deployment, so versions always match what is running. Expand a component to read the license and notice files it ships with.</p>
+    <ul class="about-list">
+      {% for item in packages %}{% include 'core/_about_component.html' %}{% endfor %}
+    </ul>
+  </section>
+
+  <section class="panel" aria-labelledby="about-bundled">
+    <h2 id="about-bundled">Components delivered to your browser</h2>
+    <ul class="about-list">
+      {% for item in bundled %}{% include 'core/_about_component.html' %}{% empty %}<li class="muted">None.</li>{% endfor %}
+    </ul>
+  </section>
+
+  {% if python_license %}
+  <section class="panel" aria-labelledby="about-python">
+    <h2 id="about-python">Python runtime</h2>
+    <ul class="about-list">
+      <li class="about-item">
+        <details>
+          <summary><span class="about-name">CPython {{ python_version }}</span><span class="pill">PSF-2.0</span><a href="https://www.python.org/" rel="noopener" target="_blank">python.org</a></summary>
+          <pre class="about-license">{{ python_license }}</pre>
+        </details>
+      </li>
+    </ul>
+  </section>
+  {% endif %}
+
+  <section class="panel" aria-labelledby="about-services">
+    <h2 id="about-services">Services in the deployment stack</h2>
+    <p class="muted">The reference Docker deployment runs these as separate programs beside the application. They communicate over the network and are not part of {{ app_name }}; each is distributed under its own license, with source available at the link shown.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>Version</th><th>Role</th><th>License</th><th>Source</th></tr></thead>
+        <tbody>
+          {% for service in services %}
+          <tr><td>{{ service.name }}</td><td>{{ service.version|default:"—" }}</td><td>{{ service.role }}</td><td>{{ service.license }}</td><td><a href="{{ service.url }}" rel="noopener" target="_blank">Source</a></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="muted about-footer">{{ app_name }} v{{ app_version }} &middot; Copyright &copy; {{ copyright_years }} <a href="{{ app_publisher.url }}" rel="noopener" target="_blank">{{ app_publisher.name }}</a></p>
+</div>
+{% endblock %}

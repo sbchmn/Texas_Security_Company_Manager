@@ -32,14 +32,10 @@
 <td>{{ rule.created_by.get_full_name|default:rule.created_by.username|default:'—' }}<small>{{ rule.updated_at|date:'M j, Y' }}</small></td>
 <td><div class="actions"><a href="{% url 'messaging_settings' %}?edit={{ rule.pk }}"{% if editing.pk == rule.pk %} class="active"{% endif %}>{% if editing.pk == rule.pk %}Editing{% else %}Edit{% endif %}</a><form method="post" action="{% url 'messaging_rule_remove' rule.pk %}" class="inline-form">{% csrf_token %}<button class="button secondary button-small">Remove</button></form></div></td></tr>
 {% empty %}<tr><td colspan="6" class="empty-cell">No rules yet, so every notice goes where the screen that sent it says — in-app and email for almost all of them, which is why nothing has ever been texted.</td></tr>{% endfor %}</tbody></table></div>
-<form method="post" action="{% if editing %}{% url 'messaging_rule_edit' editing.pk %}{% else %}{% url 'messaging_rule_add' %}{% endif %}" class="form-grid">
+<form method="post" action="{% if editing %}{% url 'messaging_rule_edit' editing.pk %}{% else %}{% url 'messaging_rule_add' %}{% endif %}" class="data-form">
 {% csrf_token %}
-<div>{{ rule_form.audience.label_tag }}{{ rule_form.audience }}</div>
-<div>{{ rule_form.family.label_tag }}{{ rule_form.family }}<small>{{ rule_form.family.help_text }}</small></div>
-<div>{{ rule_form.event_type.label_tag }}{{ rule_form.event_type }}<small>{{ rule_form.event_type.help_text|safe }}</small></div>
-<div>{{ rule_form.channels.label_tag }}{{ rule_form.channels }}<small>{{ rule_form.channels.help_text }}</small></div>
-<div>{{ rule_form.active.label_tag }}{{ rule_form.active }}<small>{{ rule_form.active.help_text }}</small></div>
-<div><button class="button">Add the rule</button></div>
+{{ rule_form.as_div }}
+<div class="form-actions"><button class="button" type="submit">{% if editing %}Save rule{% else %}Add rule{% endif %}</button></div>
 <p class="helptext">Start with the notice an officer has to act on and nobody else can: a licence about to lapse. Audience <em>The person the notice is about</em>, family <em>Credentials and compliance</em>, tick <em>SMS</em> — and read the count in the fourth column before you decide whether the number of opted-in officers makes that worth a second channel at all.</p>
 </form>
 </section>

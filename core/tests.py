@@ -149,6 +149,20 @@ class CompletedMvpSecurityTest(TestCase):
         with connection.cursor() as cursor:cursor.execute(tamper,arguments)
         self.assertEqual(verify_audit_chain(self.org),[str(event.pk)])
 
+    def test_events_written_in_the_same_clock_tick_still_verify(self):
+        """A frozen clock forces every write onto one timestamp; ties used to be walked in uuid order."""
+        from unittest import mock
+        from django.utils import timezone
+        from .services import verify_audit_chain
+        frozen=timezone.now()
+        with mock.patch("core.models.timezone.now",return_value=frozen):
+            for index in range(12):
+                AuditEvent.objects.create(organization=self.org,actor=self.user,action="tick",target_type="person",target_id=str(index))
+        ordered=list(self.org.audit_events.order_by("occurred_at","id"))
+        self.assertEqual([str(index) for index in range(12)],[event.target_id for event in ordered])
+        self.assertEqual(12,len({event.occurred_at for event in ordered}))
+        self.assertEqual([],verify_audit_chain(self.org))
+
     def test_offline_token_is_tenant_bound_replay_safe_and_idempotent(self):
         from django.core import signing
         from django.utils import timezone
@@ -436,12 +450,12 @@ class PayrollWorkflowTest(TestCase):
         original=self.punch_in.occurred_at
         item=PunchAdjustment.objects.create(organization=self.org,punch=self.punch_in,requested_by=self.officer_user,proposed_at=original+timedelta(minutes=30),reason="Forgot to clock in after briefing")
         self.client.force_login(self.manager); response=self.client.post(reverse("adjustment_review",args=[item.pk]),{"action":"approved","note":"Supervisor confirmed"})
-        self.assertRedirects(response,reverse("time_review")); self.punch_in.refresh_from_db(); item.refresh_from_db()
+        self.assertRedirects(response,reverse("time_review")+"?punches=pending&adjustments=pending"); self.punch_in.refresh_from_db(); item.refresh_from_db()
         self.assertEqual(self.punch_in.occurred_at,original); self.assertEqual(item.status,PunchAdjustment.Status.APPROVED)
     def test_payroll_approval_locks_period_and_exports_snapshot(self):
         from .services import create_payroll_run
         run=create_payroll_run(organization=self.org,start=self.start,end=self.end,actor=self.manager)
-        self.client.force_login(self.manager); response=self.client.post(reverse("payroll_approve",args=[run.pk])); self.assertRedirects(response,reverse("payroll"));run.refresh_from_db();self.assertEqual(run.status,PayrollRun.Status.APPROVED)
+        self.client.force_login(self.manager); response=self.client.post(reverse("payroll_approve",args=[run.pk])); self.assertRedirects(response,reverse("payroll")+f"?run={run.pk}");run.refresh_from_db();self.assertEqual(run.status,PayrollRun.Status.APPROVED)
         export=self.client.get(reverse("payroll_run_export",args=[run.pk]));self.assertEqual(export.status_code,200);self.assertIn("Jamie Fox",export.content.decode())
         xlsx=self.client.get(reverse("payroll_run_export",args=[run.pk])+"?format=xlsx");self.assertEqual(xlsx.status_code,200);self.assertTrue(xlsx.content.startswith(b"PK"))
         pdf=self.client.get(reverse("payroll_run_export",args=[run.pk])+"?format=pdf");self.assertEqual(pdf.status_code,200);self.assertTrue(pdf.content.startswith(b"%PDF-1.4"))
@@ -506,7 +520,7 @@ class PayrollWorkflowTest(TestCase):
         self.assertIn("locked",str([str(item) for item in blocked.context["messages"]]).lower())
         self.client.force_login(owner)
         response=self.client.post(reverse("payroll_reopen",args=[run.pk]),{"reason":"Client disputed the Tuesday hours after the briefing was moved"},follow=True)
-        self.assertRedirects(response,reverse("payroll"))
+        self.assertRedirects(response,reverse("payroll")+f"?run={run.pk}")
         run.refresh_from_db()
         self.assertEqual(run.status,PayrollRun.Status.DRAFT)
         self.assertEqual((run.reopen_count,run.reopened_by_id),(1,owner.pk))
@@ -1425,7 +1439,7 @@ class PeopleCentricRecordsTest(TestCase):
     def test_owner_sidebar_keeps_account_controls_after_the_last_section(self):
         self.sign_in(self.owner)
         dashboard=self.client.get(reverse("dashboard"))
-        for section in ("Company","Operations","Compliance","My work","Setup"):
+        for section in ("Quick access","Today","People","Schedule","Time &amp; Payroll","Compliance &amp; Records","Reports","Settings"):
             self.assertContains(dashboard,section)
         self.assertContains(dashboard,'action="/accounts/logout/"')
         self.assertContains(dashboard,"Sign out")
@@ -1949,8 +1963,9 @@ class OperableConfigurationTest(TestCase):
 
     def test_the_dashboard_reports_the_numbers_it_used_to_leave_blank(self):
         page=self.client.get(reverse("dashboard"))
-        self.assertContains(page,"Compliance attention")
-        self.assertContains(page,"Unfilled posts")
+        self.assertContains(page,"Assignment readiness")
+        self.assertContains(page,"Coverage in the next 7 days")
+        self.assertIn("compliance_attention",page.context)
         self.assertNotContains(page,"Control matrix pending")
         self.assertNotContains(page,"Coming next")
 
@@ -2270,8 +2285,8 @@ class ScopedAuthorityTest(TestCase):
 
     def test_the_dashboard_counts_only_what_the_actor_can_act_on(self):
         self.client.force_login(self.bounded)
-        page=self.client.get(reverse("dashboard"))
-        self.assertContains(page,"Ana Delgado")     # the recent-hires panel is the in-scope roster
+        page=self.client.get(reverse("workspace_people"))
+        self.assertContains(page,"Ana Delgado")     # the people workspace is the in-scope roster
         self.assertNotContains(page,"Bo Nakamura")
         bounded=self.client.get(reverse("compliance"),{"kind":"credentials","show":"all"}).context
         self.assertEqual(bounded["totals"]["credentials"],2)   # Ana filed, Cy has nothing on file
@@ -2411,9 +2426,9 @@ class RegisterPaginationTest(TestCase):
 
     def test_the_punch_desk_paginates_where_it_once_stopped_counting(self):
         self.client.force_login(self.supervisor)
-        page=self.client.get(reverse("time_review"))
+        page=self.client.get(reverse("time_review"),{"punches":"all"})
         self.assertEqual(len(page.context["punches"]),50)
-        self.assertContains(page,"60 items · page 1 of 2")
+        self.assertContains(page,"60 punches · page 1 of 2")
 
 
 class DocumentRevisionLineageTest(TestCase):
@@ -3052,7 +3067,7 @@ class EvidencePolicyInheritanceTest(TestCase):
         Shift.objects.create(organization=self.org,site=self.reception,officer=self.person,starts_at=starts,
             ends_at=starts+timedelta(hours=8),status=Shift.Status.PUBLISHED,post_name="Waived gate")
         self.client.force_login(self.owner)
-        self.assertContains(self.client.get(reverse("schedule")),"nearest 15 min · contract")
+        self.assertContains(self.client.get(reverse("schedule")+"?layout=list"),"nearest 15 min · contract")
 
     def test_a_rule_stays_editable_after_its_site_is_deactivated(self):
         # The target list offers active sites only, which would otherwise strand the waiver:
@@ -3596,15 +3611,15 @@ class ShiftSwapTest(TestCase):
         self.accept(swap)
         self.client.force_login(self.owner)
         overview=self.client.get(reverse("dashboard"))
-        self.assertContains(overview,"1 shift swap waiting for a decision")
-        self.assertEqual(overview.context["pending_swaps"],len(self.client.get(reverse("swaps")).context["pending"]))
+        self.assertEqual(overview.context["pending_move_count"],1)
+        self.assertEqual(overview.context["pending_move_count"],len(self.client.get(reverse("swaps")).context["pending"]))
         closed=ShiftSwap.objects.get(pk=swap.pk); closed.status=ShiftSwap.Status.WITHDRAWN; closed.save()
-        self.assertNotContains(self.client.get(reverse("dashboard")),"waiting for a decision")
+        self.assertEqual(self.client.get(reverse("dashboard")).context["pending_move_count"],0)
 
     def test_a_pending_offer_shows_on_the_officers_overview(self):
         self.offer()
         self.client.force_login(self.sam_user)
-        self.assertContains(self.client.get(reverse("dashboard")),"1 post offer waiting for your answer")
+        self.assertContains(self.client.get(reverse("dashboard")),"1 hand-off or trade offer waiting on you")
 
     def test_only_the_officer_standing_the_post_can_offer_it(self):
         self.client.force_login(self.sam_user)
@@ -4053,7 +4068,7 @@ class PayCodeAndLeaveExportTest(TestCase):
     def test_the_schedule_shows_the_code_and_the_level_that_set_it(self):
         self.account.default_pay_code=self.patrol; self.account.save(update_fields=["default_pay_code"])
         self.client.force_login(self.owner)
-        page=self.client.get(reverse("schedule"))
+        page=self.client.get(reverse("schedule")+"?layout=list")
         self.assertContains(page,"SEC-PATROL")
         self.assertContains(page,"code · contract")
 
@@ -4998,7 +5013,7 @@ class NotificationEventFamiliesTest(TestCase):
         policy.allow_reopen=True;policy.save()
         self.client.force_login(self.owner)
         response=self.client.post(reverse("payroll_reopen",args=[run.pk]),{"reason":"A late correction changes three rows in this period."})
-        self.assertRedirects(response,reverse("payroll"))
+        self.assertRedirects(response,reverse("payroll")+f"?run={run.pk}")
         reopened=self.notices("payroll.reopened")
         self.assertTrue(reopened.exists(),"the people who relied on the locked figure must hear it moved")
         self.assertIn("late correction",reopened.first().body)
@@ -5747,8 +5762,8 @@ class PersonnelFileTest(TestCase):
         self.archive(document)
         self.client.force_login(self.owner)
         page=self.client.get(reverse("retention_review"))
-        self.assertContains(page,"Archived — recoverable")
-        self.assertContains(page,"Deleted — not recoverable")
+        self.assertContains(page,"<summary>Archived records &mdash; recoverable</summary>",html=True)
+        self.assertContains(page,"<summary>Deleted records &mdash; not recoverable</summary>",html=True)
         self.assertContains(page,"Restore to the file")
 
     # -- REC-3: signatures across a chain of versions --
@@ -6897,7 +6912,7 @@ class PayCategoryTest(TestCase):
         dispatcher = User.objects.create_user(username="pc-sched@example.com", password="pw-pc-sched")
         Membership.objects.create(user=dispatcher, organization=self.org, role=Membership.Role.SCHEDULER)
         self.client.force_login(dispatcher)
-        schedule_page = self.client.get(reverse("schedule")).content.decode()
+        schedule_page = self.client.get(reverse("schedule") + "?layout=list").content.decode()
         self.assertIn(reverse("shift_hours", args=[shift.pk]), schedule_page,
                       "each post on the schedule links to its own hour designations")
         self.assertEqual(self.client.get(reverse("shift_hours", args=[shift.pk])).status_code, 200)
@@ -7820,6 +7835,20 @@ class DocumentPreviewTest(TestCase):
         self.assertEqual(b"%PDF-1.4\nthe handbook text", handle.read())
         handle.close()
 
+    def test_a_pdf_streams_same_origin_even_when_storage_could_sign_a_link(self):
+        """The page's PDF.js reads these bytes with fetch under connect-src 'self'; a redirect to the
+        bucket would be a cross-origin read the viewer cannot make.
+        """
+        from unittest.mock import patch
+        from .services import preview_source
+        document = self.store(self.handbook)
+        with patch("core.services.presigned_preview_url", return_value="https://bucket.example/signed") as signer:
+            url, handle, _content_type, kind = preview_source(document)
+        handle.close()
+        self.assertEqual("pdf", kind)
+        self.assertIsNone(url)
+        signer.assert_not_called()
+
     def test_a_custom_domain_without_a_signer_is_never_handed_a_bare_public_link(self):
         """django-storages returns an unsigned URL in this configuration. Using it would replace a
         permission check per request with an unauthenticated public read, so the route must stream.
@@ -8248,7 +8277,7 @@ class SharedKioskPinTest(TestCase):
         # device_id and the review screen still says where they came from.
         self.assertTrue(Punch.objects.filter(device_id=kiosk.pk).exists())
         self.client.force_login(self.owner)
-        self.assertIn("Guard shack 2", self.client.get(reverse("time_review")).content.decode())
+        self.assertIn("Guard shack 2", self.client.get(reverse("time_review"), {"punches": "all"}).content.decode())
 
     def test_a_patrol_scan_at_the_station_is_attributed_to_the_point_and_the_post(self):
         kiosk = self.station(site=self.site)
@@ -8315,7 +8344,7 @@ class SharedKioskPinTest(TestCase):
         identity = self.identify(kiosk, self.PIN).json()["identity"]
         self.punch(kiosk, identity, "in", shift=shift)
         self.client.force_login(self.owner)
-        page = self.client.get(reverse("time_review")).content.decode()
+        page = self.client.get(reverse("time_review"), {"punches": "all"}).content.decode()
         self.assertIn("Guard shack 2", page)
         self.assertIn("PIN-verified", page)
 
@@ -8925,6 +8954,17 @@ class MessageConsentAndDeliveryLifecycleTest(TestCase):
         self.assertEqual(Notification.Status.QUEUED, before.status,
                          "a bounce never rewrites the history of the message that bounced")
         self.assertEqual(1, DeliveryEvent.objects.filter(organization=self.org, provider="twilio").count())
+
+    def test_a_reversal_in_the_same_clock_tick_still_wins(self):
+        from unittest import mock
+        from django.utils import timezone
+        from .services import record_consent, sms_opted_in
+        frozen = timezone.now()
+        with mock.patch("django.utils.timezone.now", return_value=frozen):
+            for _ in range(5):
+                record_consent(organization=self.org, destination=self.PHONE, state=MessageConsent.State.GRANTED)
+                record_consent(organization=self.org, destination=self.PHONE, state=MessageConsent.State.REVOKED)
+                self.assertFalse(sms_opted_in(self.org, self.PHONE))
 
     def test_stop_works_from_the_number_itself_and_answers_on_the_same_channel(self):
         from .services import active_suppression, deliver_notification, handle_inbound_message, record_consent, sms_opted_in

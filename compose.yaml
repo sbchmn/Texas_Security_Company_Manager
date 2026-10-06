@@ -55,7 +55,9 @@ services:
       RUN_MIGRATIONS: "0"
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-3}
     env_file: [.env]
-    volumes: ["media:/app/media"]
+    volumes: ["media:/app/media", "./certs:/app/certs:ro"]
+    extra_hosts:
+      - "sign.localhost:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import sys,urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=4).status==200 else 1)"]
       interval: 15s
@@ -124,7 +126,9 @@ services:
       CLAMAV_PORT: "3310"
       TRUSTED_PROXIES: ${TSCM_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
       RUN_MIGRATIONS: "0"
-    volumes: ["media:/app/media"]
+    volumes: ["media:/app/media", "./certs:/app/certs:ro"]
+    extra_hosts:
+      - "sign.localhost:host-gateway"
     # The worker serves nothing; the image HEALTHCHECK probes gunicorn and would always fail.
     healthcheck:
       disable: true

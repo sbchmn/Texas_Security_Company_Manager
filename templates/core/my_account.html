@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}My account{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">My account</p>
+      <h1>{{ user.get_full_name|default:user.username }}</h1>
+      <p>{{ current_membership.get_role_display }} at {{ current_organization.display_name }}{% if person.branch %} &middot; {{ person.branch.name }}{% endif %}</p>
+    </div>
+  </div>
+  <section class="workspace-grid" aria-label="My account">
+    <article class="card card-primary">
+      <h2>My profile</h2>
+      {% if person %}
+        <dl class="detail-list">
+          <div><dt>Personal email</dt><dd>{{ person.email|default:"Not on file" }}</dd></div>
+          <div><dt>Mobile</dt><dd>{{ person.mobile_phone|default:"Not on file" }}</dd></div>
+          <div><dt>Emergency contact</dt><dd>{% if person.emergency_contact_name %}{{ person.emergency_contact_name }}{% if person.emergency_contact_phone %} &middot; {{ person.emergency_contact_phone }}{% endif %}{% else %}Not on file{% endif %}</dd></div>
+        </dl>
+        <div class="card-actions">
+          <a href="{% url 'person_detail' person.pk %}">View my personnel file</a>
+          <a class="button button-small" href="{% url 'my_contact_edit' %}">Update contact details</a>
+        </div>
+      {% else %}
+        <p class="muted">Your sign-in is not linked to a personnel record. HR links it from your profile when they invite you; until then there is no profile, timeclock or schedule to show.</p>
+      {% endif %}
+    </article>
+    <article class="card">
+      <h2>Sign-in &amp; security</h2>
+      <dl class="detail-list">
+        <div><dt>Sign-in email</dt><dd>{{ user.email|default:user.username }}</dd></div>
+        <div><dt>Password</dt><dd>{% if has_password %}Set{% else %}Not set &mdash; you sign in with a linked account{% endif %}</dd></div>
+        <div><dt>Two-factor</dt><dd>{% if mfa_enabled %}<span class="pill active">On</span>{% else %}<span class="pill pending">Off</span>{% endif %}</dd></div>
+      </dl>
+      <div class="card-actions">
+        <a href="{% url 'account_email' %}">Sign-in email</a>
+        <a href="{% url 'mfa_index' %}">Two-factor &amp; recovery codes</a>
+        <a class="button button-small" href="{% if has_password %}{% url 'account_change_password' %}{% else %}{% url 'account_set_password' %}{% endif %}">{% if has_password %}Change password{% else %}Set a password{% endif %}</a>
+      </div>
+    </article>
+    <article class="card">
+      <h2>Messages</h2>
+      {% if person %}
+        <p class="muted">{% if not person.mobile_phone %}No mobile number on file, so nothing is texted.{% elif consent and consent.state == 'granted' %}Text alerts are on for {{ person.mobile_phone }}.{% elif consent %}You said no to texts at {{ person.mobile_phone }}.{% else %}You have not answered whether {{ person.mobile_phone }} may be texted.{% endif %}</p>
+      {% else %}<p class="muted">Company notices you have received.</p>{% endif %}
+      <div class="card-actions">
+        <a href="{% url 'notifications' %}">My notifications</a>
+        {% if person %}<a class="button button-small" href="{% url 'text_alerts' %}">Text alerts</a>{% endif %}
+      </div>
+    </article>
+    {% if person %}
+    <article class="card">
+      <h2>Work preferences</h2>
+      <p class="muted">When you can work and the time you need off. Clock PIN: {% if pin_set %}issued{% else %}not issued &mdash; a manager issues it when your post uses a shared clock station{% endif %}.</p>
+      <div class="card-actions">
+        <a href="{% url 'my_time_off' %}">Time off</a>
+        <a class="button button-small" href="{% url 'availability' %}">My availability</a>
+      </div>
+    </article>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

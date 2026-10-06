@@ -3,7 +3,7 @@
 {% if board.unissued %}<div class="message">{{ board.unissued }} step{{ board.unissued|pluralize }} the company has defined since this checklist was issued are not on it yet. Press <em>Issue missing steps</em> — a step already issued is never created twice.</div>{% endif %}
 {% if board.rows %}
 <div class="table-wrap"><table><thead><tr><th>Step</th><th>Owed by</th><th>Status</th><th>What we can see</th><th></th></tr></thead><tbody>
-{% for row in board.rows %}<tr>
+{% for row in board.rows %}<tr id="task-{{ row.task.pk }}">
 <td><strong>{{ row.item.name }}</strong>{% if row.item.instructions %}<small>{{ row.item.instructions }}</small>{% endif %}<small>{% if row.item.owner == 'person' %}The officer{% else %}The office{% endif %} · {{ row.item.get_kind_display }}</small></td>
 <td>{% if row.due_on %}{{ row.due_on }}{% if row.overdue %} <span class="pill attention">past date</span>{% endif %}{% else %}<span class="pill pending">no hire date</span>{% endif %}</td>
 <td><span class="pill {% if row.status == 'done' %}active{% elif row.status == 'waived' %}inactive{% else %}pending{% endif %}">{{ row.task.get_status_display }}</span>{% if row.task.decided_at %}<small>{{ row.task.decided_at|date:'M j, Y' }}{% if row.task.decided_by %} by {{ row.task.decided_by }}{% endif %}</small>{% endif %}</td>

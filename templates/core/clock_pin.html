@@ -7,9 +7,10 @@
 
 <section class="panel">
 <form method="post" class="stacked-form">{% csrf_token %}
-{% if has_pin %}<label>Your current PIN{{ form.current_pin }}<small class="helptext">Five wrong tries in a row pauses the PIN for fifteen minutes, everywhere, not just at one station.</small>{% for error in form.current_pin.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>{% endif %}
-<label>{{ form.pin.label_tag }}{{ form.pin }}<small class="helptext">{{ form.pin.help_text }}</small>{% for error in form.pin.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
-<label>{{ form.confirm.label_tag }}{{ form.confirm }}{% for error in form.confirm.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
+{{ form.non_field_errors }}
+{% if has_pin %}{% include 'core/_form_field.html' with field=form.current_pin %}{% endif %}
+{% include 'core/_form_field.html' with field=form.pin %}
+{% include 'core/_form_field.html' with field=form.confirm %}
 <button class="button">{% if has_pin %}Change PIN{% else %}Set PIN{% endif %}</button>
 {% if has_pin %}<a class="button secondary" href="{% url 'clock' %}">Cancel</a>{% endif %}
 </form>

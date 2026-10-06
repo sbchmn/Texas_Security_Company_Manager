@@ -1,1 +1,38 @@
-{% extends 'base.html' %}{% block title %}People{% endblock %}{% block content %}<div class="page"><div class="page-heading"><div><p class="eyebrow">Human capital</p><h1>People directory</h1><p>Manage personnel and their Texas security roles.</p></div><a class="button" href="{% url 'person_create' %}">+ Add person</a></div>{% include 'core/scope_note.html' %}<section class="panel table-panel"><form method="get" class="search-row"><label class="visually-hidden" for="people-search">Search people</label><input id="people-search" type="search" name="q" value="{{ q }}" placeholder="Search by name, email, employee ID, job title, or city"><button class="button secondary button-small" type="submit">Search</button>{% if q %}<a class="button secondary button-small" href="{% url 'people' %}">Clear</a>{% endif %}<span>{{ paginator.count }} record{{ paginator.count|pluralize }}</span></form><div class="table-wrap"><table><thead><tr><th>Person</th><th>Branch</th><th>Role flags</th><th>Status</th></tr></thead><tbody>{% for person in people %}<tr><td><div class="table-person"><span class="avatar">{{ person.first_name|first }}{{ person.last_name|first }}</span><div><strong><a href="{% url 'person_detail' person.pk %}">{{ person.full_name }}</a></strong><small>{{ person.email|default:"No email" }}</small></div></div></td><td>{{ person.branch|default:"—" }}</td><td><div class="tags">{% if person.is_unarmed_officer %}<span>Unarmed</span>{% endif %}{% if person.is_commissioned_officer %}<span>Armed</span>{% endif %}{% if person.is_ppo %}<span>PPO</span>{% endif %}{% if person.is_private_investigator %}<span>PI</span>{% endif %}{% if person.is_shareholder %}<span>Shareholder</span>{% endif %}</div></td><td><span class="pill {{ person.status }}">{{ person.get_status_display }}</span></td></tr>{% empty %}<tr><td colspan="4" class="empty-cell">No personnel yet.</td></tr>{% endfor %}</tbody></table></div>{% include 'core/pagination.html' with page=people %}</section></div>{% endblock %}
+{% extends 'base.html' %}{% block title %}People{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-heading">
+    <div><p class="eyebrow">Human capital</p><h1>People directory</h1><p>Manage personnel and their Texas security roles.</p></div>
+    <a class="button" href="{% url 'person_create' %}">+ Add person</a>
+  </div>
+  {% include 'core/scope_note.html' %}
+  <section class="panel table-panel">
+    <form method="get" class="search-row actions">
+      <label class="visually-hidden" for="people-search">Search people</label>
+      <input id="people-search" type="search" name="q" value="{{ q }}" placeholder="Search by name, email, employee ID, job title, or city">
+      <label class="visually-hidden" for="people-status">Personnel status</label>
+      <select id="people-status" name="status">
+        <option value="">All statuses</option>
+        {% for value, label in statuses %}<option value="{{ value }}"{% if status == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <button class="button secondary button-small" type="submit">Search</button>
+      {% if q or status %}<a class="button secondary button-small" href="{% url 'people' %}">Clear</a>{% endif %}
+      <span>{{ paginator.count }} record{{ paginator.count|pluralize }}</span>
+    </form>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Person</th><th>Branch</th><th>Role flags</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for person in people %}
+          <tr>
+            <td><div class="table-person"><span class="avatar">{{ person.first_name|first }}{{ person.last_name|first }}</span><div><strong><a href="{% url 'person_detail' person.pk %}">{{ person.full_name }}</a></strong><small>{{ person.email|default:"No email" }}</small></div></div></td>
+            <td>{{ person.branch|default:"—" }}</td>
+            <td><div class="tags">{% if person.is_unarmed_officer %}<span>Unarmed</span>{% endif %}{% if person.is_commissioned_officer %}<span>Armed</span>{% endif %}{% if person.is_ppo %}<span>PPO</span>{% endif %}{% if person.is_private_investigator %}<span>PI</span>{% endif %}{% if person.is_shareholder %}<span>Shareholder</span>{% endif %}</div></td>
+            <td><span class="pill {{ person.status }}">{{ person.get_status_display }}</span></td>
+          </tr>
+        {% empty %}<tr><td colspan="4" class="empty-cell">No personnel match this search.</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+    {% include 'core/pagination.html' with page=people %}
+  </section>
+</div>
+{% endblock %}

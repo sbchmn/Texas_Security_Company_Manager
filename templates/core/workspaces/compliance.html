@@ -9,17 +9,22 @@
       <p>Obligations, personnel records, and onboarding tasks.</p>
     </div>
     <div class="actions">
+      {% if can_signing %}<a class="button secondary" href="{% url 'signing_queue' %}">Signing operations</a>{% endif %}
       {% if can_edit %}
         <a class="button secondary" href="{% url 'settings_compliance' %}">Configure rules</a>
       {% endif %}
     </div>
   </div>
 
+  {% if can_manage %}
+    {% include 'core/_compliance_actions.html' %}
+    {% include 'core/_onboarding_queue.html' %}
+  {% endif %}
   <section class="workspace-grid">
     <article class="card card-primary">
-      <h2>Compliance rules</h2>
-      <p class="metric">{{ rule_count }}</p>
-      <p class="muted">{% if total_attention %}{{ total_attention }} need attention{% else %}All current{% endif %}</p>
+      <h2>{% if can_manage %}Obligations needing action{% else %}Compliance rules{% endif %}</h2>
+      <p class="metric">{% if can_manage %}{{ total_attention }}{% else %}{{ rule_count }}{% endif %}</p>
+      <p class="muted">{{ rule_count }} active rules configured. A zero queue does not prove readiness when requirements are not configured.</p>
       {% if rule_summaries %}
         <ul class="rules-list">
           {% for item in rule_summaries|slice:":3" %}
@@ -30,33 +35,40 @@
           {% endfor %}
         </ul>
       {% endif %}
-      <a class="button button-small" href="{% url 'compliance' %}">View queue</a>
+      {% if can_manage %}<div class="card-actions"><a class="button button-small" href="{% url 'compliance' %}">View queue</a></div>{% endif %}
     </article>
 
+    {% if can_manage %}
     <article class="card">
       <h2>Onboarding</h2>
       <p class="metric">{{ onboarding_total }}</p>
       <p class="muted">{% if onboarding_overdue %}{{ onboarding_overdue }} overdue{% else %}On track{% endif %}</p>
-      <a class="button button-small" href="{% url 'onboarding_settings' %}">Manage onboarding</a>
+      <div class="card-actions">
+        {% if can_edit %}<a href="{% url 'onboarding_settings' %}">Configure onboarding steps</a>{% endif %}
+        <a class="button button-small" href="#onboarding-actions">Review outstanding steps</a>
+      </div>
     </article>
+    {% endif %}
 
     <article class="card">
       <h2>Personnel documents</h2>
       <p class="muted">Manage employee records and acknowledgments.</p>
-      <a class="button button-small" href="{% url 'documents' %}">Browse documents</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'documents' %}">Browse documents</a></div>
     </article>
 
+    {% if can_manage %}
     <article class="card">
       <h2>Training records</h2>
       <p class="muted">Credential and training completions.</p>
-      <a class="button button-small" href="{% url 'training' %}">View training</a>
+      <div class="card-actions"><a class="button button-small" href="{% url 'training' %}">View training</a></div>
     </article>
+    {% endif %}
 
     {% if can_execute_disposition %}
       <article class="card">
         <h2>Retention review</h2>
         <p class="muted">Disposition and legal holds.</p>
-        <a class="button button-small" href="{% url 'retention_review' %}">Review retention</a>
+        <div class="card-actions"><a class="button button-small" href="{% url 'retention_review' %}">Review retention</a></div>
       </article>
     {% endif %}
   </section>

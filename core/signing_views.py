@@ -2,6 +2,7 @@ from django import forms
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.http import Http404
+from django.core.paginator import Paginator
 from django.db import transaction
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -15,12 +16,14 @@ from .models import (
     AuditEvent, Membership, OnboardingItem, OnboardingTask, SigningRequest, SigningSettings, record_open_for,
 )
 from .scope import scope_for
+from .form_ui import WorkflowModelForm
+from .workflow_actions import onboarding_actions
 
 SIGNING_ADMIN = (Membership.Role.OWNER, Membership.Role.ADMIN)
 SIGNING_STAFF = SIGNING_ADMIN + (Membership.Role.HR,)
 
 
-class SigningSettingsForm(forms.ModelForm):
+class SigningSettingsForm(WorkflowModelForm):
     api_key = forms.CharField(
         required=False, strip=True, widget=forms.PasswordInput(),
         help_text="DocuSeal API key. Leave blank to keep the existing key; it is never displayed.",
@@ -42,7 +45,7 @@ class SigningSettingsForm(forms.ModelForm):
             self.add_error("api_key", "Enter the DocuSeal API key.")
         if self.instance.pk:
             old = SigningSettings.objects.get(pk=self.instance.pk)
-            if old.base_url != data.get("base_url") and old.organization.signing_requests.filter(
+            if old.base_url != data.get("base_url") and SigningRequest.objects.filter(organization=old.organization,
                 status__in=[SigningRequest.Status.PREPARING, SigningRequest.Status.SENT],
             ).exists():
                 self.add_error("base_url", "Outstanding signing requests still use the current backend.")
@@ -92,8 +95,36 @@ def _task(request, task_id):
     return task
 
 
-def _return_to_task(task):
+def _return_to_task(task, request=None):
+    if request is not None and request.POST.get("return_to") == "signing_queue" and request.membership.role in SIGNING_STAFF:
+        return redirect("signing_queue")
+    if request is not None and task.person.user_id == request.user.pk and request.membership.role not in SIGNING_STAFF:
+        return redirect("my_onboarding")
     return redirect(reverse("person_detail", args=[task.person_id]) + "?tab=onboarding")
+
+
+@membership_required(*SIGNING_STAFF)
+@require_GET
+def signing_queue(request):
+    actions = onboarding_actions(request)
+    stages = [("all", "All"), ("ready", "Ready to send"), ("awaiting", "Awaiting signer"),
+              ("processing", "Processing / verification"), ("failed", "Needs attention"),
+              ("completed", "Signed and filed")]
+    stage = request.GET.get("stage", "all")
+    if stage not in dict(stages):
+        raise Http404
+    rows = actions["signing_rows"]
+    selected = request.GET.get("task")
+    if selected:
+        rows = [row for row in rows if str(row["task"].pk) == selected]
+        if not rows:
+            raise Http404
+    return render(request, "core/signing_queue.html", {
+        "queue": Paginator([row for row in rows if stage == "all" or row["category"] == stage], 25).get_page(request.GET.get("page")),
+        "stage": stage, "stages": [{"value": value, "label": label,
+                                   "count": len(rows) if value == "all" else actions["signing_counts"][value]}
+                                  for value, label in stages],
+    })
 
 
 @membership_required(*SIGNING_STAFF)
@@ -101,12 +132,13 @@ def _return_to_task(task):
 def signing_send(request, task_id):
     task = _task(request, task_id)
     try:
-        issue_signing_request(task, request.user)
+        issue_signing_request(task, request.user,
+                              return_url=request.build_absolute_uri(reverse("signing_return", args=[task.pk])))
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
     else:
         messages.success(request, "Signing request created. The invitation is queued for delivery; the step stays open until signed documents are filed.")
-    return _return_to_task(task)
+    return _return_to_task(task, request)
 
 
 @membership_required()
@@ -122,8 +154,8 @@ def signing_refresh(request, task_id):
         except ValidationError as exc:
             messages.error(request, " ".join(exc.messages))
         else:
-            messages.success(request, result.get_status_display())
-    return _return_to_task(task)
+            messages.success(request, SigningRequest.Status(result.status).label)
+    return _return_to_task(task, request)
 
 
 @membership_required()
@@ -135,10 +167,40 @@ def signing_open(request, task_id):
     signing = task.signing_requests.order_by("-attempt").first()
     if signing is None or signing.status != SigningRequest.Status.SENT:
         messages.error(request, "No open signing invitation is available. Check status or ask the office to send it.")
-        return _return_to_task(task)
+        return _return_to_task(task, request)
     try:
         allowed_origin(signing.base_url)
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
-        return _return_to_task(task)
+        return _return_to_task(task, request)
     return redirect(f"{signing.base_url}/s/{signing.signing_slug}")
+
+
+@membership_required()
+@require_GET
+def signing_return(request, task_id):
+    """Where DocuSeal sends the signer after they finish (the submitter's `completed_redirect_url`).
+
+    Arriving here proves nothing: anyone can type the URL. It only triggers the same API reconcile the
+    status button does, so the signed copies are usually filed by the time the checklist renders.
+    """
+    task = _task(request, task_id)
+    if task.person.user_id != request.user.pk:
+        raise Http404
+    signing = task.signing_requests.order_by("-attempt").first()
+    if signing is None:
+        return _return_to_task(task, request)
+    if signing.status == SigningRequest.Status.SENT:
+        try:
+            signing = reconcile_signing_request(signing.pk)
+        except ValidationError:
+            messages.info(request, "Thanks — your signature was submitted. Your documents will be filed shortly; "
+                                   "use Check status if this step still shows as waiting.")
+            return _return_to_task(task, request)
+    if signing.status == SigningRequest.Status.COMPLETED:
+        messages.success(request, "Thanks — your signed documents are filed in your personnel file.")
+    elif signing.status == SigningRequest.Status.SENT:
+        messages.info(request, "Thanks — DocuSeal is still finishing your documents. They will be filed shortly.")
+    else:
+        messages.info(request, SigningRequest.Status(signing.status).label)
+    return _return_to_task(task, request)

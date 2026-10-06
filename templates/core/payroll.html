@@ -1,6 +1,128 @@
-{% extends 'base.html' %}{% block title %}Payroll{% endblock %}{% block content %}<div class="page"><div class="page-heading"><div><p class="eyebrow">Payroll management</p><h1>Payroll runs</h1><p>Generate, resolve exceptions, approve, lock, and export worked time.</p></div><div class="actions"><a class="button secondary" href="{% url 'pay_codes' %}">Pay codes</a><a class="button secondary" href="{% url 'settings_pay_categories' %}">Hour categories</a><a class="button secondary" href="{% url 'payroll_export' %}">Range export (CSV)</a><a class="button secondary" href="{% url 'time_policy' %}">Time policy</a></div></div><div class="dashboard-grid"><form method="post" class="panel data-form">{% csrf_token %}{{ form.as_div }}<button class="button">Generate draft</button></form><section class="panel"><h2>Approval rules</h2><p class="muted">Drafts with open punches or pending evidence cannot be approved. Approval locks the period against new punches and corrections.</p><p class="muted">{% if can_reopen %}Reopening is <strong>allowed</strong> by this company's time policy, and only an owner or administrator may do it, with a written reason.{% else %}Reopening is <strong>turned off</strong> by this company's time policy: an approved period stays locked. It is a switch on the Time policy page, not a per-user favour.{% endif %}</p><p>{% if privileged %}<a class="button secondary button-small" href="{% url 'time_policy' %}">Time policy</a>{% endif %}</p></section></div>{% if latest %}<div class="dashboard-grid"><section class="panel table-panel"><div class="panel-head"><div><h2>By pay code</h2><p class="muted">{{ latest.period_start|date:'M j' }}–{{ latest.period_end|date:'M j' }} · from the generated snapshot, so these are the figures in the export</p></div></div><div class="table-wrap"><table><thead><tr><th>Code</th><th>Hours</th><th>Est. pay</th><th>Est. bill</th><th>People</th></tr></thead><tbody>{% for row in by_pay_code %}<tr><td><strong>{{ row.key }}</strong>{% if row.pay_code_name %}<small>{{ row.pay_code_name }}{% if row.cost_centre %} · {{ row.cost_centre }}{% endif %}</small>{% endif %}</td><td>{{ row.total_hours }}</td><td>{{ row.estimated_pay }}</td><td>{{ row.estimated_bill }}</td><td>{{ row.employee_count }}</td></tr>{% endfor %}</tbody></table></div></section><section class="panel table-panel"><h2>By pay category</h2><p class="muted">Worked time and approved leave are separate categories: leave the schedule granted but the clock never recorded is not unpaid time, and a clerk reading only worked rows cannot see it. What each designated kind pays — paid or unpaid, at what multiple, and whether it counts toward the overtime threshold — is set on <a href="{% url 'settings_pay_categories' %}">Hour categories</a>. Leave is paid on the hours it displaced — the officer's scheduled posts inside the approved span, less anything they worked anyway — never on the calendar span the absence covers, and never billed on.</p><div class="table-wrap"><table><thead><tr><th>Category</th><th>Hours</th><th>Rows</th></tr></thead><tbody>{% for row in by_category %}<tr><td>{{ row.category }}</td><td>{{ row.raw_hours|default:row.total_hours }}</td><td>{{ row.rows }}</td></tr>{% endfor %}</tbody></table></div></section></div>{% endif %}
-<section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Period</th><th>Employees</th><th>Exceptions</th><th>Status</th><th>Actions</th></tr></thead><tbody>{% for run in runs %}<tr><td>{{ run.period_start|date:'M j' }}–{{ run.period_end|date:'M j, Y' }}</td><td>{{ run.snapshot|length }}</td><td>{{ run.exceptions|length }}</td><td><span class="pill {{ run.status }}">{{ run.get_status_display }}</span>{% if run.reopen_count %}<small>Reopened {{ run.reopen_count }}× by {{ run.reopened_by }}{% if run.reopened_at %} on {{ run.reopened_at|date:'M j, Y' }}{% endif %}</small><small>{{ run.reopen_reason }}</small>{% endif %}</td><td>{% if run.status == 'draft' %}<div class="actions"><form method="post" action="{% url 'payroll_approve' run.pk %}">{% csrf_token %}<button>Approve &amp; lock</button></form></div>{% else %}<div class="actions"><a href="{% url 'payroll_run_export' run.pk %}?format=csv">CSV</a><a href="{% url 'payroll_run_export' run.pk %}?format=xlsx">XLSX</a><a href="{% url 'payroll_run_export' run.pk %}?format=pdf">PDF</a>{% if privileged and can_reopen %}<form method="post" action="{% url 'payroll_reopen' run.pk %}" class="inline-form">{% csrf_token %}<input name="reason" placeholder="Reason to reopen" required minlength="10" maxlength="500"><button class="button secondary button-small" type="submit">Reopen period</button></form>{% endif %}</div>{% endif %}</td></tr>{% empty %}<tr><td colspan="5" class="empty-cell">No payroll runs.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel table-panel"><h2>Lock slices</h2><p class="muted">A period is one thing and a lock is another. Agree a branch or a contract while the rest of the period is still being worked, instead of unlocking everybody to correct somebody. Opening a slice inside an approved period is owner or administrator work, because it undoes an approval.</p>
-{% for run in runs %}<div class="panel"><h3>{{ run.period_start|date:'M j' }}–{{ run.period_end|date:'M j, Y' }} <span class="pill {{ run.status }}">{{ run.get_status_display }}</span></h3>
-{% if run.lock_segments.all %}<div class="table-wrap"><table><thead><tr><th>Slice</th><th>State</th><th>Why it differs from the period</th><th>Decided</th></tr></thead><tbody>{% for seg in run.lock_segments.all %}<tr><td>{{ seg.subject_label }}</td><td><span class="pill {% if seg.status == 'locked' %}accepted{% else %}pending{% endif %}">{{ seg.get_status_display }}</span></td><td>{{ seg.reason }}</td><td>{{ seg.decided_by|default:'—' }} · {{ seg.decided_at|date:'M j, H:i' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">Nothing differs: the whole period is {{ run.get_status_display|lower }}.</p>{% endif %}
-<form method="post" action="{% url 'payroll_segment_lock' run.pk %}" class="data-form">{% csrf_token %}<div class="field-row"><label>Slice<select name="subject"><option value="">Everywhere else — the rest of the company</option>{% for branch in lock_branches %}<option value="b{{ branch.pk }}">{{ branch.name }} branch</option>{% endfor %}{% for client in lock_clients %}<option value="c{{ client.pk }}">{{ client.name }} (contract)</option>{% endfor %}</select></label><label>State<select name="status">{% for value, label in lock_statuses %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label></div><label>Why this slice differs<input type="text" name="reason" maxlength="255" required minlength="10" placeholder="e.g. Ridgeline invoice 4471 still missing two punch corrections"></label><div class="form-actions"><button class="button secondary" type="submit">Set lock slice</button></div><p class="muted">A locked slice refuses new punches, corrections and approvals for that branch or contract while the rest stays open, and the other way round. A period with any slice open cannot be exported: the file must not leave while part of it is still moving.</p></form></div>{% endfor %}</section></div>{% endblock %}
+{% extends 'base.html' %}{% block title %}Payroll{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-heading">
+    <div><p class="eyebrow">Payroll management</p><h1>Payroll runs</h1><p>Generate a period draft, resolve blockers, review the snapshot, approve and lock, then export that same period.</p></div>
+    <div class="actions">
+      {% if privileged %}<a class="button secondary" href="{% url 'pay_codes' %}">Pay codes</a><a class="button secondary" href="{% url 'time_policy' %}">Time policy</a>{% endif %}
+      <a class="button secondary" href="{% url 'settings_pay_categories' %}">Hour categories</a>
+      <a class="button secondary" href="{% url 'payroll_export' %}">Range export (CSV)</a>
+    </div>
+  </div>
+  <div class="dashboard-grid">
+    <form method="post" class="panel data-form" id="generate-draft">{% csrf_token %}
+      {% if selected_run and selected_run.status == 'draft' %}<h2>Refresh selected draft</h2><p class="muted">Regenerate {{ selected_run.period_start|date:'M j' }}–{{ selected_run.period_end|date:'M j, Y' }} after correcting its source records.</p>{% else %}<h2>Generate a period</h2>{% endif %}
+      {{ form.as_div }}<div class="form-actions"><button class="button" type="submit">{% if selected_run and selected_run.status == 'draft' %}Refresh draft{% else %}Generate draft{% endif %}</button></div>
+    </form>
+    <section class="panel">
+      <h2>Approval rules</h2><p class="muted">Drafts with open punches or pending evidence cannot be approved. Approval locks the period against new punches and corrections.</p>
+      <p class="muted">{% if can_reopen %}Reopening is <strong>allowed</strong> by this company's time policy. Only an owner or administrator may reopen it, with a written reason.{% else %}Reopening is <strong>turned off</strong> by this company's time policy: an approved period stays locked. This is a company setting, not a per-user permission.{% endif %}</p>
+      {% if privileged %}<a class="button secondary button-small" href="{% url 'time_policy' %}">Time policy</a>{% endif %}
+    </section>
+  </div>
+  {% if selected_run %}
+    <section class="panel table-panel">
+      <div class="panel-head"><div><p class="eyebrow">Selected payroll period</p><h2>{{ selected_run.period_start|date:'M j' }}–{{ selected_run.period_end|date:'M j, Y' }}</h2><p class="muted">Stage: {{ selected_run.get_status_display }}. Review and export links below always use this run.</p></div><span class="pill {{ selected_run.status }}">{{ selected_run.get_status_display }}</span></div>
+      <ol class="workflow-steps">
+        <li>Generate draft</li><li>Resolve blockers</li><li>Review snapshot</li><li>Approve and lock</li><li>Export</li>
+      </ol>
+      {% if pending_punch_count or pending_correction_count %}
+        <div class="alert alert-error">
+          <strong>Resolve current time-review blockers before approval.</strong>
+          {% if pending_punch_count %}<p>{{ pending_punch_count }} punch{{ pending_punch_count|pluralize }} in this period await review. <a href="{% url 'time_review' %}?punches=pending&amp;adjustments=pending&amp;run={{ selected_run.pk }}">Review pending punches</a>.</p>{% endif %}
+          {% if pending_correction_count %}<p>{{ pending_correction_count }} correction request{{ pending_correction_count|pluralize }} in this period remain pending. <a href="{% url 'time_review' %}?punches=pending&amp;adjustments=pending&amp;run={{ selected_run.pk }}">Review pending corrections</a>.</p>{% endif %}
+        </div>
+      {% endif %}
+      {% if exception_rows %}
+        <h3>Snapshot exceptions</h3>
+        <ul class="exception-list">
+          {% for item in exception_rows %}<li><strong>{{ item.employee|default:'Payroll' }}:</strong> {{ item.reason }} <a href="{{ item.destination }}">{{ item.destination_label }}</a></li>{% endfor %}
+        </ul>
+        <p class="muted">After changing source records or resolving time evidence, refresh this draft for the selected period. The server will not approve a draft while its exception list is non-empty.</p>
+      {% endif %}
+      {% if selected_run.status == 'draft' %}
+        <div class="form-actions">
+          <form method="post" action="{% url 'payroll_approve' selected_run.pk %}?run={{ selected_run.pk }}">{% csrf_token %}
+            <button class="button" type="submit" {% if approval_blocked %}disabled aria-describedby="approval-blocked-note"{% endif %}>Approve &amp; lock this period</button>
+          </form>
+          {% if approval_blocked %}<span id="approval-blocked-note" class="muted">Approval stays unavailable until all blockers are resolved and the draft is refreshed.</span>{% endif %}
+        </div>
+      {% else %}
+        {% if open_segments %}<p class="alert alert-error">Export is blocked while a lock slice remains open. Review the selected period's lock slices below.</p>{% else %}
+        <div class="actions">
+          <a class="button" href="{% url 'payroll_run_export' selected_run.pk %}?format=csv">Export selected period CSV</a>
+          <a class="button secondary" href="{% url 'payroll_run_export' selected_run.pk %}?format=xlsx">XLSX</a>
+          <a class="button secondary" href="{% url 'payroll_run_export' selected_run.pk %}?format=pdf">PDF</a>
+        </div>
+        {% endif %}
+      {% endif %}
+    </section>
+  {% endif %}
+  {% if selected_run %}
+    <div class="dashboard-grid">
+      <section class="panel table-panel">
+        <div class="panel-head"><div><h2>By pay code</h2><p class="muted">{{ selected_run.period_start|date:'M j' }}&ndash;{{ selected_run.period_end|date:'M j' }} &middot; From the generated snapshot, matching the export.</p></div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Code</th><th>Hours</th><th>Est. pay</th><th>Est. bill</th><th>People</th></tr></thead>
+          <tbody>{% for row in by_pay_code %}<tr>
+            <td><strong>{{ row.key }}</strong>{% if row.pay_code_name %}<small>{{ row.pay_code_name }}{% if row.cost_centre %} &middot; {{ row.cost_centre }}{% endif %}</small>{% endif %}</td>
+            <td>{{ row.total_hours }}</td><td>{{ row.estimated_pay }}</td><td>{{ row.estimated_bill }}</td><td>{{ row.employee_count }}</td>
+          </tr>{% endfor %}</tbody>
+        </table></div>
+      </section>
+      <section class="panel table-panel">
+        <h2>By pay category</h2>
+        <p class="muted">Worked time and approved leave are separate categories. Paid or unpaid time, pay multiples, and overtime treatment are configured in <a href="{% url 'settings_pay_categories' %}">Hour categories</a>. Leave covers displaced scheduled hours, less time actually worked, not the entire calendar span. Leave is never billed.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Category</th><th>Hours</th><th>Rows</th></tr></thead>
+          <tbody>{% for row in by_category %}<tr><td>{{ row.category }}</td><td>{{ row.raw_hours|default_if_none:row.total_hours }}</td><td>{{ row.rows }}</td></tr>{% endfor %}</tbody>
+        </table></div>
+      </section>
+    </div>
+  {% endif %}
+  <section class="panel table-panel"><div class="table-wrap"><table>
+    <thead><tr><th>Period</th><th>Employees</th><th>Exceptions</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>{% for run in runs %}<tr>
+      <td>{{ run.period_start|date:'M j' }}&ndash;{{ run.period_end|date:'M j, Y' }}</td><td>{{ run.snapshot|length }}</td><td>{{ run.exceptions|length }}</td>
+      <td><span class="pill {{ run.status }}">{{ run.get_status_display }}</span>{% if run.reopen_count %}<small>Reopened {{ run.reopen_count }} times by {{ run.reopened_by }}{% if run.reopened_at %} on {{ run.reopened_at|date:'M j, Y' }}{% endif %}</small><small>{{ run.reopen_reason }}</small>{% endif %}</td>
+      <td><div class="actions">
+        {% if run.status == 'draft' %}
+          <a class="button secondary button-small" href="{% url 'payroll' %}?run={{ run.pk }}">Review period</a>
+        {% else %}
+          <a class="button secondary button-small" href="{% url 'payroll' %}?run={{ run.pk }}">Review period</a>
+          <a class="button secondary button-small" href="{% url 'payroll_run_export' run.pk %}?format=csv">CSV</a><a class="button secondary button-small" href="{% url 'payroll_run_export' run.pk %}?format=xlsx">XLSX</a><a class="button secondary button-small" href="{% url 'payroll_run_export' run.pk %}?format=pdf">PDF</a>
+          {% if privileged and can_reopen %}
+            <form method="post" action="{% url 'payroll_reopen' run.pk %}?run={{ run.pk }}" class="inline-form">
+              {% csrf_token %}<label>Reason to reopen<input name="reason" placeholder="Explain why this period must change" required minlength="10" maxlength="500"></label>
+              <button class="button secondary button-small" type="submit">Reopen period</button>
+            </form>
+          {% endif %}
+        {% endif %}
+      </div></td>
+    </tr>{% empty %}<tr><td colspan="5" class="empty-cell">No payroll runs.</td></tr>{% endfor %}</tbody>
+  </table></div></section>
+  {% if selected_run %}<details class="panel table-panel">
+    <summary>Lock slices for the selected period</summary><p class="muted">Lock a branch or contract while the rest of the period is still being worked. Opening a slice inside an approved period undoes an approval and requires an owner or administrator.</p>
+    {% with run=selected_run %}
+      <div class="panel"><h3>{{ run.period_start|date:'M j' }}&ndash;{{ run.period_end|date:'M j, Y' }} <span class="pill {{ run.status }}">{{ run.get_status_display }}</span></h3>
+        {% if run.lock_segments.all %}
+          <div class="table-wrap"><table>
+            <thead><tr><th>Slice</th><th>State</th><th>Why it differs from the period</th><th>Decided</th></tr></thead>
+            <tbody>{% for seg in run.lock_segments.all %}<tr><td>{{ seg.subject_label }}</td><td><span class="pill {% if seg.status == 'locked' %}accepted{% else %}pending{% endif %}">{{ seg.get_status_display }}</span></td><td>{{ seg.reason }}</td><td>{{ seg.decided_by|default:'—' }} &middot; {{ seg.decided_at|date:'M j, H:i' }}</td></tr>{% endfor %}</tbody>
+          </table></div>
+        {% else %}<p class="muted">Nothing differs: the whole period is {{ run.get_status_display|lower }}.</p>{% endif %}
+        <form method="post" action="{% url 'payroll_segment_lock' run.pk %}?run={{ run.pk }}" class="data-form">
+          {% csrf_token %}
+          <div class="field-row">
+            <label>Slice<select name="subject"><option value="">Everywhere else &mdash; the rest of the company</option>{% for branch in lock_branches %}<option value="b{{ branch.pk }}">{{ branch.name }} branch</option>{% endfor %}{% for client in lock_clients %}<option value="c{{ client.pk }}">{{ client.name }} (contract)</option>{% endfor %}</select></label>
+            <label>State<select name="status">{% for value, label in lock_statuses %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
+          </div>
+          <label>Why this slice differs<input type="text" name="reason" maxlength="255" required minlength="10" placeholder="Explain what is agreed or still needs correction"></label>
+          <div class="form-actions"><button class="button secondary" type="submit">Set lock slice</button></div>
+          <p class="muted">A locked slice refuses new punches, corrections and approvals for its branch or contract while the rest stays open. A period with any slice open cannot be exported.</p>
+        </form>
+      </div>
+    {% endwith %}
+  </details>{% endif %}
+</div>
+{% endblock %}
