@@ -223,6 +223,18 @@ database and cache are reachable and is what the orchestrator should gate traffi
 passes. Every service has a restart policy and bounded `json-file` logs, so a host reboot
 brings the stack back without filling the disk.
 
+Django and application warnings/errors go to stderr, including tracebacks for unhandled
+HTTP 500 errors even with `DEBUG=false`. Existing Django administrator-email error reporting
+is preserved. To investigate a failed upload, reproduce it and inspect:
+
+```bash
+docker compose -f compose.yaml logs --since 10m --tail 200 web
+```
+
+Keep `DEBUG=false` in production; tracebacks belong in operator logs, not browser responses.
+Logs can contain exception messages and request paths: restrict access and redact credentials,
+signed URLs, and personal data before sharing them. SDK debug logging is not enabled.
+
 ### Two-person controls
 
 Destructive and privacy-sensitive actions require a second owner or administrator:

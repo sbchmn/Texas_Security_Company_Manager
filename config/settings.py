@@ -16,6 +16,37 @@ APP_PUBLISHER = {"name": "Bachman Group, LLC", "address": "PO Box 4, Lancaster, 
 # to avoid importing a developer's deployment values.
 load_dotenv(os.getenv("DOTENV_PATH") or BASE_DIR / ".env")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "require_debug_false": {"()": "django.utils.log.RequireDebugFalse"},
+    },
+    "formatters": {
+        "standard": {"format": "{asctime} {levelname} {name}: {message}", "style": "{"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
+            "level": "WARNING",
+            "formatter": "standard",
+        },
+        "mail_admins": {
+            "class": "django.utils.log.AdminEmailHandler",
+            "level": "ERROR",
+            "filters": ["require_debug_false"],
+        },
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console", "mail_admins"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+    "root": {"handlers": ["console"], "level": "WARNING"},
+}
 IS_TEST = "test" in sys.argv
 # A test run must not depend on the live Redis/MySQL/ClamAV named in whatever .env happens to
 # be present. Set TEST_LIVE_SERVICES=true (CI does) to exercise the real services instead.
