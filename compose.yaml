@@ -25,8 +25,8 @@ services:
     command: ["python", "manage.py", "migrate", "--noinput"]
     env_file: [.env]
     environment:
-      MYSQL_HOST: db
-      MYSQL_PORT: "3306"
+      MYSQL_HOST: ${MYSQL_HOST:-db}
+      MYSQL_PORT: "${MYSQL_PORT:-3306}"
       REDIS_URL: redis://cache:6379/0
       MALWARE_SCAN_MODE: clamav
       CLAMAV_HOST: clamav
@@ -35,6 +35,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       cache:
         condition: service_started
     restart: "no"
@@ -44,8 +45,8 @@ services:
     image: tscm:local
     # entrypoint.sh is the CMD; RUN_MIGRATIONS=0 because the migrate service already ran.
     environment:
-      MYSQL_HOST: db
-      MYSQL_PORT: "3306"
+      MYSQL_HOST: ${MYSQL_HOST:-db}
+      MYSQL_PORT: "${MYSQL_PORT:-3306}"
       REDIS_URL: redis://cache:6379/0
       TRUST_PROXY_SSL_HEADER: "true"
       MALWARE_SCAN_MODE: clamav
@@ -118,8 +119,8 @@ services:
     command: ["sh", "-c", "while true; do python manage.py compliance_reminders || true; python manage.py generate_recurring_posts || true; python manage.py report_missing_punches || true; python manage.py reconcile_signatures || true; python manage.py onboarding_reminders || true; python manage.py close_stale_moves || true; python manage.py capture_reports || true; python manage.py process_notifications || true; sleep ${WORKER_INTERVAL_SECONDS:-60}; done"]
     env_file: [.env]
     environment:
-      MYSQL_HOST: db
-      MYSQL_PORT: "3306"
+      MYSQL_HOST: ${MYSQL_HOST:-db}
+      MYSQL_PORT: "${MYSQL_PORT:-3306}"
       REDIS_URL: redis://cache:6379/0
       MALWARE_SCAN_MODE: clamav
       CLAMAV_HOST: clamav
@@ -164,7 +165,12 @@ services:
     # and uploads fail closed with "Malware scanner is unavailable".
     mem_limit: 3g
     logging: *default-logging
+  # The bundled MySQL server. It is in the local-db profile so an installation on a managed database
+  # can leave it off: drop local-db from COMPOSE_PROFILES in .env and point MYSQL_HOST/MYSQL_PORT at
+  # the external server. Dependents use required: false, so they start without it.
   db:
+    # Also in backups: the backup services dump and stream this server, never an external one.
+    profiles: ["local-db", "backups"]
     image: mysql:8.4
     # Django migrations install deterministic tenant-integrity and audit triggers.
     # MySQL otherwise rejects CREATE TRIGGER for the application migration user
@@ -343,6 +349,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       docuseal-cache:
         condition: service_started
     restart: unless-stopped
