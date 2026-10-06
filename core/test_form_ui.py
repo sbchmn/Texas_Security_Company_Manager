@@ -312,9 +312,10 @@ class WorkflowFormUITest(TestCase):
             "client_id": self.client_record.pk, "site_id": self.site.pk, "checkpoint_id": self.checkpoint.pk,
             "credential_id": self.credential.pk, "type_id": self.credential_type.pk,
             "record_id": self.training.pk, "template_id": self.template.pk,
+            "membership_id": Membership.objects.get(organization=self.org, user=self.user).pk,
         }
         names = (
-            "person_edit", "person_access_invite", "person_availability", "person_credential_create",
+            "person_edit", "person_access_invite", "person_access_link", "membership_access", "person_availability", "person_credential_create",
             "person_training_create", "person_document_upload", "person_pin_issue",
             "shift_edit", "shift_requests", "shift_hours", "offer_post", "branch_edit",
             "client_edit", "site_edit", "checkpoint_create", "checkpoint_edit",

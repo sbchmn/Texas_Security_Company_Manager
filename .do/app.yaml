@@ -1,6 +1,10 @@
 name: texas-security-company-manager
 services:
   - name: web
+    github:
+      repo: sbchmn/Texas_Security_Company_Manager
+      branch: main
+      deploy_on_push: true
     dockerfile_path: Dockerfile
     source_dir: /
     http_port: 8000
@@ -76,6 +80,13 @@ services:
         type: SECRET
       - key: MAILJET_SECRET_KEY
         type: SECRET
+      # Text messages. Leave unset to send email only.
+      - key: TWILIO_ACCOUNT_SID
+        type: SECRET
+      - key: TWILIO_AUTH_TOKEN
+        type: SECRET
+      - key: TWILIO_FROM_NUMBER
+        value: ""
       # Flip to "1" for the first deploy to create the initial organization and owner from
       # the BOOTSTRAP_* settings below, then set it back to "0".
       - key: RUN_BOOTSTRAP
@@ -89,20 +100,27 @@ services:
       - key: BOOTSTRAP_SLUG
         value: lone-star-security
 databases:
-  # production: true is the managed tier with daily backups and a restore path; the dev
-  # tier keeps no backups and cannot meet the documented recovery objectives.
+  # Both entries attach clusters you create first under Databases in the control panel: App
+  # Platform only provisions dev databases itself, and those are PostgreSQL. cluster_name is the
+  # cluster's name exactly as the control panel shows it. Attaching adds the app as a trusted source.
   - name: tscm-db
     engine: MYSQL
     production: true
-    # App Platform names the generated database/credentials after the component.
+    cluster_name: replace-with-your-mysql-cluster-name
+    # Create this database and user on the cluster (Users & Databases tab) before deploying.
     db_name: tscm
     db_user: tscm
   - name: tscm-cache
-    engine: REDIS
+    engine: VALKEY
     production: true
+    cluster_name: replace-with-your-valkey-cluster-name
 
 workers:
   - name: notifications
+    github:
+      repo: sbchmn/Texas_Security_Company_Manager
+      branch: main
+      deploy_on_push: true
     dockerfile_path: Dockerfile
     source_dir: /
     # Same passes as the compose worker, so a platform deploy chases the same obligations. Each is
@@ -152,5 +170,17 @@ workers:
         type: SECRET
       - key: DEFAULT_FROM_EMAIL
         value: alerts@example.com
+      # This worker's process_notifications pass is what actually sends queued email and texts,
+      # so it needs the same provider credentials as the web service.
       - key: POSTMARK_SERVER_TOKEN
         type: SECRET
+      - key: MAILJET_API_KEY
+        type: SECRET
+      - key: MAILJET_SECRET_KEY
+        type: SECRET
+      - key: TWILIO_ACCOUNT_SID
+        type: SECRET
+      - key: TWILIO_AUTH_TOKEN
+        type: SECRET
+      - key: TWILIO_FROM_NUMBER
+        value: ""

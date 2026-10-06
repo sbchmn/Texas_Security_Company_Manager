@@ -1540,6 +1540,238 @@ class SignInProvisioningTest(TestCase):
         self.assertFalse(MembershipInvitation.objects.exists())
 
 
+class TeamAccessChangeTest(TestCase):
+    """Roles move only on Team access; invitations and record links never change one."""
+
+    def setUp(self):
+        User=get_user_model()
+        self.org=Organization.objects.create(legal_name="Access LLC",display_name="Access",slug="access")
+        self.owner=User.objects.create_user(username="owner@access.test",email="owner@access.test",first_name="Olive",last_name="Owner")
+        self.admin=User.objects.create_user(username="admin@access.test",email="admin@access.test")
+        self.hr=User.objects.create_user(username="hr@access.test",email="hr@access.test")
+        self.guard=User.objects.create_user(username="guard@access.test",email="guard@access.test")
+        self.owner_m=Membership.objects.create(user=self.owner,organization=self.org,role=Membership.Role.OWNER)
+        self.admin_m=Membership.objects.create(user=self.admin,organization=self.org,role=Membership.Role.ADMIN)
+        self.hr_m=Membership.objects.create(user=self.hr,organization=self.org,role=Membership.Role.HR)
+        self.guard_m=Membership.objects.create(user=self.guard,organization=self.org,role=Membership.Role.SUPERVISOR)
+        self.person=Person.objects.create(organization=self.org,first_name="Olive",last_name="Owner",email="owner@access.test",status=Person.Status.ACTIVE)
+
+    def change(self,actor,membership,role,active=True):
+        self.client.force_login(actor)
+        data={"role":role}
+        if active: data["active"]="on"
+        return self.client.post(reverse("membership_access",args=[membership.pk]),data)
+
+    def test_profile_invitation_accepted_by_an_owner_keeps_owner(self):
+        from .models import MembershipInvitation
+        self.client.force_login(self.hr)
+        self.client.post(reverse("person_access_invite",args=[self.person.pk]),{"role":Membership.Role.OFFICER})
+        invitation=MembershipInvitation.objects.get(person=self.person)
+        # The token is only in the queued email body.
+        from .models import Notification
+        import re
+        url=re.search(r"(https?://testserver/invitations/[^ ]+)",Notification.objects.get(destination="owner@access.test").body).group(1)
+        self.client.force_login(self.owner)
+        self.assertRedirects(self.client.post(url),reverse("dashboard"),fetch_redirect_response=False)
+        self.owner_m.refresh_from_db(); self.person.refresh_from_db()
+        self.assertEqual(self.owner_m.role,Membership.Role.OWNER)
+        self.assertEqual(self.person.user_id,self.owner.pk)
+        event=AuditEvent.objects.get(action="membership.invitation_accepted")
+        self.assertTrue(event.metadata["role_kept"]); self.assertEqual(event.metadata["invited_role"],Membership.Role.OFFICER)
+
+    def test_link_existing_member_sets_the_record_without_touching_the_role(self):
+        self.client.force_login(self.owner)
+        response=self.client.post(reverse("person_access_link",args=[self.person.pk]),{"member":self.owner_m.pk})
+        self.assertRedirects(response,reverse("person_detail",args=[self.person.pk]),fetch_redirect_response=False)
+        self.person.refresh_from_db(); self.owner_m.refresh_from_db()
+        self.assertEqual(self.person.user_id,self.owner.pk)
+        self.assertEqual(self.owner_m.role,Membership.Role.OWNER)
+        self.assertTrue(AuditEvent.objects.filter(action="person.signin_linked",target_id=str(self.person.pk)).exists())
+
+    def test_hr_cannot_link_a_record_to_an_owner_or_admin(self):
+        self.client.force_login(self.hr)
+        page=self.client.get(reverse("person_access_link",args=[self.person.pk]))
+        offered=set(page.context["form"].fields["member"].queryset)
+        self.assertNotIn(self.owner_m,offered); self.assertNotIn(self.admin_m,offered); self.assertIn(self.guard_m,offered)
+        response=self.client.post(reverse("person_access_link",args=[self.person.pk]),{"member":self.owner_m.pk})
+        self.assertEqual(response.status_code,200)
+        self.person.refresh_from_db(); self.assertIsNone(self.person.user_id)
+
+    def test_already_linked_members_are_not_offered(self):
+        Person.objects.create(organization=self.org,first_name="G",last_name="Uard",status=Person.Status.ACTIVE,user=self.guard)
+        self.client.force_login(self.owner)
+        page=self.client.get(reverse("person_access_link",args=[self.person.pk]))
+        self.assertNotIn(self.guard_m,set(page.context["form"].fields["member"].queryset))
+
+    def test_promote_and_demote_a_supervisor_clears_unused_authority(self):
+        from .models import Branch, AuthorityScope
+        branch=Branch.objects.create(organization=self.org,name="North")
+        AuthorityScope.objects.create(organization=self.org,membership=self.guard_m,branch=branch)
+        self.assertRedirects(self.change(self.admin,self.guard_m,Membership.Role.HR),reverse("team"),fetch_redirect_response=False)
+        self.guard_m.refresh_from_db()
+        self.assertEqual(self.guard_m.role,Membership.Role.HR)
+        self.assertFalse(AuthorityScope.objects.filter(membership=self.guard_m).exists())
+        event=AuditEvent.objects.get(action="membership.access_changed")
+        self.assertEqual(event.metadata["before"]["role"],Membership.Role.SUPERVISOR)
+        self.assertEqual(event.metadata["scopes_removed"],["North branch"])
+        self.change(self.admin,self.guard_m,Membership.Role.OFFICER)
+        self.guard_m.refresh_from_db(); self.assertEqual(self.guard_m.role,Membership.Role.OFFICER)
+
+    def test_deactivate_and_reactivate_a_member(self):
+        self.change(self.owner,self.guard_m,Membership.Role.SUPERVISOR,active=False)
+        self.guard_m.refresh_from_db(); self.assertFalse(self.guard_m.active)
+        self.client.force_login(self.guard)
+        self.assertEqual(self.client.get(reverse("clock")).status_code,403)
+        self.change(self.owner,self.guard_m,Membership.Role.SUPERVISOR,active=True)
+        self.guard_m.refresh_from_db(); self.assertTrue(self.guard_m.active)
+
+    def test_admin_cannot_grant_owner_or_change_an_owner(self):
+        response=self.change(self.admin,self.guard_m,Membership.Role.OWNER)
+        self.assertEqual(response.status_code,200); self.assertIn("role",response.context["form"].errors)
+        self.assertRedirects(self.change(self.admin,self.owner_m,Membership.Role.OFFICER),reverse("team"),fetch_redirect_response=False)
+        self.owner_m.refresh_from_db(); self.assertEqual(self.owner_m.role,Membership.Role.OWNER)
+
+    def test_the_last_owner_cannot_be_demoted_or_deactivated(self):
+        response=self.change(self.owner,self.owner_m,Membership.Role.ADMIN)
+        self.assertEqual(response.status_code,200); self.assertIn("role",response.context["form"].errors)
+        self.owner_m.refresh_from_db(); self.assertEqual(self.owner_m.role,Membership.Role.OWNER)
+        self.change(self.owner,self.admin_m,Membership.Role.OWNER)
+        self.assertRedirects(self.change(self.owner,self.owner_m,Membership.Role.ADMIN),reverse("team"),fetch_redirect_response=False)
+        self.owner_m.refresh_from_db(); self.assertEqual(self.owner_m.role,Membership.Role.ADMIN)
+
+    def test_nobody_deactivates_themselves(self):
+        response=self.change(self.admin,self.admin_m,Membership.Role.ADMIN,active=False)
+        self.assertEqual(response.status_code,200); self.assertIn("active",response.context["form"].errors)
+        self.admin_m.refresh_from_db(); self.assertTrue(self.admin_m.active)
+
+    def test_hr_cannot_open_team_access_changes(self):
+        self.assertEqual(self.change(self.hr,self.guard_m,Membership.Role.OFFICER).status_code,403)
+
+
+class CatalogRemovalTest(TestCase):
+    """Record types and personnel fields delete only when nothing uses them; duties always delete."""
+
+    def setUp(self):
+        import tempfile
+        from django.test import override_settings
+        from .models import CustomFieldDefinition, OnboardingItem, PersonCustomValue, PersonDocument, RuleRevision
+        from .services import record_rule_revision
+        self.CustomFieldDefinition,self.OnboardingItem,self.PersonCustomValue,self.PersonDocument,self.RuleRevision=CustomFieldDefinition,OnboardingItem,PersonCustomValue,PersonDocument,RuleRevision
+        User=get_user_model()
+        self.org=Organization.objects.create(legal_name="Catalog LLC",display_name="Catalog",slug="catalog")
+        self.other=Organization.objects.create(legal_name="Other LLC",display_name="Other",slug="other-catalog")
+        self.owner=User.objects.create_user(username="owner@catalog.test",email="owner@catalog.test")
+        self.hr=User.objects.create_user(username="hr@catalog.test",email="hr@catalog.test")
+        Membership.objects.create(user=self.owner,organization=self.org,role=Membership.Role.OWNER)
+        Membership.objects.create(user=self.hr,organization=self.org,role=Membership.Role.HR)
+        self.person=Person.objects.create(organization=self.org,first_name="Ray",last_name="Ortiz",status=Person.Status.ACTIVE)
+        self.unused_type=DocumentType.objects.create(organization=self.org,name="Spare form",code="spare")
+        self.filed_type=DocumentType.objects.create(organization=self.org,name="Background check",code="bg")
+        self.field=CustomFieldDefinition.objects.create(organization=self.org,name="Locker",key="locker",kind="text")
+        self.flag=CustomFieldDefinition.objects.create(organization=self.org,name="Has vehicle",key="vehicle",kind="boolean")
+        self.duty=ComplianceRule.objects.create(organization=self.org,name="Posted licence",code="posting",
+            evidence=ComplianceRule.Evidence.DOCUMENT,applies_to_subject=ComplianceRule.Subject.ORGANIZATION)
+        record_rule_revision(self.duty,RuleRevision.Kind.COMPLIANCE_RULE,self.owner)
+        media=tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        override=override_settings(MEDIA_ROOT=media.name); override.enable()
+        self.addCleanup(override.disable); self.addCleanup(media.cleanup)
+
+    def file_under(self,document_type):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return self.PersonDocument.objects.create(organization=self.org,person=self.person,document_type=document_type,
+            file=SimpleUploadedFile("bg.pdf",b"%PDF-1.4\nx",content_type="application/pdf"),original_name="bg.pdf",
+            content_type="application/pdf",size=10,sha256="0"*64,scan_status=self.PersonDocument.ScanStatus.CLEAN)
+
+    def test_an_unused_record_type_is_deleted(self):
+        self.client.force_login(self.hr)
+        self.assertRedirects(self.client.post(reverse("document_type_remove",args=[self.unused_type.pk])),reverse("settings_compliance"))
+        self.assertFalse(DocumentType.objects.filter(pk=self.unused_type.pk).exists())
+        self.assertTrue(AuditEvent.objects.filter(action="document_type.deleted",target_id=str(self.unused_type.pk)).exists())
+
+    def test_a_record_type_with_files_is_retired_not_deleted(self):
+        self.file_under(self.filed_type)
+        self.client.force_login(self.hr)
+        self.client.post(reverse("document_type_remove",args=[self.filed_type.pk]))
+        self.filed_type.refresh_from_db(); self.assertFalse(self.filed_type.active)
+        # A second press on a retired, still-used type changes nothing and deletes nothing.
+        self.client.post(reverse("document_type_remove",args=[self.filed_type.pk]))
+        self.assertTrue(DocumentType.objects.filter(pk=self.filed_type.pk).exists())
+
+    def test_a_record_type_a_duty_or_onboarding_step_names_is_kept(self):
+        self.duty.document_type=self.unused_type; self.duty.save()
+        self.client.force_login(self.owner)
+        self.client.post(reverse("document_type_remove",args=[self.unused_type.pk]))
+        self.duty.refresh_from_db(); self.assertEqual(self.duty.document_type_id,self.unused_type.pk)
+        self.unused_type.refresh_from_db(); self.assertFalse(self.unused_type.active)
+        spare=DocumentType.objects.create(organization=self.org,name="Handbook",code="handbook")
+        self.OnboardingItem.objects.create(organization=self.org,name="Read handbook",code="handbook",document_type=spare)
+        self.client.post(reverse("document_type_remove",args=[spare.pk]))
+        self.assertTrue(DocumentType.objects.filter(pk=spare.pk).exists())
+
+    def test_a_field_with_only_blank_answers_is_deleted(self):
+        self.PersonCustomValue.objects.create(organization=self.org,person=self.person,definition=self.field,value=None)
+        self.PersonCustomValue.objects.create(organization=self.org,person=self.person,definition=self.flag,value=False)
+        self.client.force_login(self.hr)
+        self.client.post(reverse("custom_field_remove",args=[self.field.pk]))
+        self.client.post(reverse("custom_field_remove",args=[self.flag.pk]))
+        self.assertFalse(self.CustomFieldDefinition.objects.filter(pk__in=[self.field.pk,self.flag.pk]).exists())
+        self.assertFalse(self.PersonCustomValue.objects.filter(person=self.person).exists())
+
+    def test_a_filled_field_is_retired_and_keeps_its_answers(self):
+        self.PersonCustomValue.objects.create(organization=self.org,person=self.person,definition=self.field,value="B-12")
+        self.client.force_login(self.hr)
+        self.client.post(reverse("custom_field_remove",args=[self.field.pk]))
+        self.field.refresh_from_db(); self.assertFalse(self.field.active)
+        self.assertEqual(self.PersonCustomValue.objects.get(definition=self.field).value,"B-12")
+
+    def test_an_owner_deletes_a_duty_and_its_history_survives(self):
+        self.client.force_login(self.owner)
+        self.assertRedirects(self.client.post(reverse("compliance_rule_remove",args=[self.duty.pk])),reverse("settings_compliance"))
+        self.assertFalse(ComplianceRule.objects.filter(pk=self.duty.pk).exists())
+        self.assertTrue(self.RuleRevision.objects.filter(kind=self.RuleRevision.Kind.COMPLIANCE_RULE,rule_id=str(self.duty.pk)).exists())
+        self.assertTrue(AuditEvent.objects.filter(action="compliance_rule.deleted",target_id=str(self.duty.pk)).exists())
+
+    def test_hr_cannot_delete_a_duty(self):
+        self.client.force_login(self.hr)
+        self.assertEqual(self.client.post(reverse("compliance_rule_remove",args=[self.duty.pk])).status_code,403)
+        self.assertTrue(ComplianceRule.objects.filter(pk=self.duty.pk).exists())
+
+    def test_removal_is_post_only_and_tenant_bound(self):
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.get(reverse("document_type_remove",args=[self.unused_type.pk])).status_code,405)
+        foreign=DocumentType.objects.create(organization=self.other,name="Foreign",code="foreign")
+        self.assertEqual(self.client.post(reverse("document_type_remove",args=[foreign.pk])).status_code,404)
+        self.assertTrue(DocumentType.objects.filter(pk=foreign.pk).exists())
+
+    def test_settings_page_offers_delete_or_retire_by_usage(self):
+        self.file_under(self.filed_type)
+        self.PersonCustomValue.objects.create(organization=self.org,person=self.person,definition=self.field,value="B-12")
+        self.client.force_login(self.owner)
+        page=self.client.get(reverse("settings_compliance"))
+        self.assertContains(page,reverse("document_type_remove",args=[self.unused_type.pk]))
+        self.assertContains(page,reverse("compliance_rule_remove",args=[self.duty.pk]))
+        self.assertContains(page,"1 filled")
+        self.assertContains(page,'">Retire</button>',count=2)
+
+    def test_catalog_usage_filters_leave_the_control_matrix_alone(self):
+        self.file_under(self.filed_type)
+        self.PersonCustomValue.objects.create(organization=self.org,person=self.person,definition=self.field,value="B-12")
+        self.client.force_login(self.owner)
+        for usage, types, fields in (
+            ("unused", {self.unused_type.pk}, {self.flag.pk}),
+            ("used", {self.filed_type.pk}, {self.field.pk}),
+            ("all", {self.unused_type.pk,self.filed_type.pk}, {self.field.pk,self.flag.pk}),
+        ):
+            with self.subTest(usage=usage):
+                page=self.client.get(reverse("settings_compliance"),{"usage":usage})
+                self.assertEqual({item.pk for item in page.context["document_types"]},types)
+                self.assertEqual({item.pk for item in page.context["field_definitions"]},fields)
+                self.assertContains(page,self.duty.name)
+        page=self.client.get(reverse("settings_compliance"),{"usage":"invalid"})
+        self.assertEqual(page.context["usage"],"all")
+        self.assertContains(page,"Choose a supported catalog usage filter.")
+
+
 class CredentialRenewalTest(TestCase):
     """A renewed licence updates the record it renews instead of duplicating it."""
 

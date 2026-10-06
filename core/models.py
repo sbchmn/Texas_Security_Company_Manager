@@ -79,6 +79,7 @@ class Organization(models.Model):
     support_email = models.EmailField(blank=True)
     support_phone = models.CharField(max_length=30, blank=True)
     timezone = models.CharField(max_length=64, default="America/Chicago")
+    default_post_orders = models.TextField(blank=True, help_text="Company-wide orders used when the client, site and post have no override.")
     email_provider = models.CharField(max_length=20, choices=EmailProvider.choices, default=EmailProvider.MAILJET)
     email_from = models.EmailField(blank=True)
     sms_provider = models.CharField(max_length=20, choices=SmsProvider.choices, default=SmsProvider.SNS)
@@ -143,6 +144,11 @@ class Membership(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["organization", "user"], name="one_membership_per_org")]
+
+    def __str__(self):
+        name = self.user.get_full_name() or self.user.email or self.user.username
+        email = f" · {self.user.email}" if self.user.email and self.user.email != name else ""
+        return f"{name}{email} · {self.get_role_display()}"
 
 class AuthorityScope(models.Model):
     """One bounded grant of manager authority: a branch, a contract, or a single post.
@@ -417,12 +423,48 @@ class PayCode(models.Model):
             if clash.exists():
                 raise ValidationError("This organization already uses that code.")
 
-class Client(models.Model):
+class PostOrdersMixin:
+    post_orders_field: str
+    post_orders_level: str
+
+    @property
+    def post_orders_parent(self) -> "Organization | Client | Site":
+        raise NotImplementedError
+
+    @property
+    def post_orders_resolution(self) -> tuple[str, str]:
+        own = getattr(self, self.post_orders_field)
+        if own.strip():
+            return own, self.post_orders_level
+        parent = self.post_orders_parent
+        if isinstance(parent, Organization):
+            text = parent.default_post_orders
+            return (text, "company") if text.strip() else ("", "")
+        return parent.post_orders_resolution
+
+    @property
+    def effective_post_orders(self) -> str:
+        return self.post_orders_resolution[0]
+
+    @property
+    def post_orders_source(self) -> str:
+        return self.post_orders_resolution[1]
+
+
+class Client(PostOrdersMixin, models.Model):
+    post_orders_field = "default_post_orders"
+    post_orders_level = "client"
+
+    @property
+    def post_orders_parent(self):
+        return self.organization
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="clients")
     name = models.CharField(max_length=160)
     contact_name = models.CharField(max_length=160, blank=True)
     contact_email = models.EmailField(blank=True)
+    default_post_orders = models.TextField(blank=True, help_text="Leave unchanged or empty to use company orders. Edited text overrides them for this client.")
     required_credentials = models.ManyToManyField("core.CredentialType", blank=True, related_name="required_by_clients")
     default_pay_rate = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
     default_bill_rate = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
@@ -434,13 +476,21 @@ class Client(models.Model):
         constraints = [models.UniqueConstraint(fields=["organization", "name"], name="unique_client_name_in_org")]
     def __str__(self): return self.name
 
-class Site(models.Model):
+class Site(PostOrdersMixin, models.Model):
+    post_orders_field = "default_post_orders"
+    post_orders_level = "site"
+
+    @property
+    def post_orders_parent(self):
+        return self.client
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="sites")
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="sites")
     branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True, related_name="sites")
     name = models.CharField(max_length=160)
     address = models.CharField(max_length=255)
+    default_post_orders = models.TextField(blank=True, help_text="Leave unchanged or empty to inherit client or company orders. Edited text overrides them for this site.")
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     geofence_radius_meters = models.PositiveIntegerField(default=200)
@@ -1556,7 +1606,14 @@ class ImportBatch(models.Model):
         ordering=["-created_at"]
         constraints=[models.UniqueConstraint(fields=["organization","entity","source_hash"],name="unique_import_source_in_org")]
 
-class Shift(models.Model):
+class Shift(PostOrdersMixin, models.Model):
+    post_orders_field = "post_orders"
+    post_orders_level = "post"
+
+    @property
+    def post_orders_parent(self):
+        return self.site
+
     class Status(models.TextChoices):
         DRAFT = "draft", "Draft"
         PUBLISHED = "published", "Published"
@@ -1661,7 +1718,14 @@ class ShiftClaim(models.Model):
         if self.officer_id and self.officer.organization_id != self.organization_id:
             raise ValidationError("Officer must belong to the same organization.")
 
-class ShiftTemplate(models.Model):
+class ShiftTemplate(PostOrdersMixin, models.Model):
+    post_orders_field = "post_orders"
+    post_orders_level = "series"
+
+    @property
+    def post_orders_parent(self):
+        return self.site
+
     """A repeating tour that produces dated posts, so a contract is staffed once, not every week.
 
     ``docs/discovery-decisions.md`` puts recurring templates in the first release, and every peer

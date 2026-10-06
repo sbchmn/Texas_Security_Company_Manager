@@ -69,7 +69,7 @@
         <tbody>{% for shift in items %}<tr>
           <td><strong>{{ shift.starts_at|date:'g:i A' }}</strong><small>to {{ shift.ends_at|date:'g:i A' }}{% if shift.ends_at|date:'Ymd' != shift.starts_at|date:'Ymd' %} next day{% endif %}</small></td>
           <td>{{ shift.site.client.name }}<small>{{ shift.site.name }}</small></td>
-          <td>{{ shift.post_name|default:'General post' }}{% if shift.template %}<small>From {{ shift.template.name }}</small>{% endif %}{% if shift.post_orders %}<small>Post orders recorded</small>{% endif %}</td>
+          <td>{{ shift.post_name|default:'General post' }}{% if shift.template %}<small>From {{ shift.template.name }}</small>{% endif %}{% if shift.effective_post_orders %}<small>Post orders from {{ shift.post_orders_source }}</small>{% endif %}</td>
           <td>{% if shift.officer %}{{ shift.officer.full_name }}{% if shift.leave_conflict %}<span class="pill expired">On approved leave</span>{% endif %}{% else %}<span class="pill pending">Unfilled</span>{% if shift.status == 'published' %}<a href="{% url 'shift_requests' shift.pk %}">{{ shift.claims.all|length }} request{{ shift.claims.all|length|pluralize }}</a>{% endif %}{% endif %}</td>
           <td><div class="tags">{% for credential, origin in shift.requirements %}<span>{{ credential.name }}{% if origin != 'post' %} &middot; {{ origin }}{% endif %}</span>{% empty %}<span>None</span>{% endfor %}</div></td>
           <td>

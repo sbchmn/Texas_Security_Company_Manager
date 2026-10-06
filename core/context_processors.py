@@ -27,7 +27,7 @@ WORKSPACES = (
         "text_alerts", "notifications", "notification_read", "my_account", "my_contact_edit"
     )),
     ("People", "workspace_people", "MANAGERS", (
-        "workspace_people", "people", "person_detail", "person_edit", "person_create", "person_access_invite",
+        "workspace_people", "people", "person_detail", "person_edit", "person_create", "person_access_invite", "person_access_link",
         "person_availability", "availability_remove", "person_credential_create", "person_training_create",
         "person_document_upload", "document_acknowledge", "availability", "signing_queue"
     )),
@@ -63,13 +63,14 @@ QUICK_LINKS = (
 # It appears in the sidebar footer and includes all configuration screens.
 SETTINGS_NAVIGATION = (
     ("Company setup", "settings", "SETTINGS_VIEWERS", (
-        "settings", "locations", "client_create", "client_edit", "site_create", "site_edit", "checkpoint_create",
+        "settings", "company_post_orders", "locations", "client_create", "client_edit", "site_create", "site_edit", "checkpoint_create",
         "checkpoint_edit", "branches", "branch_create", "branch_edit", "clock_kiosks", "clock_kiosk_close",
         "clock_kiosk_clear", "person_pin_issue"
     )),
     ("Compliance & onboarding", "settings_compliance", "RECORD_WRITERS", (
         "settings_compliance", "onboarding_settings", "onboarding_item_create", "onboarding_item_edit",
-        "credential_type_create", "credential_type_edit", "document_type_create", "document_type_edit"
+        "credential_type_create", "credential_type_edit", "document_type_create", "document_type_edit",
+        "document_type_remove", "custom_field_remove", "compliance_rule_remove"
     )),
     ("Pay codes", "pay_codes", "MANAGERS", (
         "pay_codes", "pay_code_create", "pay_code_edit", "pay_code_remove"
@@ -84,7 +85,7 @@ SETTINGS_NAVIGATION = (
         "imports", "import_apply", "import_template", "import_errors"
     )),
     ("Team & access", "team", "PRIVILEGED", (
-        "team", "invitation_accept", "authority", "authority_revoke"
+        "team", "invitation_accept", "authority", "authority_revoke", "membership_access"
     )),
 )
 
@@ -92,8 +93,8 @@ SETTINGS_NAVIGATION = (
 NAVIGATION = (
     ("Company", (
         ("Overview", "dashboard", None, ("dashboard",)),
-        ("People", "people", "MANAGERS", ("people", "person_detail", "person_edit", "person_create", "person_access_invite", "person_availability", "availability_remove")),
-        ("Team access", "team", "PRIVILEGED", ("team", "invitation_accept", "authority", "authority_revoke")),
+        ("People", "people", "MANAGERS", ("people", "person_detail", "person_edit", "person_create", "person_access_invite", "person_access_link", "person_availability", "availability_remove")),
+        ("Team access", "team", "PRIVILEGED", ("team", "invitation_accept", "authority", "authority_revoke", "membership_access")),
     )),
     ("Operations", (
         ("Clients & sites", "locations", "MANAGERS", ("locations", "client_create", "client_edit", "site_create", "site_edit", "checkpoint_create", "checkpoint_edit")),
@@ -133,7 +134,7 @@ NAVIGATION = (
         ("Bulk imports", "imports", "RECORD_WRITERS", ("imports", "import_apply", "import_template", "import_errors")),
         ("Messaging delivery", "messaging_settings", "PRIVILEGED", ("messaging_settings", "messaging_rotate_token")),
         ("Document signing", "signing_settings", "PRIVILEGED", ("signing_settings",)),
-        ("Settings", "settings", "SETTINGS_VIEWERS", ("settings", "settings_compliance", "onboarding_settings", "onboarding_item_create", "onboarding_item_edit", "branding", "brand_rollback", "domains", "domain_verify", "security_settings", "time_policy", "credential_type_create", "credential_type_edit", "document_type_create", "document_type_edit", "custom_field_create", "custom_field_edit")),
+        ("Settings", "settings", "SETTINGS_VIEWERS", ("settings", "settings_compliance", "onboarding_settings", "onboarding_item_create", "onboarding_item_edit", "branding", "brand_rollback", "domains", "domain_verify", "security_settings", "time_policy", "credential_type_create", "credential_type_edit", "document_type_create", "document_type_edit", "document_type_remove", "custom_field_create", "custom_field_edit", "custom_field_remove", "compliance_rule_remove")),
     )),
 )
 

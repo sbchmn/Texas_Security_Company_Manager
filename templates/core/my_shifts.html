@@ -38,7 +38,7 @@
         <details class="shift-card-brief"><summary>Read shift brief</summary>
           <p><strong>{{ shift.get_status_display }}</strong> · {{ shift.starts_at|date:'D, N j, g:i A T' }}–{{ shift.ends_at|date:'D, N j, g:i A T' }}</p><p><strong>Site address:</strong> {{ shift.site.address|default:'No address recorded — ask dispatch.' }}</p>
           {% if shift.site.client.contact_name or shift.site.client.contact_email %}<p><strong>Client contact for this assigned post:</strong> {{ shift.site.client.contact_name }}{% if shift.site.client.contact_email %}<br>{{ shift.site.client.contact_email }}{% endif %}</p>{% else %}<p class="muted">No client contact recorded — ask dispatch.</p>{% endif %}
-          <h3>Post orders</h3>{% if shift.post_orders %}{{ shift.post_orders|linebreaks }}{% else %}<p class="muted">No post orders recorded — ask dispatch before standing the post.</p>{% endif %}
+          <h3>Post orders</h3>{% if shift.effective_post_orders %}<p class="muted">Orders from the {{ shift.post_orders_source }}.</p>{{ shift.effective_post_orders|linebreaks }}{% else %}<p class="muted">No post orders recorded — ask dispatch before standing the post.</p>{% endif %}
           {% if shift.template %}<p class="muted">Series: {{ shift.template.name }}</p>{% endif %}
         </details>
       </li>

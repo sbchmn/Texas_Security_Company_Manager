@@ -12,7 +12,41 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.body.classList.contains('menu-open')) setMenuOpen(false);
 });
 const search = document.querySelector('[data-table-search]');
+const ordersDefaults = document.getElementById('post-orders-defaults');
+if (ordersDefaults) {
+  const defaults = JSON.parse(ordersDefaults.textContent);
+  const orders = document.querySelector(`[name="${defaults.field}"]`);
+  const inheritance = document.querySelector('[name="post_orders_inheritance"]');
+  const parent = document.querySelector(`[name="${defaults.parent}"]`);
+  let inherited = defaults.choices[parent?.value] || defaults.fallback;
+  let overridden = defaults.own || (orders.value !== inherited.text && orders.value.trim() !== '');
+  const label = document.createElement('p');
+  label.className = 'helptext';
+  label.setAttribute('aria-live', 'polite');
+  orders.after(label);
+  const describe = () => {
+    label.textContent = overridden ? 'Using edited orders at this level.' :
+      inherited.source ? `Using ${inherited.source} defaults.` : 'No inherited orders have been set.';
+  };
+  orders.addEventListener('input', () => {
+    overridden = orders.value.trim() !== '' && orders.value !== inherited.text;
+    describe();
+  });
+  parent?.addEventListener('change', () => {
+    inherited = defaults.choices[parent.value] || defaults.fallback;
+    inheritance.value = inherited.signature;
+    if (!overridden) orders.value = inherited.text;
+    describe();
+  });
+  describe();
+}
 search?.addEventListener('input', () => { const q=search.value.toLowerCase(); document.querySelectorAll('[data-search-row]').forEach(row => row.hidden=!row.textContent.toLowerCase().includes(q)); });
+// Inline onsubmit handlers are blocked by the CSP (script-src 'self'), so destructive forms carry
+// their question in data-confirm instead.
+document.addEventListener('submit', event => {
+  const message = event.target.closest?.('form[data-confirm]')?.dataset.confirm;
+  if (message && !window.confirm(message)) event.preventDefault();
+});
 
 const clock = document.querySelector('[data-clock]');
 if (clock) {

@@ -21,7 +21,7 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from .auth import membership_required
 from .middleware import client_ip
-from .forms import AuditRedactionForm, AuthorityScopeForm, AvailabilityRuleForm, BrandForm, BranchForm, CheckpointForm, ClientForm, ClockKioskForm, ClockPinForm, ComplianceRuleForm, CredentialForm, CredentialTypeForm, CsvImportForm, CustomFieldDefinitionForm, DispositionRequestForm, DocumentAcknowledgmentForm, DocumentTypeForm, DocumentUploadForm, DomainForm, ExchangeAcceptForm, InvitationAcceptanceForm, MembershipInvitationForm, OnboardingItemForm, OrganizationSecurityForm, PayCodeForm, PayrollPeriodForm, PersonAccessForm, PersonForm, PunchAdjustmentForm, ShiftExchangeForm, ShiftForm, ShiftGenerationForm, ShiftSwapForm, ShiftTemplateForm, SiteForm, TextAlertsForm, TimeOffRequestForm, TimePolicyForm, TimePolicyOverrideForm, TrainingRecordForm
+from .forms import AuditRedactionForm, AuthorityScopeForm, AvailabilityRuleForm, BrandForm, BranchForm, CheckpointForm, ClientForm, ClockKioskForm, ClockPinForm, ComplianceRuleForm, CredentialForm, CredentialTypeForm, CsvImportForm, CustomFieldDefinitionForm, DispositionRequestForm, DocumentAcknowledgmentForm, DocumentTypeForm, DocumentUploadForm, DomainForm, ExchangeAcceptForm, InvitationAcceptanceForm, MembershipAccessForm, MembershipInvitationForm, OnboardingItemForm, OrganizationSecurityForm, PayCodeForm, PayrollPeriodForm, PersonAccessForm, PersonForm, PersonLinkForm, PunchAdjustmentForm, ShiftExchangeForm, ShiftForm, ShiftGenerationForm, ShiftSwapForm, ShiftTemplateForm, SiteForm, TextAlertsForm, TimeOffRequestForm, TimePolicyForm, TimePolicyOverrideForm, TrainingRecordForm
 from .models import AuditEvent, AuditRedaction, AuthorityScope, AvailabilityRule, BrandVersion, Checkpoint, Client, ClockKiosk, ComplianceRule, Credential, CredentialRegistryCheck, CredentialType, CustomFieldDefinition, DispositionRequest, DOCUMENT_TYPE_READERS, DocumentAcknowledgment, DocumentType, HoldOver, ImportBatch, Membership, MembershipInvitation, MessageConsent, DeliveryEvent, Notification, OnboardingItem, OnboardingTask, OfflineClockDevice, Organization, OrganizationDomain, PayCategory, PayCode, PayrollRun, Person, PersonCustomValue, PersonDocument, PayrollLockSegment, Punch, PunchAdjustment, record_readable, record_visibility_filter, ReportSnapshot, RuleRevision, Shift, ShiftClaim, ShiftExchange, ShiftHourDesignation, ShiftSwap, ShiftTemplate, Site, TimeOffRequest, TimePolicy, TimePolicyOverride, TrainingRecord
 from .scope import SCOPE_CAPABLE_ROLES, ActorScope, dispatch_recipients_for_shift, scope_for
 from .sms import date_span, moment_label, shift_when
@@ -159,6 +159,7 @@ def _compliance_matrix(org):
             "reminders": rule.reminder_levels, "is_approved": rule.is_approved, "version": rule.revision,
             "warning_days": rule.warning_days, "active": rule.active,
             "edit_url": reverse("compliance_rule_edit", args=[rule.pk]),
+            "remove_url": reverse("compliance_rule_remove", args=[rule.pk]),
         })
     rows.sort(key=lambda row: row["name"].lower())
     return rows
@@ -167,6 +168,7 @@ def _compliance_matrix(org):
 # CMP-1's drafted Texas obligations, imported beside the screen that offers them in the same style the
 # messaging and CLK-1 surfaces use: what these views touch is exactly what they import.
 from .texas_rules import missing_texas_duties, seed_texas_obligations
+from .forms import CompanyPostOrdersForm, InheritedPostOrdersForm
 
 @membership_required(*MANAGERS,Membership.Role.AUDITOR)
 def settings_compliance(request):
@@ -180,10 +182,25 @@ def settings_compliance(request):
     # CMP-1's drafts are offered on the screen an empty matrix currently leaves an owner to fill from
     # memory. Computed against the rows that already exist rather than assumed absent, so a company that
     # entered one of these duties by hand is not invited to create a second, competing definition of it.
+    in_use=_document_types_in_use(org)
+    document_types=list(org.document_types.all())
+    for item in document_types:item.in_use=item.pk in in_use
+    filled=_filled_custom_field_counts(org)
+    field_definitions=list(org.custom_field_definitions.all())
+    for item in field_definitions:item.filled=filled.get(item.pk,0)
+    usage = request.GET.get("usage", "all")
+    if usage not in ("all", "unused", "used"):
+        messages.error(request, "Choose a supported catalog usage filter.")
+        usage = "all"
+    if usage != "all":
+        used = usage == "used"
+        document_types = [item for item in document_types if item.in_use == used]
+        field_definitions = [item for item in field_definitions if bool(item.filled) == used]
     return render(request,"core/settings_compliance.html",{
         "matrix":_compliance_matrix(org),
-        "document_types":org.document_types.all(),
-        "field_definitions":org.custom_field_definitions.all(),
+        "document_types":document_types,
+        "field_definitions":field_definitions,
+        "usage": usage,
         "can_edit":editable,
         "texas_drafts":missing_texas_duties(request.organization),
         # The matrix itself is owner/administrator work: creating a legal obligation is the same
@@ -231,6 +248,7 @@ def settings(request):
         return {"label":label,"description":description,"url":reverse(name),"allowed":allowed}
     sections=[
         {"title":"Company","items":[
+            link("Default post orders","Baseline instructions inherited by clients, sites and posts.","company_post_orders",privileged),
             link("Brand experience","Name, colours, logo, and published versions.","branding",privileged),
             link("Custom domains","Verified hostnames for this company.","domains",privileged),
             link("Authentication security","Roles that must hold a second factor.","security_settings",privileged),
@@ -408,6 +426,70 @@ def authority_revoke(request, scope_id):
     messages.success(request, f"Removed {label} from {target.user}'s authority.")
     return redirect("authority", membership_id=target.pk)
 
+@membership_required(*PRIVILEGED)
+@transaction.atomic
+def membership_access(request, membership_id):
+    """Promote, demote, deactivate, or reactivate one team member.
+
+    Accepting an invitation never changes an existing member's role, so this is the one place a
+    role moves. Only an owner may grant Owner or touch an owner's access, the company always keeps
+    an active owner, and nobody can deactivate their own sign-in from here.
+    """
+    target = request.organization.memberships.select_for_update().select_related("user").filter(pk=membership_id).first()
+    if not target:
+        raise Http404
+    if target.role == Membership.Role.OWNER and request.membership.role != Membership.Role.OWNER:
+        messages.error(request, "Only an owner can change another owner's access.")
+        return redirect("team")
+    form = MembershipAccessForm(request.POST or None, actor_role=request.membership.role,
+                                initial={"role": target.role, "active": target.active})
+    if request.method == "POST" and form.is_valid():
+        role, active = form.cleaned_data["role"], form.cleaned_data["active"]
+        before = {"role": target.role, "active": target.active}
+        if role == target.role and active == target.active:
+            messages.info(request, "Nothing changed.")
+            return redirect("team")
+        if target.user_id == request.user.id and not active:
+            form.add_error("active", "You cannot deactivate your own access. Ask another owner or administrator.")
+        elif (target.role == Membership.Role.OWNER and target.active
+              and (role != Membership.Role.OWNER or not active)
+              and not request.organization.memberships.select_for_update().filter(
+                  role=Membership.Role.OWNER, active=True).exclude(pk=target.pk).exists()):
+            form.add_error("role", "This is the only active owner. Make someone else an owner first.")
+        else:
+            granting = active and (role != target.role or not target.active)
+            permitted, refusal = role_domain_gate(request.organization, target.user.email, role) if granting else (True, "")
+            if not permitted:
+                form.add_error("role", refusal)
+            else:
+                target.role, target.active = role, active
+                target.save(update_fields=["role", "active"])
+                removed = []
+                if role not in SCOPE_CAPABLE_ROLES:
+                    # Bounded authority only means something for a scheduler or supervisor; left behind,
+                    # an old grant would silently return if the person were later promoted again.
+                    removed = [row.label for row in target.authority_scopes.select_related("branch", "client", "site__client")]
+                    target.authority_scopes.all().delete()
+                AuditEvent.objects.create(organization=request.organization, actor=request.user,
+                                          action="membership.access_changed", target_type="membership",
+                                          target_id=str(target.pk),
+                                          metadata={"user": target.user_id, "before": before,
+                                                    "after": {"role": role, "active": active},
+                                                    "scopes_removed": removed})
+                name = target.user.get_full_name() or target.user.email or target.user.username
+                messages.success(request, f"{name}: {target.get_role_display() if active else 'deactivated'}.")
+                if target.user_id == request.user.id and role not in PRIVILEGED:
+                    return redirect("dashboard")
+                return redirect("team")
+    name = target.user.get_full_name() or target.user.email or target.user.username
+    return render(request, "core/form.html", {
+        "form": form, "title": f"Change access · {name}", "eyebrow": "Team access",
+        "note": ("Changes apply on their next page load, including any sign-in verification the new "
+                 "role requires. A deactivated member keeps their history but can no longer use this "
+                 "company. Scheduler and supervisor branch/post limits are cleared when the new role "
+                 "does not use them."),
+        "cancel_url": reverse("team")})
+
 @transaction.atomic
 def invitation_accept(request, token):
     invitation = MembershipInvitation.objects.select_for_update().select_related("organization", "person").filter(token_hash=MembershipInvitation.digest_token(token)).first()
@@ -425,12 +507,18 @@ def invitation_accept(request, token):
             user = User(username=invitation.email, email=invitation.email, first_name=form.cleaned_data["first_name"], last_name=form.cleaned_data["last_name"])
             user.set_password(form.cleaned_data["password"])
             user.save()
+        # An invitation grants access; it never changes the role of someone who already holds an
+        # active one. A personnel-profile invitation offers no Owner/Administrator choice, so
+        # letting it overwrite the role would demote an owner who accepts one — possibly the last.
+        # Role changes belong to Team access.
+        current = Membership.objects.filter(organization=invitation.organization, user=user, active=True).first()
+        granted_role = current.role if current else invitation.role
         # AUTH-3: the company's approved-identity rule is checked here, at the only place a role is
         # ever granted, and before any side effect — an invitation this firm's rule cannot honour must
         # not verify the address, create the membership, or consume the token. Nothing is written, so a
         # person who signed in on the wrong account can sign in on the right one and try again.
-        permitted, refusal = role_domain_gate(invitation.organization, user.email or invitation.email,
-                                              invitation.role)
+        permitted, refusal = (True, "") if current else role_domain_gate(
+            invitation.organization, user.email or invitation.email, invitation.role)
         if not permitted:
             AuditEvent.objects.create(organization=invitation.organization, actor=user,
                                       action="membership.invitation_refused",
@@ -445,9 +533,12 @@ def invitation_accept(request, token):
         # authenticator for the new member, and a role with required MFA could never sign in.
         from allauth.account.models import EmailAddress
         EmailAddress.objects.update_or_create(user=user, email=invitation.email, defaults={"verified": True, "primary": not EmailAddress.objects.filter(user=user, verified=True).exists()})
-        membership, _ = Membership.objects.update_or_create(organization=invitation.organization, user=user, defaults={"role": invitation.role, "active": True})
+        membership, _ = Membership.objects.update_or_create(organization=invitation.organization, user=user, defaults={"role": granted_role, "active": True})
         invitation.accepted_at = timezone.now(); invitation.save(update_fields=["accepted_at"])
-        AuditEvent.objects.create(organization=invitation.organization, actor=user, action="membership.invitation_accepted", target_type="membership", target_id=str(membership.pk), metadata={"role": membership.role})
+        metadata = {"role": membership.role}
+        if current and current.role != invitation.role:
+            metadata.update({"invited_role": invitation.role, "role_kept": True})
+        AuditEvent.objects.create(organization=invitation.organization, actor=user, action="membership.invitation_accepted", target_type="membership", target_id=str(membership.pk), metadata=metadata)
         # A person-bound invitation provisions the personnel link that the officer clock,
         # their document queue, and correction requests all depend on.
         conflict = _link_invited_person(invitation, user)
@@ -527,6 +618,31 @@ def person_access_invite(request, person_id):
     return render(request, "core/form.html", {
         "form": form, "title": "Invite sign-in", "eyebrow": "Personnel access",
         "note": f"The invitation is sent to {person.email} and links that sign-in to {person.full_name}.",
+        "cancel_url": _record_return(person, "profile")})
+
+@membership_required(*RECORD_WRITERS)
+@transaction.atomic
+def person_access_link(request, person_id):
+    """Attach a current team member's sign-in to this personnel record. Their role is untouched."""
+    person = _profile_person(request, person_id)
+    person = Person.objects.select_for_update().get(pk=person.pk)
+    if person.user_id:
+        messages.error(request, "This person already has a sign-in.")
+        return redirect("person_detail", person_id=person.pk)
+    form = PersonLinkForm(request.POST or None, organization=request.organization, actor_role=request.membership.role)
+    if request.method == "POST" and form.is_valid():
+        member = form.cleaned_data["member"]
+        person.user = member.user
+        person.save(update_fields=["user"])
+        AuditEvent.objects.create(organization=request.organization, actor=request.user, action="person.signin_linked",
+                                  target_type="person", target_id=str(person.pk),
+                                  metadata={"membership": str(member.pk), "user": member.user_id, "role": member.role})
+        messages.success(request, f"{person.full_name} is now linked to {member.user.email or member.user.username}.")
+        return redirect("person_detail", person_id=person.pk)
+    return render(request, "core/form.html", {
+        "form": form, "title": "Link existing team member", "eyebrow": "Personnel access",
+        "note": (f"Links {person.full_name}'s record to someone who already signs in, so the time clock and "
+                 "their own records work for them. No email is sent and their role does not change."),
         "cancel_url": _record_return(person, "profile")})
 
 def _search(request, queryset, fields):
@@ -717,6 +833,47 @@ def custom_field_edit(request,field_id):
     if not definition:raise Http404
     return _catalog_edit(request,form_class=CustomFieldDefinitionForm,instance=definition,name="custom_field_definition",action="custom_field.updated",title="Edit personnel field",eyebrow="HCRM configuration",cancel_url=reverse("settings_compliance"),success="Field updated. Changing the type re-interprets stored values on the next save.")
 
+
+def _custom_value_filled(value):
+    # Saving a profile writes a row for every active field, so an untouched field leaves null, "" or
+    # an unticked False behind. Those rows are not information anyone entered.
+    return value not in (None, "", False)
+
+
+def _filled_custom_field_counts(organization):
+    counts = {}
+    for definition_id, value in PersonCustomValue.objects.filter(organization=organization).values_list("definition_id", "value"):
+        if _custom_value_filled(value):
+            counts[definition_id] = counts.get(definition_id, 0) + 1
+    return counts
+
+
+@require_POST
+@membership_required(*RECORD_WRITERS)
+@transaction.atomic
+def custom_field_remove(request, field_id):
+    """Delete a personnel field nobody has filled in; retire one that holds answers."""
+    definition = request.organization.custom_field_definitions.filter(pk=field_id).first()
+    if not definition:
+        raise Http404
+    filled = sum(1 for value in definition.values.values_list("value", flat=True) if _custom_value_filled(value))
+    if filled:
+        if definition.active:
+            definition.active = False
+            definition.save(update_fields=["active"])
+            AuditEvent.objects.create(organization=request.organization, actor=request.user, action="custom_field.retired",
+                target_type="custom_field_definition", target_id=str(definition.pk), metadata={"key": definition.key, "filled": filled})
+            messages.success(request, f"{definition.name} is filled in on {filled} personnel file{'' if filled == 1 else 's'}, so it was retired instead of deleted. Those answers are kept.")
+        else:
+            messages.error(request, f"{definition.name} still holds answers on {filled} personnel file{'' if filled == 1 else 's'} and cannot be deleted.")
+        return redirect("settings_compliance")
+    definition_id, key, name = definition.pk, definition.key, definition.name
+    definition.delete()
+    AuditEvent.objects.create(organization=request.organization, actor=request.user, action="custom_field.deleted",
+        target_type="custom_field_definition", target_id=str(definition_id), metadata={"key": key, "name": name})
+    messages.success(request, f"Deleted the {name} field; no personnel file had a value in it.")
+    return redirect("settings_compliance")
+
 @membership_required(*MANAGERS)
 def branches(request):
     from django.db.models import Count
@@ -813,6 +970,8 @@ def _scope_querysets(form, organization, scope=None):
         if form.instance.pk:
             shifts = shifts.exclude(pk=form.instance.pk)
         form.fields["relief_for"].queryset = shifts
+    if isinstance(form, InheritedPostOrdersForm):
+        form.configure_post_orders(organization)
     return form
 
 def _scoped_form(form_class, organization, *args, scope=None, **kwargs):
@@ -885,12 +1044,22 @@ def locations(request):
 @membership_required(*PRIVILEGED)
 @transaction.atomic
 def client_create(request):
-    form=ClientForm(request.POST or None)
+    form=_scoped_form(ClientForm,request.organization,request.POST or None)
     if request.method=="POST" and form.is_valid():
         item=form.save(commit=False); item.organization=request.organization; item.save()
         AuditEvent.objects.create(organization=request.organization,actor=request.user,action="client.created",target_type="client",target_id=str(item.pk),metadata={"name":item.name})
         messages.success(request,"Client created."); return redirect("locations")
     return render(request,"core/form.html",{"form":form,"title":"Add client","eyebrow":"Locations"})
+
+
+@membership_required(*PRIVILEGED)
+@transaction.atomic
+def company_post_orders(request):
+    return _catalog_edit(
+        request, form_class=CompanyPostOrdersForm, instance=request.organization,
+        name="organization", action="organization.post_orders_updated",
+        title="Company post orders", eyebrow="Company defaults", cancel_url=reverse("settings"),
+        success="Company post orders updated. Posts without an override use these defaults immediately.")
 
 @membership_required(*PRIVILEGED)
 @transaction.atomic
@@ -1171,6 +1340,23 @@ def compliance_rule_edit(request,rule_id):
     if not rule:raise Http404
     return _catalog_edit(request,form_class=ComplianceRuleForm,instance=rule,name="compliance_rule",action="compliance_rule.updated",title="Edit compliance duty",eyebrow="Compliance",cancel_url=reverse("settings_compliance"),approval=True,revision_kind=RuleRevision.Kind.COMPLIANCE_RULE,success="Duty updated. The queue re-reads it on the next view; recorded evidence is never reinterpreted.")
 
+@require_POST
+@membership_required(*PRIVILEGED)
+@transaction.atomic
+def compliance_rule_remove(request, rule_id):
+    """Delete a company duty. Its revision history stays, so earlier reports still resolve."""
+    rule = request.organization.compliance_rules.filter(pk=rule_id).first()
+    if not rule:
+        raise Http404
+    metadata = {"name": rule.name, "code": rule.code, "version": rule.revision, "approved": rule.is_approved,
+                "authority": rule.authority_reference}
+    rule_pk = rule.pk
+    rule.delete()
+    AuditEvent.objects.create(organization=request.organization, actor=request.user, action="compliance_rule.deleted",
+        target_type="compliance_rule", target_id=str(rule_pk), metadata=metadata)
+    messages.success(request, f"Deleted the duty {metadata['name']}. Its version history is kept in rule history.")
+    return redirect("settings_compliance")
+
 @membership_required(*MANAGERS)
 @transaction.atomic
 def credential_edit(request,credential_id):
@@ -1250,7 +1436,7 @@ def schedule(request):
         window = window.filter(status=Shift.Status.PUBLISHED, officer__isnull=True)
     elif show == "draft":
         window = window.filter(status=Shift.Status.DRAFT)
-    shifts = list(window.select_related("site__client__default_pay_code", "officer", "template", "pay_code",
+    shifts = list(window.select_related("site__client__default_pay_code", "organization", "site__client__organization", "officer", "template", "pay_code",
         "site__default_pay_code").prefetch_related("required_credentials", "claims__officer").order_by("starts_at"))
     policies = {}
     for shift in shifts:
@@ -1448,7 +1634,7 @@ def open_posts(request):
     horizon = now + timedelta(days=OPEN_POST_HORIZON_DAYS)
     offers = []
     for shift in org.shifts.filter(status=Shift.Status.PUBLISHED, officer__isnull=True, ends_at__gte=now, starts_at__lt=horizon) \
-            .select_related("site__client").prefetch_related("required_credentials").order_by("starts_at"):
+            .select_related("site__client__organization").prefetch_related("required_credentials").order_by("starts_at"):
         allowed, reasons = shift_eligibility(shift, officer=person)
         offers.append({"shift": shift, "allowed": allowed, "reasons": reasons})
     claimed = set(person.shift_claims.filter(status=ShiftClaim.Status.REQUESTED).values_list("shift_id", flat=True))
@@ -1699,7 +1885,7 @@ def shift_template_generate(request, template_id):
     has to see which dates the series' own gates refuse, and why, before the schedule gains fourteen
     rows they did not ask for. Nothing is written until the second submit.
     """
-    template = request.organization.shift_templates.select_related("site__client", "officer").filter(pk=template_id).first()
+    template = request.organization.shift_templates.select_related("site__client__organization", "officer").filter(pk=template_id).first()
     if not template or not scope_for(request).permits_site(template.site):
         raise Http404
     today = timezone.localdate()
@@ -1884,7 +2070,7 @@ def my_shifts(request):
     upcoming = list(person.shifts.exclude(status=Shift.Status.CANCELLED).filter(
                     organization=request.organization, site__organization=request.organization,
                     site__client__organization=request.organization, ends_at__gt=now)
-                    .select_related("site__client", "template").order_by("starts_at")[:40])
+                    .select_related("site__client__organization", "template").order_by("starts_at")[:40])
     open_rows = {}
     for row in ShiftSwap.objects.filter(organization=request.organization, requester=person, status__in=SWAP_OPEN).select_related("replacement"):
         open_rows.setdefault(row.shift_id, row)
@@ -3383,6 +3569,54 @@ def document_type_edit(request,type_id):
     document_type=request.organization.document_types.filter(pk=type_id).first()
     if not document_type:raise Http404
     return _catalog_edit(request,form_class=DocumentTypeForm,instance=document_type,name="document_type",action="document_type.updated",title="Edit record type",eyebrow="HCRM records",cancel_url=reverse("settings_compliance"),success="Record type updated. Existing files keep the retention date they were filed with.")
+
+
+def _document_type_usage(document_type):
+    """What still points at a record type, by kind. Deleted and archived files count: they are records."""
+    usage = {
+        "file": document_type.documents.count(),
+        "signing request": document_type.signingrequest_set.count(),
+        "onboarding item": document_type.onboarding_items.count(),
+        "compliance duty": document_type.rules_requiring_it.count(),
+    }
+    return {label: count for label, count in usage.items() if count}
+
+
+def _document_types_in_use(organization):
+    used = set(organization.person_documents.values_list("document_type_id", flat=True))
+    used |= set(organization.signing_requests.values_list("document_type_id", flat=True))
+    used |= set(organization.onboarding_items.values_list("document_type_id", flat=True))
+    used |= set(organization.compliance_rules.values_list("document_type_id", flat=True))
+    used.discard(None)
+    return used
+
+
+@require_POST
+@membership_required(*RECORD_WRITERS)
+@transaction.atomic
+def document_type_remove(request, type_id):
+    """Delete an unused record type; retire one that files, signatures or rules still name."""
+    document_type = request.organization.document_types.filter(pk=type_id).first()
+    if not document_type:
+        raise Http404
+    usage = _document_type_usage(document_type)
+    if usage:
+        summary = ", ".join(f"{count} {label}{'' if count == 1 else 's'}" for label, count in usage.items())
+        if document_type.active:
+            document_type.active = False
+            document_type.save(update_fields=["active"])
+            AuditEvent.objects.create(organization=request.organization, actor=request.user, action="document_type.retired",
+                target_type="document_type", target_id=str(document_type.pk), metadata={"code": document_type.code, "in_use": usage})
+            messages.success(request, f"{document_type.name} is still used by {summary}, so it was retired instead of deleted. It is no longer offered for new uploads.")
+        else:
+            messages.error(request, f"{document_type.name} is still used by {summary} and cannot be deleted.")
+        return redirect("settings_compliance")
+    type_pk, code, name = document_type.pk, document_type.code, document_type.name
+    document_type.delete()
+    AuditEvent.objects.create(organization=request.organization, actor=request.user, action="document_type.deleted",
+        target_type="document_type", target_id=str(type_pk), metadata={"code": code, "name": name})
+    messages.success(request, f"Deleted the {name} record type; nothing was filed under it.")
+    return redirect("settings_compliance")
 
 @membership_required(*RECORD_WRITERS)
 @transaction.atomic

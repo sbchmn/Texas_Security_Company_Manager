@@ -7,6 +7,7 @@
   </div>
 {% endif %}
 {% for field in form.hidden_fields %}{{ field }}{% endfor %}
+{% if form.post_orders_defaults %}{{ form.post_orders_defaults|json_script:"post-orders-defaults" }}{% endif %}
 <div class="form-sections">
   {% for section in form.layout_sections %}
     {% if section.title %}<fieldset class="form-section"><legend>{{ section.title }}</legend>{% else %}<div class="form-section">{% endif %}

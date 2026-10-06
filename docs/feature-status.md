@@ -1,5 +1,19 @@
 # Feature implementation status
 
+## Catalog cleanup and inherited post orders (2026-10-06)
+
+- Compliance settings has All, Delete-ready only, and In use (retire-only) filters for record
+  types and personnel fields. The control matrix remains visible under every filter.
+- Company setup offers Default post orders; client and site editors offer their own defaults.
+  A post uses the first non-empty text from post, site, client, then company, without combining
+  levels. Blank or whitespace-only orders inherit.
+- Lower-level editors show the inherited text for editing. Saving that text unchanged retains
+  live inheritance; editing it saves an override. Clearing the field restores inheritance.
+  Changing the client or site selection refreshes inherited text without discarding edited orders.
+- My shifts, open posts, the schedule and recurring-series previews identify the source of orders.
+  Generated posts with blank series orders retain inheritance; explicit series orders are copied
+  onto generated posts as before. Default changes do not replace an existing explicit override.
+
 **Status date:** 2026-10-05 (the clock photo the owner ruled and got built the same day; the four
 outliers that closed behind it — a geotag no longer survives an upload, an SNS subscription has a button,
 the last unguarded tenant table does not stay unguarded, and the "missing" list stops claiming a shipped

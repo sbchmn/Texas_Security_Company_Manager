@@ -4,7 +4,7 @@ from django import forms
 from django.contrib.auth.password_validation import validate_password
 from .models import PERSONNEL_CATEGORIES, ROTATING_PRESETS, SERIES_MAX_DAYS, WEEKDAY_CHOICES, AuthorityScope, AvailabilityRule, ChannelRule, Checkpoint, Client, ClockKiosk, ComplianceRule, Credential, CredentialType, CustomFieldDefinition, DispositionRequest, DocumentType, Branch, ImportBatch, Membership, MessageConsent, Notification, OnboardingItem, Organization, PayCode, Person, PersonDocument, Shift, ShiftTemplate, Site, TimeOffRequest, TimePolicy, TimePolicyOverride, TrainingRecord
 from .services import normalize_destination, validate_clock_pin
-from .form_ui import WorkflowForm, WorkflowModelForm
+from .form_ui import InheritedPostOrdersForm, WorkflowForm, WorkflowModelForm
 
 class MembershipInvitationForm(WorkflowForm):
     email = forms.EmailField(help_text="The invitation is valid for 72 hours.")
@@ -27,6 +27,42 @@ class PersonAccessForm(WorkflowForm):
                  (Membership.Role.HR, "HR / Compliance")),
         initial=Membership.Role.OFFICER,
         help_text="Officer is the right level for a guard who only needs the time clock and their own records.")
+
+class MembershipAccessForm(WorkflowForm):
+    """Change a team member's role, or switch their access off and on.
+
+    Only an owner may grant the Owner role or change an owner's access; the view enforces that,
+    and keeps at least one active owner.
+    """
+    role = forms.ChoiceField(choices=Membership.Role.choices)
+    active = forms.BooleanField(required=False, label="Access active",
+                                help_text="Clear this to switch off their sign-in for this company without deleting anything.")
+
+    def __init__(self, *args, actor_role=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if actor_role != Membership.Role.OWNER:
+            self.fields["role"].choices = [item for item in Membership.Role.choices if item[0] != Membership.Role.OWNER]
+
+class PersonLinkForm(WorkflowForm):
+    """Attach an existing team member's sign-in to a personnel record, without changing their role.
+
+    Only active members not already linked to another record are offered. HR / Compliance may
+    link only non-privileged members: attaching a record to an owner or administrator's account
+    is left to those roles.
+    """
+    member = forms.ModelChoiceField(queryset=Membership.objects.none(), label="Team member",
+                                    help_text="Their role stays as it is. Change roles from Team access.")
+
+    def __init__(self, *args, organization=None, actor_role=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if organization is None:
+            return
+        linked = organization.people.filter(user__isnull=False).values("user_id")
+        members = organization.memberships.filter(active=True).exclude(user_id__in=linked).select_related("user")
+        if actor_role not in (Membership.Role.OWNER, Membership.Role.ADMIN):
+            members = members.exclude(role__in=(Membership.Role.OWNER, Membership.Role.ADMIN))
+        self.fields["member"].queryset = members.order_by("user__last_name", "user__first_name", "user__email")
+        self.fields["member"].label_from_instance = str
 
 class AvailabilityRuleForm(WorkflowModelForm):
     """One weekly window an officer is willing to stand."""
@@ -190,22 +226,31 @@ class DocumentAcknowledgmentForm(WorkflowForm):
     confirm=forms.BooleanField(label="I acknowledge that I reviewed this document")
     signature_name=forms.CharField(required=False,max_length=160,help_text="Required when the document type requests a signature.")
 
-class ClientForm(WorkflowModelForm):
+class CompanyPostOrdersForm(WorkflowModelForm):
+    class Meta:
+        model = Organization
+        fields = ["default_post_orders"]
+        widgets = {"default_post_orders": forms.Textarea(attrs={"rows": 8})}
+
+
+class ClientForm(InheritedPostOrdersForm):
     class Meta:
         model = Client
-        fields = ["name", "contact_name", "contact_email", "required_credentials", "default_pay_rate", "default_bill_rate", "default_pay_code", "active"]
-        widgets = {"required_credentials": forms.CheckboxSelectMultiple()}
+        fields = ["name", "contact_name", "contact_email", "default_post_orders", "required_credentials", "default_pay_rate", "default_bill_rate", "default_pay_code", "active"]
+        widgets = {"required_credentials": forms.CheckboxSelectMultiple(), "default_post_orders": forms.Textarea(attrs={"rows": 5})}
         help_texts = {
             "required_credentials": "Every officer standing any post for this client must hold these.",
             "default_bill_rate": "What the client is charged per hour, unless a site or post says otherwise.",
             "default_pay_code": "The job code every post under this contract is paid under, unless a site or post says otherwise.",
         }
 
-class SiteForm(WorkflowModelForm):
+class SiteForm(InheritedPostOrdersForm):
+    orders_parent_field = "client"
+
     class Meta:
         model = Site
-        fields = ["client", "branch", "name", "address", "latitude", "longitude", "geofence_radius_meters", "required_credentials", "default_pay_rate", "default_bill_rate", "default_pay_code", "active"]
-        widgets = {"required_credentials": forms.CheckboxSelectMultiple()}
+        fields = ["client", "branch", "name", "address", "default_post_orders", "latitude", "longitude", "geofence_radius_meters", "required_credentials", "default_pay_rate", "default_bill_rate", "default_pay_code", "active"]
+        widgets = {"required_credentials": forms.CheckboxSelectMultiple(), "default_post_orders": forms.Textarea(attrs={"rows": 5})}
         help_texts = {
             "required_credentials": "Post requirements for this site, on top of the client's.",
             "default_bill_rate": "What the client is charged per hour at this site, unless a post says otherwise.",
@@ -331,7 +376,10 @@ class CredentialForm(PersonBoundForm, WorkflowModelForm):
             instance.save()
         return instance
 
-class ShiftForm(WorkflowModelForm):
+class ShiftForm(InheritedPostOrdersForm):
+    orders_field = "post_orders"
+    orders_parent_field = "site"
+
     field_sections = (
         ("Assignment", ("site", "post_name", "officer", "status", "starts_at", "ends_at")),
         ("Requirements & instructions", ("required_credentials", "post_orders")),
@@ -366,7 +414,10 @@ class ShiftForm(WorkflowModelForm):
             "relief_for": "Only for a half that takes over another officer's tour, or follows it at the same post. Leave empty for an ordinary post.",
         }
 
-class ShiftTemplateForm(WorkflowModelForm):
+class ShiftTemplateForm(InheritedPostOrdersForm):
+    orders_field = "post_orders"
+    orders_parent_field = "site"
+
     """A repeating tour, stated the way a contract describes one: a post, a window, and days.
 
     No rate appears here on purpose. Each generated post resolves its own pay and bill rate from
