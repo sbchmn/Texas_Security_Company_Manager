@@ -297,7 +297,7 @@ services:
       # docker/mysql-init-signing.sql). URL-encode the password: this is a URL, not a key/value
       # config, and an unescaped @ or / in it produces a connection error that names the wrong host.
       # Set DOCUSEAL_DATABASE_URL to replace the whole thing, e.g. to move to PostgreSQL.
-      DATABASE_URL: ${DOCUSEAL_DATABASE_URL:-mysql2://${DOCUSEAL_DB_USER:-docuseal}:${DOCUSEAL_DB_PASSWORD:-change-me}@db:3306/${DOCUSEAL_DB_NAME:-docuseal}}
+      DATABASE_URL: ${DOCUSEAL_DATABASE_URL:-mysql2://${DOCUSEAL_DB_USER:-docuseal}:${DOCUSEAL_DB_PASSWORD:-change-me}@${MYSQL_HOST:-db}:${MYSQL_PORT:-3306}/${DOCUSEAL_DB_NAME:-docuseal}}
       REDIS_URL: redis://docuseal-cache:6379/0
       FORCE_SSL: ${DOCUSEAL_FORCE_SSL:-true}
       WEB_CONCURRENCY: ${DOCUSEAL_WEB_CONCURRENCY:-0}
