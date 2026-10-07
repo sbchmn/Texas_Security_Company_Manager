@@ -11,9 +11,11 @@
   {% if text_prompt %}<form method="post" action="{% url 'text_alerts' %}" class="panel consent-prompt">{% csrf_token %}
     <input type="hidden" name="mobile_phone" value="{{ text_prompt.phone }}">
     <p class="eyebrow">One question, then we stop asking</p>
-    <p><strong>Text you about your posts and your timecard?</strong> Nothing goes to {{ text_prompt.phone }} unless you say yes here &mdash; and saying no is a complete answer, recorded once.</p>
+    <p><strong>Receive workforce text alerts?</strong> Nothing goes to {{ text_prompt.phone }} unless you agree here &mdash; and saying no is a complete answer, recorded once.</p>
     <p class="helptext">{{ text_prompt.wording }}</p>
-    <div class="actions"><button class="button" type="submit" name="choice" value="yes">Yes, text me</button>
+    <p><a href="{{ current_organization.sms_terms_url }}">SMS Terms</a> and <a href="{{ current_organization.sms_privacy_url }}">Privacy Policy</a></p>
+    <label class="consent-line"><input type="checkbox" name="opt_in"> I agree to receive workforce text alerts</label>
+    <div class="actions"><button class="button" type="submit" name="choice" value="yes">Save my choice</button>
       <button class="button secondary" type="submit" name="choice" value="no">No, emails are enough</button>
       <a href="{% url 'text_alerts' %}">Change the number first</a></div>
   </form>{% endif %}
@@ -50,7 +52,7 @@
           <h2>Time exceptions</h2>
           <p class="metric">{{ pending_review_count }}</p>
           <p class="muted">{{ pending_punch_count }} punch{{ pending_punch_count|pluralize:"es" }} and {{ pending_correction_count }} correction{{ pending_correction_count|pluralize }} awaiting review in your authority scope.</p>
-          <div class="card-actions"><a class="button button-small" href="{% url 'time_review' %}">Review time queue</a></div>
+          <div class="card-actions"><a class="button button-small" href="{% url 'time_review' %}#review-queues">Review Timesheets</a></div>
         </article>
       {% endif %}
       <article class="card">

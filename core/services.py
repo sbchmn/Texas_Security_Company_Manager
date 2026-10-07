@@ -1727,6 +1727,8 @@ def record_punch(*, organization, person, client_event_id, kind, occurred_at, ac
         return existing,False
     if person.organization_id != organization.id:
         raise ValidationError("Person belongs to another organization.")
+    if kind not in Punch.Kind.values:
+        raise ValidationError("Choose a valid punch event.")
     # CLK-2's rule, stated at the boundary every clock path goes through rather than only in the
     # kiosk view. A punch that names an officer and links a post assigned to somebody else would put
     # one person's time on another person's post — which is what a shared station makes easy and what
@@ -1752,11 +1754,27 @@ def record_punch(*, organization, person, client_event_id, kind, occurred_at, ac
         if shift:
             allowed,reasons=shift_eligibility(shift,person,purpose="clock")
             if not allowed: raise ValidationError("Clock-in blocked: "+" ".join(reasons))
-    last=person.punches.filter(occurred_at__lt=occurred_at).order_by("-occurred_at").first()
+    last=person.punches.filter(occurred_at__lte=occurred_at, kind__in=(Punch.Kind.IN, Punch.Kind.OUT)).exclude(
+        review_status=Punch.Review.REJECTED).order_by("-occurred_at", "-received_at").first()
     if kind == Punch.Kind.IN and last and last.kind == Punch.Kind.IN:
         exceptions.append("Previous shift was never closed with a clock-out.")
     if kind == Punch.Kind.OUT and (not last or last.kind != Punch.Kind.IN):
         exceptions.append("Clock-out has no matching clock-in.")
+    from .timekeeping import BREAK_KINDS
+    if kind in BREAK_KINDS:
+        if shift is None:
+            raise ValidationError("Select your assigned shift before recording a break.")
+        # Serialize online break submissions for this officer; offline evidence still keeps its original time.
+        Person.objects.select_for_update().get(pk=person.pk)
+        prior = person.punches.filter(shift=shift, occurred_at__lte=occurred_at).exclude(
+            review_status=Punch.Review.REJECTED).exclude(kind=Punch.Kind.CHECKPOINT).order_by("-occurred_at", "-received_at").first()
+        expected = (Punch.Kind.IN, Punch.Kind.BREAK_END) if kind == Punch.Kind.BREAK_START else (Punch.Kind.BREAK_START,)
+        if not prior or prior.kind not in expected:
+            exceptions.append("Break sequence needs review: no matching active tour or break.")
+    if kind == Punch.Kind.OUT and shift and person.punches.filter(
+        shift=shift, occurred_at__lte=occurred_at).exclude(review_status=Punch.Review.REJECTED).exclude(
+        kind=Punch.Kind.CHECKPOINT).order_by("-occurred_at", "-received_at").values_list("kind", flat=True).first() == Punch.Kind.BREAK_START:
+        exceptions.append("Clock-out recorded before the break ended.")
     if policy.require_geofence and geofence_site and geofence_site.latitude is not None and geofence_site.longitude is not None:
         if latitude is None or longitude is None:
             exceptions.append("Location was not supplied.")
@@ -1807,6 +1825,8 @@ def record_punch(*, organization, person, client_event_id, kind, occurred_at, ac
     # at its own stored row by id. Nothing here copies the artefact itself; a selfie stays in the
     # document store with the rest of the personal-record rules.
     evidence_block = dict(evidence or {})
+    if accuracy_m is not None or fix_age_seconds is not None:
+        evidence_block["location"] = {"accuracy_m": accuracy_m, "fix_age_seconds": fix_age_seconds}
     if selfie_document is not None or policy.selfie["required"]:
         # Whether a frame was owed, whether one arrived, and which rule said so — all three, because
         # "we required a photo and this officer did not provide one" is a claim about a policy that has
@@ -1844,16 +1864,18 @@ def record_punch(*, organization, person, client_event_id, kind, occurred_at, ac
         queue_notice(organization=organization, recipients=recipients, event_type="punch.exception",
             subject=f"Timecard exception: {person.full_name}",
             body=("{} at {} — {}. {}".format(
-                    "Clock-in" if kind == Punch.Kind.IN else "Clock-out",
+                    punch.get_kind_display(),
                     moment_label(organization, occurred_at), " ".join(exceptions),
                     "Synchronised from an offline device, so compare it against the device log." if offline
-                    else "Review it in Time review.")),
+                    else "Review it in Timesheets.")),
             dedup_key=f"punch.exception:{punch.pk}",
-            sms={"officer": person, "kind": "clock-in" if kind == Punch.Kind.IN else "clock-out",
+            sms={"officer": person, "kind": punch.get_kind_display().lower(),
                  "at": occurred_at, "note": " ".join(exceptions)})
     if shift is not None:
         from .attendance import reconcile_shift
         reconcile_shift(shift.pk, now=now, create=False)
+    from .timekeeping import invalidate_drafts
+    invalidate_drafts(punch)
     return punch,True
 
 def round_minutes(minutes, policy):
@@ -1904,26 +1926,28 @@ def payroll_rows(organization, start, end):
     # Post id → minutes paid for it in this window, filled as each officer's segments are bucketed.
     paid_minutes={}
     rows=[]
+    from .timekeeping import BREAK_KINDS, break_conflicts, pair_tours
+    conflicts = break_conflicts(organization, [event for events in grouped.values() for event in events])
     for person,events in grouped.items():
-        segments=[];open_in=None;open_in_time=None
-        for event in events:
-            approved=next((item for item in event.adjustments.all() if item.status=="approved"),None)
-            event_time=approved.proposed_at if approved else event.occurred_at
-            if event.kind==Punch.Kind.IN:
-                open_in=event;open_in_time=event_time
-            elif event.kind==Punch.Kind.OUT and open_in:
-                in_adjustment=next((item for item in open_in.adjustments.all() if item.status=="approved"),None)
-                in_time=in_adjustment.proposed_at if in_adjustment else open_in_time
-                if event_time>=in_time:
-                    worked=int((event_time-in_time).total_seconds()//60)
-                    segment_policy=clock_policy(open_in.shift)
-                    minutes=round_minutes(worked,segment_policy)
-                    rounding=segment_policy.rounding
-                    local_day=in_time.astimezone(ZoneInfo(policy.timezone)).date();days_since_start=(local_day.weekday()-policy.workweek_start)%7
-                    segments.append({"shift":open_in.shift,"week":local_day-timedelta(days=days_since_start),"minutes":minutes,"raw":worked,
-                                     "policy_source":rounding["source"],"policy_version":rounding["version"],
-                                     "rounding_mode":rounding["mode"],"rounding_minutes":rounding["minutes"]})
-                    open_in=None;open_in_time=None
+        segments=[];open_in=None
+        tours = pair_tours(events)
+        explicit_break_shifts = {event.shift_id for event in events if event.kind in BREAK_KINDS}
+        person_designations = {key: {kind: value for kind, value in entries.items()
+                                    if not (key in explicit_break_shifts and kind == PayCategory.Kind.BREAK)}
+                               for key, entries in designations.items()}
+        for tour in reversed(tours):
+            if tour["end"] is None:
+                open_in = tour["start"]
+                continue
+            in_time = tour["starts_at"]
+            worked = int(tour["elapsed_minutes"])
+            segment_policy = clock_policy(tour["start"].shift)
+            minutes = round_minutes(int(tour["paid_minutes"]), segment_policy)
+            rounding = segment_policy.rounding
+            local_day=in_time.astimezone(ZoneInfo(policy.timezone)).date();days_since_start=(local_day.weekday()-policy.workweek_start)%7
+            segments.append({"shift":tour["start"].shift,"week":local_day-timedelta(days=days_since_start),"minutes":minutes,"raw":worked,
+                             "policy_source":rounding["source"],"policy_version":rounding["version"],
+                             "rounding_mode":rounding["mode"],"rounding_minutes":rounding["minutes"]})
         # PAY-2, applied *before* the week is totalled, because whether an hour counts toward the
         # overtime threshold is a question about the threshold and not about the line it prints on.
         # Two of the three category shapes remove time from the worked pool and one does not, and
@@ -1931,7 +1955,7 @@ def payroll_rows(organization, start, end):
         # worked at all, paid-but-not-counting hours leave the basis and still pay, and a premium
         # category leaves its hours exactly where they are and prices only what sits above straight
         # time — so an hour is never counted twice and never quietly disappears.
-        owed={shift_id:{kind:int(row.hours*60) for kind,row in designations.get(shift_id,{}).items()}
+        owed={shift_id:{kind:int(row.hours*60) for kind,row in person_designations.get(shift_id,{}).items()}
               for shift_id in {segment["shift"].pk for segment in segments if segment["shift"]}}
         carved=defaultdict(lambda:defaultdict(int))
         for segment in segments:
@@ -1993,6 +2017,10 @@ def payroll_rows(organization, start, end):
             # punches recorded them — so this adds no time, it explains the time that is there.
             notes = (["Open punch"] if open_in else []) + (
                 [describe_hold_over(entry) for entry in hold_overs.get(shift.pk, [])] if shift else [])
+            notes += list(dict.fromkeys(issue for tour in tours if tour["start"].shift_id == (shift.pk if shift else None)
+                                        for issue in tour["issues"]))
+            if shift and shift.pk in conflicts:
+                notes.append("Recorded break punches conflict with a manual break designation; remove the designation before approval.")
             rows.append({
                 "employee_id":str(person.pk),"employee":person.full_name,
                 # The job code the customer's payroll keys the line on, and which level set it.
@@ -2019,7 +2047,7 @@ def payroll_rows(organization, start, end):
             # names the rule version that priced it and the reason it was marked, because "we always
             # pay holiday at 1.5×" is a claim about a rule that can change and about a decision that
             # somebody made on a specific night.
-            for kind,designation in (designations.get(shift.pk,{}) if shift else {}).items():
+            for kind,designation in (person_designations.get(shift.pk,{}) if shift else {}).items():
                 category=pay_categories.get(kind)
                 if category is None: continue
                 overlay=category.paid and category.counts_toward_overtime
@@ -2180,6 +2208,16 @@ def create_payroll_run(*,organization,start,end,actor):
     exceptions=[{"employee":row["employee"],"reason":row["exception"]} for row in rows if row["exception"]]
     pending=organization.punches.filter(occurred_at__gte=start,occurred_at__lt=end,review_status=Punch.Review.PENDING).count()
     if pending: exceptions.append({"employee":"Multiple","reason":f"{pending} punches await review"})
+    from .timekeeping import break_conflicts, pair_tours
+    events = list(organization.punches.filter(occurred_at__gte=start, occurred_at__lt=end).exclude(
+        review_status=Punch.Review.REJECTED).select_related("person").prefetch_related("adjustments"))
+    for tour in pair_tours(events):
+        for issue in tour["issues"]:
+            entry = {"employee": tour["start"].person.full_name, "reason": issue}
+            if entry not in exceptions:
+                exceptions.append(entry)
+    if break_conflicts(organization, events):
+        exceptions.append({"employee": "Multiple", "reason": "Reconcile manual break designations with recorded break punches before approval."})
     serializable=[{key:str(value) if isinstance(value,Decimal) else value for key,value in row.items()} for row in rows]
     run,created=PayrollRun.objects.get_or_create(organization=organization,period_start=start,period_end=end,defaults={"created_by":actor,"snapshot":serializable,"exceptions":exceptions})
     if not created and run.status==PayrollRun.Status.DRAFT:
@@ -4420,6 +4458,9 @@ def set_shift_designation(shift, category, hours, reason, actor):
     punches cannot show, so it is the place a dispute starts.
     """
     hours = Decimal(str(hours or "0")).quantize(Decimal("0.01"))
+    if category.kind == PayCategory.Kind.BREAK and shift.punches.filter(
+        kind__in=(Punch.Kind.BREAK_START, Punch.Kind.BREAK_END)).exclude(review_status=Punch.Review.REJECTED).exists():
+        raise ValidationError("This shift has recorded break punches. Classify those breaks in Timesheets instead.")
     if category.kind == PayCategory.Kind.LEAVE:
         raise ValidationError(
             "Approved leave is not marked on a post — it arrives from a decided time-off request, "
@@ -4454,8 +4495,8 @@ def set_shift_designation(shift, category, hours, reason, actor):
 
 def _punch_time(punch):
     """The instant a punch is paid at: an approved correction wins over the device's claim."""
-    approved = next((item for item in punch.adjustments.all() if item.status == "approved"), None)
-    return approved.proposed_at if approved else punch.occurred_at
+    from .timekeeping import effective_time
+    return effective_time(punch)
 
 
 def recorded_tour_end(shift, officer=None):
@@ -5208,9 +5249,12 @@ def audit_retention_state(organization, now=None):
 # invitation acceptance, first sign-in — and from the officer's page, with nothing sent to a number that
 # has not affirmatively opted in, and an opt-out ending the send path immediately.
 
-SMS_CONSENT_WORDING = ("Texts from {organization} about your assigned posts, clock reminders and "
-    "timecard questions. Message and data rates may apply. Reply HELP for help or STOP to stop "
-    "receiving texts anytime.")
+SMS_PROGRAM_DESCRIPTION = ("scheduling, coverage, attendance, timecards, payroll, credentials, "
+    "training, onboarding and employment documents")
+SMS_CONSENT_WORDING = ("Texts from {organization} about {description}. Message frequency varies. "
+    "Message and data rates may apply. Reply HELP for help or STOP to opt out. "
+    "Support: {support}. Terms: {terms}. Privacy: {privacy}. "
+    "SMS consent is optional and is not a condition of employment.")
 INBOUND_STOP_WORDS = ("stop", "end", "quit", "cancel", "unsubscribe", "optout", "opt out")
 INBOUND_START_WORDS = ("start", "begin", "subscribe", "unstop", "optin", "opt in", "hire")
 INBOUND_HELP_WORDS = ("help", "assistance", "info")
@@ -5275,7 +5319,24 @@ def normalize_destination(value, channel=MessageConsent.Channel.SMS):
 
 
 def sms_consent_wording(organization):
-    return SMS_CONSENT_WORDING.format(organization=organization.display_name)
+    if not organization.sms_program_ready:
+        return "New text-alert opt-ins are unavailable until the company configures SMS terms, privacy and support information."
+    return SMS_CONSENT_WORDING.format(organization=organization.display_name,
+        description=SMS_PROGRAM_DESCRIPTION, support=organization.support_email,
+        terms=organization.sms_terms_url, privacy=organization.sms_privacy_url)
+
+
+def sms_enrollment_message(organization):
+    return (f"{organization.display_name}: You are enrolled in workforce text alerts about "
+        f"{SMS_PROGRAM_DESCRIPTION}. Message frequency varies. Message and data rates may apply. "
+        f"Reply HELP for help or STOP to opt out. Support: {organization.support_email}.")
+
+
+def sms_help_message(organization):
+    support = organization.support_email or "Contact your supervisor through the company portal"
+    return (f"{organization.display_name}: Workforce text alerts about {SMS_PROGRAM_DESCRIPTION}. "
+        f"Message frequency varies. Message and data rates may apply. "
+        f"Support: {support}. Reply STOP to opt out.")
 
 
 def organization_webhook_token(organization):
@@ -5295,6 +5356,7 @@ def rotate_webhook_token(organization, actor=None):
     return token
 
 
+@transaction.atomic
 def record_consent(*, organization, destination, state, channel=MessageConsent.Channel.SMS, person=None,
         source=MessageConsent.Source.PROFILE, wording="", evidence=None, actor=None):
     """Append one consent decision. It never rewrites the decision it reverses.
@@ -5304,6 +5366,9 @@ def record_consent(*, organization, destination, state, channel=MessageConsent.C
     *decision* created (``unsubscribe``), never a bounce or a spam complaint — an address the carrier
     rejects is not made reachable by asking it nicely again.
     """
+    organization = Organization.objects.select_for_update().get(pk=organization.pk)
+    if channel == MessageConsent.Channel.SMS and state == MessageConsent.State.GRANTED and not organization.sms_program_ready:
+        raise ValidationError("The company must configure SMS terms, privacy and support information before new opt-ins.")
     normalized = normalize_destination(destination, channel)
     if not normalized:
         raise ValidationError({"destination": "That is not a usable number for text messages."
@@ -5332,6 +5397,14 @@ def record_consent(*, organization, destination, state, channel=MessageConsent.C
         target_type="person" if person else "organization", target_id=str(person.pk) if person else str(organization.pk),
         metadata={"channel": channel, "destination": mask_destination(normalized, channel), "source": source,
                   "has_wording": bool(row.wording), "ledger": str(row.pk)})
+    if (channel == MessageConsent.Channel.SMS and state == MessageConsent.State.GRANTED
+            and source != MessageConsent.Source.PROVIDER_KEYWORD
+            and (previous is None or previous.state != MessageConsent.State.GRANTED)):
+        Notification.objects.create(organization=organization,
+            recipient=person.user if person is not None else None, destination=normalized,
+            channel=Notification.Channel.SMS, event_type="message.sms_enrollment",
+            subject="Text alerts enrollment", body=sms_enrollment_message(organization),
+            mandatory=True, deduplication_key=f"sms-enrollment:{row.pk}")
     return row
 
 
@@ -5772,28 +5845,31 @@ def handle_inbound_message(organization, from_number, body, *, provider="twilio"
     full = words.strip()
     destination = normalize_destination(from_number, MessageConsent.Channel.SMS)
     if any(word in INBOUND_STOP_WORDS for word in full.split()) or full in INBOUND_STOP_WORDS:
-        if destination and current_consent(organization, destination):
+        if destination:
             record_consent(organization=organization, destination=destination,
                 state=MessageConsent.State.REVOKED, source=MessageConsent.Source.PROVIDER_KEYWORD,
                 wording=f"inbound: {str(body)[:120]}", evidence={"provider": provider})
             reply = f"You will not receive more texts from {organization.display_name}. Reply START to opt in again."
         else:
-            reply = "You are not set up for texts with us, so nothing was changed."
+            reply = f"{organization.display_name}: Unable to identify your number. Contact your supervisor for help."
     elif full in INBOUND_HELP_WORDS:
-        reply = sms_consent_wording(organization)
+        reply = sms_help_message(organization)
     elif any(word in INBOUND_START_WORDS for word in full.split()) or full in INBOUND_START_WORDS:
         prior = MessageConsent.objects.filter(organization=organization,
             destination=destination, state=MessageConsent.State.GRANTED).exists() if destination else False
-        if prior:
+        if prior and organization.sms_program_ready:
             record_consent(organization=organization, destination=destination,
                 state=MessageConsent.State.GRANTED, source=MessageConsent.Source.PROVIDER_KEYWORD,
                 wording=f"inbound: {str(body)[:120]}", evidence={"provider": provider})
-            reply = f"You will get texts from {organization.display_name} again. Reply STOP anytime."
+            reply = sms_enrollment_message(organization)
+        elif prior:
+            reply = (f"{organization.display_name}: Text re-enrollment is unavailable until the company "
+                     "configures SMS terms, privacy and support information. Contact your supervisor.")
         else:
-            reply = ("We have no record of you opting in here. Ask your supervisor to set up text alerts "
+            reply = (f"{organization.display_name}: We have no record of you opting in here. Ask your supervisor to set up text alerts "
                      "for your number.")
     else:
-        reply = ("We can only read STOP, START and HELP on this number. Ask your supervisor about "
+        reply = (f"{organization.display_name}: We can only read STOP, START and HELP on this number. Ask your supervisor about "
                  "anything else.")
     DeliveryEvent.objects.create(organization=organization, provider=provider,
         channel=MessageConsent.Channel.SMS, destination=destination or str(from_number),

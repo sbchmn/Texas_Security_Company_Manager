@@ -1,14 +1,18 @@
 {% extends 'base.html' %}{% block title %}Text alerts{% endblock %}{% block content %}
 <div class="page narrow"><div class="page-heading"><div><p class="eyebrow">My work</p><h1>Text alerts</h1>
-<p>Whether {{ current_organization.display_name }} may text you, and about what. Nothing is sent to a number that has not opted in, and replying <strong>STOP</strong> to any message we send ends it immediately — no login, no asking anyone.</p></div></div>
+<p>Whether {{ current_organization.display_name }} may text you, and about what. Nothing is sent to a number that has not opted in, and replying <strong>STOP</strong> to any message we send ends it immediately — no login, no asking anyone.</p>
+{% if current and current.state == 'granted' %}<p class="message">Text alerts are currently on. Leaving the optional checkbox unchecked does not revoke your existing consent. Use Turn texts off to opt out.</p>{% endif %}</div></div>
 
 {% if not person.mobile_phone and not form.mobile_phone.value %}<p class="message">There is no mobile number on your record yet, so there is nothing to opt in. Add one below and the choice becomes available.</p>{% endif %}
 {% if block %}<p class="message warning">This number is blocked: {{ block.get_kind_display }}{% if block.reason %} — {{ block.reason }}{% endif %} ({{ block.since|date:'M j, Y' }}). {% if block.kind == 'unsubscribe' %}Opting in below clears that block; it is your own decision.{% else %}Opting in again does not lift this one — it is a fact about the number, not a preference. Ask your supervisor to check the number, or to use your email.{% endif %}</p>{% endif %}
 
 <section class="panel">
 <form method="post" class="stacked-form">{% csrf_token %}
+{{ form.non_field_errors }}
 <label>{{ form.mobile_phone.label }}{{ form.mobile_phone }}<small class="helptext">{{ form.mobile_phone.help_text }}</small>{% for error in form.mobile_phone.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
 <label class="consent-line">{{ form.opt_in }} <span>{{ form.opt_in.label }}</span></label>
+<p class="helptext">{{ form.opt_in.help_text }}</p>
+{% for error in form.opt_in.errors %}<small class="field-error">{{ error }}</small>{% endfor %}
 <div class="actions"><button class="button" type="submit" name="choice" value="yes">Save</button>
 {% if current and current.state == 'granted' %}<button class="button secondary" type="submit" name="choice" value="off">Turn texts off</button>{% endif %}
 <a class="button text" href="{% url 'dashboard' %}">Not now</a></div>

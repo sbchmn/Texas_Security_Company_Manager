@@ -88,6 +88,42 @@ legal compliance. Regulatory controls must be based on current primary sources,
 versioned, approved by the product owner, and reviewed by a qualified Texas legal or
 Private Security Program professional before release.
 
+### SMS consent and A2P campaign preparation
+
+After applying migration `0070_sms_program_disclosures`, an Owner or Administrator must
+configure the company's public HTTPS **SMS privacy policy URL**, **SMS terms URL**, and a
+monitored **support email** under Settings -> Messaging delivery. New web opt-ins and
+START re-enrollment remain unavailable until those values are present and valid; existing
+consent is preserved and STOP remains available. The support email is the existing company
+support address, not a separate deployment-wide setting.
+
+Invitation acceptance, first-login prompts, and Text alerts share disclosures covering
+scheduling, coverage, attendance, timecards, payroll, credentials, training, onboarding,
+and employment documents. Frequency is disclosed as variable. SMS consent is optional,
+not a condition of employment, and never pre-checked. An unchecked Save leaves existing
+consent unchanged; **Turn texts off** explicitly revokes it.
+
+New web grants queue an enrollment-confirmation SMS through the normal retryable delivery
+pipeline. Repeated saves of already-granted consent do not queue another confirmation.
+STOP blocks even a queued confirmation. START only restores a number with an earlier
+grant and answers with enrollment disclosures; it does not enroll strangers or implement
+a keyword-acquisition/double-opt-in campaign. HELP includes the company's support email,
+frequency and rates. Operational SMS previews and newly queued messages automatically
+include company branding and `Reply STOP to opt out.`, even when wording is customized.
+Existing queued operational bodies are not rewritten.
+
+These controls do not register a campaign or guarantee carrier approval. Publish actual
+company-specific policies: privacy must describe collection/use and exclude selling or
+sharing SMS opt-in data for third-party marketing; SMS terms must name and describe the
+program, variable frequency, rates, support, prominent HELP/STOP instructions, a privacy
+link, and the carrier delayed/undelivered-message liability disclaimer. TSCM checks URL
+format, not policy content or whether a URL is publicly accessible. Supply publicly
+accessible, redacted screenshots of authenticated opt-in and post-submit screens as proof.
+Register the end employer's legal entity/DBA, not TSCM's publisher. Confirm production
+links belong to that brand and align any provider-managed keyword replies (including
+Twilio Advanced Opt-Out) with these disclosures; provider account settings are not managed
+by TSCM.
+
 ## Running the first application slice
 
 The repository now contains a Django-based responsive PWA foundation with organization-
@@ -291,4 +327,35 @@ same keys. Back up keys separately from the database. A lost key makes existing 
 unreadable; the application refuses to overwrite them. To begin rotation, put the new key first
 and retain the previous keys after it, comma-separated. Old keys are still needed for existing
 records, encrypted audit purposes, and retained backups; do not remove them merely because a new
-key has been added. Migrations through 0068 must be applied before starting the updated application.
+key has been added. Migrations through 0069 must be applied before starting the updated application.
+
+## Timesheets location maps
+
+Maps are off by default. Deployment administrators can set `TIMESHEET_MAP_PROVIDER`
+to `osm` or `google`; these settings apply across this installation.
+
+- `osm`: set `TIMESHEET_MAP_TILE_URL` to an HTTPS raster tile template containing
+  `{z}`, `{x}`, and `{y}`, and `TIMESHEET_MAP_ATTRIBUTION` to the provider's required
+  attribution. The example uses OpenStreetMap's standard tiles; follow its
+  [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) and choose
+  a suitable hosted provider for production volume. No tile prefetch or offline map
+  cache is implemented. Leaflet 1.9.4 is served locally with its license.
+- `google`: set `GOOGLE_MAPS_BROWSER_KEY` to a Maps JavaScript API browser key with
+  billing enabled, API restrictions, and HTTP-referrer restrictions for your application
+  domains. This key is intentionally browser-visible, not a secret server credential.
+- `disabled`: GPS evidence remains readable without loading an external map.
+
+Opening punch details does not contact a map provider. **Load location map** is an
+explicit action that shares the mapped position and the viewer's connection with that
+provider. The map shows captured position and the site's **current** geofence, not a
+claim that GPS proves physical attendance or that today's fence is the historical rule.
+Only punch-detail responses allow the selected provider's browser resources; other
+pages retain the default browser policy. Map-library positioning requires inline
+styles within the detail response, but inline scripts remain disallowed.
+
+Apply migration `0069_explicit_break_punches` when deploying Timesheets. Break punches
+are paid by default. Unpaid classification and time corrections require reviewer
+authority, reasons, and an unlocked payroll period. Regenerate drafts after changes.
+For legacy shifts containing both manual break-hour designations and actual break
+punches, remove the manual designation and classify the recorded break instead;
+payroll flags the conflict rather than double-deducting it.

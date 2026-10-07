@@ -43,7 +43,7 @@
 </section>
 <section class="panel">
 <h2>Delivery safeguards</h2>
-<p>Emails retain company branding and an embedded logo. Texts start with <code>{{ prefix|default:"(company name)" }}</code> automatically. Editing wording does not enable a channel, waive SMS consent, or change an invitation's expiry.</p>
+<p>Emails retain company branding and an embedded logo. Texts start with <code>{{ prefix|default:"(company name)" }}</code> and end with <code>Reply STOP to opt out.</code> automatically, including custom wording. Editing wording does not enable a channel, waive SMS consent, or change an invitation's expiry.</p>
 <p>{% if base_url %}Ordinary action links point to <code>{{ base_url }}</code>.{% else %}Ordinary <code>{link}</code> placeholders need <code>PUBLIC_BASE_URL</code> or a verified company domain. Invitation and signing links are supplied by their workflows independently.{% endif %}</p>
 <p class="helptext">Keep SMS wording consistent with your registered A2P 10DLC samples. Login-provider and password-reset emails are outside this operational notification catalog.</p>
 </section>

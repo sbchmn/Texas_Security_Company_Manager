@@ -103,7 +103,7 @@ def workspace_today(request):
     }
     # NTF-4's first-login capture: asked once, only when a number is on file with no decision against it.
     # An imported phone list carries no consent, and either answer makes the prompt disappear for good.
-    if person is not None and person.mobile_phone and current_consent(org, person.mobile_phone) is None:
+    if org.sms_program_ready and person is not None and person.mobile_phone and current_consent(org, person.mobile_phone) is None:
         context["text_prompt"] = {"phone": person.mobile_phone, "wording": sms_consent_wording(org)}
     scope = scope_for(request)
     priorities = []
@@ -175,9 +175,10 @@ def workspace_today(request):
     live_cases = attendance_cases.filter(status="open")
     if live_cases.exists():
         priorities.append({
-            "label": "Live attendance", "count": live_cases.count(),
+            "label": "Attendance follow-up" if role in views.MANAGERS else "My attendance alerts", "count": live_cases.count(),
             "owner": "Dispatch / supervisor" if role in views.MANAGERS else "Your dispatch / supervisor",
-            "oldest": live_cases.first().opened_at, "url": reverse("attendance_queue"),
+            "oldest": live_cases.first().opened_at,
+            "url": reverse("schedule" if role in views.MANAGERS else "my_shifts") + "#attendance-alerts",
             "next_step": "Confirm arrival, departure, and relief; missing punch evidence is not proof of absence",
         })
     if context["can_review"]:
@@ -187,7 +188,7 @@ def workspace_today(request):
         context["pending_correction_count"] = time_counts["corrections"]
         if time_counts["total"]:
             priorities.append({
-                "label": "Time review", "count": time_counts["total"], "owner": "Payroll / supervisor",
+                "label": "Timesheets", "count": time_counts["total"], "owner": "Payroll / supervisor",
                 "oldest": time_counts["oldest"], "url": reverse("time_review"),
                 "next_step": (
                     f'{time_counts["punches"]} punch{"es" if time_counts["punches"] != 1 else ""} and '

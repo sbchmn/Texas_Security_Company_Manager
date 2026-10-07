@@ -130,10 +130,17 @@ def bundled_components():
     for path in sorted(root.rglob("*")):
         if path.is_file() and NOTICE_FILE.match(path.name):
             texts.append({"name": path.relative_to(root).as_posix(), "text": path.read_text(encoding="utf-8", errors="replace").strip()})
-    return [{"name": "PDF.js (pdfjs-dist)", "version": match.group(1) if match else "", "license": "Apache-2.0",
+    rows = [{"name": "PDF.js (pdfjs-dist)", "version": match.group(1) if match else "", "license": "Apache-2.0",
              "summary": "In-browser document viewer, with the Foxit and Liberation standard fonts and the "
                         "JBIG2, OpenJPEG and QCMS image decoders it bundles.",
              "url": "https://github.com/mozilla/pdf.js", "texts": texts}]
+    leaflet = Path(settings.BASE_DIR) / "static" / "vendor" / "leaflet" / "LICENSE"
+    if leaflet.exists():
+        rows.append({"name": "Leaflet", "version": "1.9.4", "license": "BSD-2-Clause",
+                     "summary": "Optional OpenStreetMap-compatible punch location maps.",
+                     "url": "https://leafletjs.com",
+                     "texts": [{"name": "LICENSE", "text": leaflet.read_text(encoding="utf-8")}]})
+    return rows
 
 
 @lru_cache(maxsize=1)

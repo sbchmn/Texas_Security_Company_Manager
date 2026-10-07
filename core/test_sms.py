@@ -53,7 +53,7 @@ class SmsTemplateTest(TestCase):
     @override_settings(PUBLIC_BASE_URL="")
     def test_default_wording_uses_local_time_and_the_company_prefix(self):
         text = sms.render_sms(self.org, "shift.published", {"shift": self.shift})
-        self.assertEqual("Acme Security: You're scheduled at Northpark Center Fri Oct 9, 6 PM-2 AM.", text)
+        self.assertEqual("Acme Security: You're scheduled at Northpark Center Fri Oct 9, 6 PM-2 AM. Reply STOP to opt out.", text)
 
     @override_settings(PUBLIC_BASE_URL="https://tscm.example.com/")
     def test_link_uses_public_base_url(self):
@@ -65,7 +65,7 @@ class SmsTemplateTest(TestCase):
         SmsTemplate.objects.create(organization=self.org, notice_key="shift.published",
                                    body="Hi {first_name}, new shift: {site}, {when}.")
         text = sms.render_sms(self.org, "shift.published", {"shift": self.shift}, first_name="Jordan")
-        self.assertEqual("Acme Security: Hi Jordan, new shift: Northpark Center, Fri Oct 9, 6 PM-2 AM.", text)
+        self.assertEqual("Acme Security: Hi Jordan, new shift: Northpark Center, Fri Oct 9, 6 PM-2 AM. Reply STOP to opt out.", text)
         SmsTemplate.objects.all().delete()
         self.assertIn("You're scheduled", sms.render_sms(self.org, "shift.published", {"shift": self.shift}))
 
@@ -84,7 +84,7 @@ class SmsTemplateTest(TestCase):
                      sms={"shift": self.shift})
         rows = dict(Notification.objects.filter(organization=self.org).values_list("channel", "body"))
         self.assertEqual("A long email paragraph about the shift.", rows["email"])
-        self.assertEqual("Acme Security: You're scheduled at Northpark Center Fri Oct 9, 6 PM-2 AM.", rows["sms"])
+        self.assertEqual("Acme Security: You're scheduled at Northpark Center Fri Oct 9, 6 PM-2 AM. Reply STOP to opt out.", rows["sms"])
 
     @override_settings(PUBLIC_BASE_URL="")
     def test_first_name_is_filled_per_recipient(self):
@@ -93,7 +93,7 @@ class SmsTemplateTest(TestCase):
                      event_type="shift.published", subject="s", body="b", dedup_key="names",
                      channels=(Notification.Channel.SMS,), sms={"shift": self.shift})
         bodies = set(Notification.objects.filter(channel="sms").values_list("body", flat=True))
-        self.assertEqual({"Acme Security: Hi Jordan: Northpark Center.", "Acme Security: Hi Alex: Northpark Center."},
+        self.assertEqual({"Acme Security: Hi Jordan: Northpark Center. Reply STOP to opt out.", "Acme Security: Hi Alex: Northpark Center. Reply STOP to opt out."},
                          bodies)
 
     @override_settings(PUBLIC_BASE_URL="")
@@ -101,7 +101,7 @@ class SmsTemplateTest(TestCase):
         text = sms.render_sms(self.org, sms.resolve_key("shift.exchange_approved",
                               {"notice": "shift.exchange_approved", "other": self.other}),
                               {"notice": "shift.exchange_approved", "other": self.other})
-        self.assertEqual("Acme Security: Your shift trade with Alex Kim was approved.", text)
+        self.assertEqual("Acme Security: Your shift trade with Alex Kim was approved. Reply STOP to opt out.", text)
 
     def test_only_privileged_members_can_open_the_wording_pages(self):
         self.client.force_login(self.officer_user)

@@ -6,6 +6,13 @@
     <div class="actions"><a class="button secondary" href="{% url 'shift_templates' %}">Recurring series</a><a class="button secondary" href="{% url 'swaps' %}">Shift moves</a><a class="button" href="{% url 'shift_create' %}{% if site %}?site={{ site.pk }}{% endif %}">+ Create shift</a></div>
   </div>
   {% include 'core/scope_note.html' %}
+  <section class="panel" id="attendance-alerts" aria-labelledby="attendance-heading">
+    <div class="panel-head"><h2 id="attendance-heading">Attendance follow-up</h2><a class="button secondary button-small" href="{% url 'attendance_queue' %}">All cases and history</a></div>
+    <p class="muted">Current open cases{% if site %} at {{ site.name }}{% endif %}, independent of the displayed week and post filters. Missing punch evidence is not proof of absence or departure; offline punches may still be syncing.</p>
+    <div class="actions"><span class="pill pending">{{ attendance_widget.arrival }} late arrival{{ attendance_widget.arrival|pluralize }}</span><span class="pill pending">{{ attendance_widget.departure }} overdue departure{{ attendance_widget.departure|pluralize }}</span></div>
+    {% for case in attendance_widget.cases %}<article class="person-row"><div><strong>{{ case.person.full_name }} &middot; {{ case.get_kind_display }}</strong><small>{{ case.shift.site.client.name }} / {{ case.shift.site.name }} &middot; Deadline {{ case.deadline_at|date:'D M j, g:i A' }}</small></div><a class="button secondary button-small" href="{% url 'attendance_detail' case.pk %}">Record follow-up</a></article>{% empty %}<p class="muted">No open attendance cases in this scope. Alerts appear only where enabled in time policy.</p>{% endfor %}
+    {% if attendance_widget.total > 5 %}<p class="muted">Showing the first five of {{ attendance_widget.total }} open cases, earliest deadline first. <a href="{% url 'attendance_queue' %}">Review all cases</a>.</p>{% endif %}
+  </section>
   <section class="metric-grid">
     <article><div><small>Posts this week</small><strong>{{ shifts|length }}</strong><p>{{ week_start|date:'N j' }} &rarr; {{ week_last|date:'N j' }}</p></div></article>
     <article><div><small>Published</small><strong>{{ published_count }}</strong><p>{{ draft_count }} still drafts</p></div></article>

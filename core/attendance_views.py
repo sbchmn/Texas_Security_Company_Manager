@@ -6,6 +6,7 @@ from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from .attendance import MANAGERS, follow_up, scoped_cases
@@ -69,6 +70,13 @@ def _attendance_queue(request, case_id):
     org = request.organization
     scope = scope_for(request)
     can_manage = request.membership.role in MANAGERS
+    if not can_manage:
+        if request.method == "POST":
+            raise PermissionDenied
+        if case_id:
+            case = get_object_or_404(org.attendance_cases.filter(person__user=request.user), pk=case_id)
+            return redirect(reverse("my_shifts") + f"?attendance={case.pk}#attendance-alerts")
+        return redirect(reverse("my_shifts") + "#attendance-alerts")
     cases = scoped_cases(org, scope) if can_manage else org.attendance_cases.filter(person__user=request.user)
     cases = cases.select_related("shift__site__client", "person")
     selected = get_object_or_404(cases, pk=case_id) if case_id else None
@@ -113,6 +121,6 @@ def _attendance_queue(request, case_id):
         "cases": Paginator(rows.order_by("-opened_at", "pk"), 25).get_page(request.GET.get("page")),
         "selected": selected, "form": form, "can_manage": can_manage, "counts": counts,
         "status_filter": status, "kind_filter": kind, "search": search,
-        "history": Paginator(selected.actions.select_related("actor").order_by("-created_at", "-pk"), 25).get_page(request.GET.get("history_page")) if selected else None,
+        "history": Paginator(selected.actions.select_related("actor").order_by("-created_at", "-pk"), 25).get_page(request.GET.get("history_page")) if selected and can_manage else None,
         "authority_scope": scope if can_manage and scope.restricted else None,
     })

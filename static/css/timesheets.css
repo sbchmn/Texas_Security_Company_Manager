@@ -1,0 +1,15 @@
+.timesheet-dialog { width: min(1000px, 95vw); height: 90vh; border: 1px solid #cbd5e1; border-radius: 12px; padding: 1rem; overflow: hidden; }
+.timesheet-dialog::backdrop { background: rgba(0, 0, 0, .5); }
+.timesheet-dialog iframe { width: 100%; height: calc(100% - 4rem); border: 0; }
+.timesheet-dialog [data-timesheet-body] { height: calc(100% - 4rem); }
+.timesheet-dialog [data-timesheet-body] iframe { height: 100%; }
+.punch-map { height: 350px; width: 100%; margin-block: 1rem; }
+[data-punch-detail] dt { font-weight: 700; margin-top: .75rem; }
+[data-punch-detail] dd { margin-left: 0; overflow-wrap: anywhere; }
+.punch-modal-page .page { margin: 0; padding: 20px; max-width: none; }
+.punch-modal-page .messages { margin: 0; padding: 12px 20px 0; }
+.punch-modal-page .page > a { display: none; }
+@media (max-width: 760px) {
+  .timesheet-dialog { width: 96vw; height: 94vh; padding: 12px; }
+  .punch-modal-page .page { padding: 12px; }
+}

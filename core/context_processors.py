@@ -38,7 +38,7 @@ WORKSPACES = (
         "exchange_decide", "time_off", "time_off_decide", "open_posts", "shift_requests", "shift_claim"
     )),
     ("Time & Payroll", "workspace_payroll", "TIME_REVIEWERS", (
-        "workspace_payroll", "time_review", "punch_review", "adjustment_review", "payroll", "payroll_approve",
+        "workspace_payroll", "time_review", "punch_detail", "punch_review", "adjustment_review", "payroll", "payroll_approve",
         "payroll_run_export", "payroll_export", "payroll_reopen", "payroll_segment_lock"
     )),
     ("Compliance & Records", "workspace_compliance", "RECORD_READERS", (
@@ -55,7 +55,6 @@ WORKSPACES = (
 )
 
 QUICK_LINKS = (
-    ("Live attendance", "attendance_queue", ("attendance_queue", "attendance_detail")),
     ("Timeclock", "clock", ("clock", "adjustment_request")),
     ("My shifts", "my_shifts", ("my_shifts", "offer_post", "swap_respond", "swap_withdraw",
                                 "exchange_respond", "exchange_withdraw")),
@@ -108,7 +107,7 @@ NAVIGATION = (
         ("Time off", "time_off", "MANAGERS", ("time_off", "time_off_decide")),
         ("Time clock", "clock", None, ("clock", "adjustment_request")),
         ("Clock stations", "clock_kiosks", "MANAGERS", ("clock_kiosks", "clock_kiosk_close", "clock_kiosk_clear", "person_pin_issue")),
-        ("Time review", "time_review", "TIME_REVIEWERS", ("time_review", "punch_review", "adjustment_review")),
+        ("Timesheets", "time_review", "TIME_REVIEWERS", ("time_review", "punch_detail", "punch_review", "adjustment_review")),
         ("Payroll", "payroll", "PAYROLL", ("payroll", "payroll_approve", "payroll_run_export", "payroll_export")),
         ("Pay codes", "pay_codes", "MANAGERS", ("pay_codes", "pay_code_create", "pay_code_edit", "pay_code_remove")),
     )),
@@ -171,7 +170,7 @@ def navigation(request):
         if roles is not None and membership.role not in groups[roles]:
             continue
         if name == "workspace_payroll" and membership.role not in views.PAYROLL:
-            label = "Time review"
+            label = "Timesheets"
         workspaces_rendered.append({
             "label": label,
             "url": reverse(name),

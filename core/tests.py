@@ -8991,7 +8991,9 @@ class MessageConsentAndDeliveryLifecycleTest(TestCase):
         self.worker = User.objects.create_user(username="consent-ana@example.com", password="pw-consent-ana")
         self.auditor = User.objects.create_user(username="consent-auditor@example.com", password="pw-consent-auditor")
         self.org = Organization.objects.create(legal_name="Gate Keepers LLC", display_name="Gates",
-                                               slug="gates-consent")
+                                               slug="gates-consent", support_email="support@example.com",
+                                               sms_privacy_url="https://example.com/privacy",
+                                               sms_terms_url="https://example.com/sms-terms")
         for user, role in ((self.owner, Membership.Role.OWNER), (self.worker, Membership.Role.OFFICER),
                            (self.auditor, Membership.Role.AUDITOR)):
             Membership.objects.create(user=user, organization=self.org, role=role)
@@ -9243,7 +9245,7 @@ class MessageConsentAndDeliveryLifecycleTest(TestCase):
         # The person who opted out is the only one who can put it back, and doing so lifts the block
         # their own STOP created — nothing else on the number's record.
         warm = handle_inbound_message(self.org, self.PHONE, "START")
-        self.assertIn("again", warm)
+        self.assertIn("enrolled", warm)
         self.assertTrue(sms_opted_in(self.org, self.PHONE))
         self.assertIsNone(active_suppression(self.org, self.PHONE))
         self.assertIsNone(self.reason(self.notice("sms")))
@@ -9366,9 +9368,9 @@ class MessageConsentAndDeliveryLifecycleTest(TestCase):
     def test_the_prompt_is_asked_once_and_either_answer_ends_it(self):
         from .services import current_consent
         self.client.force_login(self.worker)
-        self.assertIn("Text you about your posts", self.client.get(reverse("dashboard")).content.decode())
+        self.assertIn("Receive workforce text alerts?", self.client.get(reverse("dashboard")).content.decode())
         self.client.post(reverse("text_alerts"), {"mobile_phone": self.PHONE, "choice": "no"})
-        self.assertNotIn("Text you about your posts", self.client.get(reverse("dashboard")).content.decode())
+        self.assertNotIn("Receive workforce text alerts?", self.client.get(reverse("dashboard")).content.decode())
         self.assertEqual(MessageConsent.State.REVOKED, current_consent(self.org, self.PHONE).state)
         self.assertEqual(MessageConsent.Source.FIRST_LOGIN, current_consent(self.org, self.PHONE).source)
 
@@ -9453,7 +9455,9 @@ class AudienceChannelRuleTest(TestCase):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.uid = uuid4
-        self.org = Organization.objects.create(legal_name="Channels LLC", display_name="Channels", slug="channels-ntf1")
+        self.org = Organization.objects.create(legal_name="Channels LLC", display_name="Channels", slug="channels-ntf1",
+            support_email="support@example.com", sms_privacy_url="https://example.com/privacy",
+            sms_terms_url="https://example.com/sms-terms")
         self.other_org = Organization.objects.create(legal_name="Elsewhere LLC", display_name="Elsewhere", slug="elsewhere-ntf1")
         self.owner = User.objects.create_user(username="ntf1-owner@example.com", password="pw-ntf1-owner")
         self.officer_user = User.objects.create_user(username="ntf1-officer@example.com", password="pw-ntf1-officer")
@@ -9559,7 +9563,8 @@ class AudienceChannelRuleTest(TestCase):
         self.rule(ChannelAudience.SUBJECT.value, "credential", ["sms"])
         self.grant()
         self.queue(subjects=[self.officer_user.pk])
-        row = Notification.objects.get(recipient=self.officer_user, channel=Notification.Channel.SMS)
+        row = Notification.objects.get(recipient=self.officer_user, channel=Notification.Channel.SMS,
+            event_type="credential.reminder")
         self.assertIsNone(send_block_reason(row))
 
     def grant(self, state=None):

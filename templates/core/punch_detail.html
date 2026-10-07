@@ -1,0 +1,37 @@
+{% extends detail_base %}{% load static %}
+{% block title %}Punch details{% endblock %}
+{% block content %}
+<div class="page narrow"><a href="{% url 'time_review' %}">Back to Timesheets</a>
+<section class="panel" data-punch-detail>
+  <h1>{{ punch.get_kind_display }} — {{ punch.person.full_name }}</h1>
+  <dl><dt>Original captured time</dt><dd>{{ punch.occurred_at }}</dd><dt>Effective time</dt><dd>{{ effective_at }}</dd>
+  <dt>Received</dt><dd>{{ punch.received_at }}</dd><dt>Review</dt><dd>{{ punch.get_review_status_display }} — {{ punch.exception_reason|default:'No exception' }}</dd>
+  <dt>Source</dt><dd>{{ punch.source }}{% if punch.offline %} · Offline{% endif %}{% if kiosk_name %} · {{ kiosk_name }} · PIN verified{% endif %}</dd>
+  <dt>Assigned site</dt><dd>{{ site|default:'No site recorded' }}{% if site %}<br>{{ site.address }}{% endif %}</dd>
+  {% if punch.checkpoint %}<dt>Patrol point</dt><dd>{{ punch.checkpoint.name }}</dd>{% endif %}
+  <dt>GPS coordinates</dt><dd>{% if punch.latitude != None and punch.longitude != None %}{{ punch.latitude }}, {{ punch.longitude }}{% else %}Not captured{% endif %}</dd>
+  <dt>Reported accuracy</dt><dd>{% if location.accuracy_m != None %}{{ location.accuracy_m }} metres{% else %}Not recorded{% endif %}</dd>
+  <dt>Fix age at capture</dt><dd>{% if location.fix_age_seconds != None %}{{ location.fix_age_seconds }} seconds{% else %}Not recorded{% endif %}</dd>
+  {% if distance != None %}<dt>Distance from current site centre</dt><dd>{{ distance }} metres</dd>{% endif %}
+  {% if recorded_policy %}<dt>Geofence policy at capture</dt><dd>{{ recorded_policy.policy_source }} · Version {{ recorded_policy.policy_version }} · {% if recorded_policy.require_geofence %}Required{% else %}Not required{% endif %}</dd>{% endif %}
+  {% if punch.risk_labels %}<dt>Location signals</dt><dd>{{ punch.risk_labels|join:'; ' }}</dd>{% endif %}
+  {% if selfie_visible %}<dt>Photo evidence</dt><dd><a href="{% url 'document_preview' punch.selfie_id %}">Open authorized photo</a></dd>{% endif %}</dl>
+  {% if map_data %}<p>Captured location is device evidence, not proof of physical presence. The site marker and circle reflect the site's current geofence{% if site %} ({{ site.geofence_radius_meters }} metres){% endif %}, not necessarily the historical rule.</p>
+    {% if map_data.provider != 'disabled' %}<a class="button secondary" href="?map=1" data-map-load data-map-library="{% static 'vendor/leaflet/leaflet.js' %}" data-map-style="{% static 'vendor/leaflet/leaflet.css' %}">Load location map</a><p class="muted">Loading the map shares location coordinates and your connection information with the configured map provider. No employee name or management note is sent.</p><div class="punch-map" data-punch-map hidden></div><p role="status" data-map-status></p>{{ map_data|json_script:"punch-map-data" }}{% else %}<p>Maps are disabled. Coordinates remain available above.</p>{% endif %}
+  {% endif %}
+  <h2>Recorded breaks</h2>
+  {% for tour in tours %}{% for period in tour.breaks %}<p>{{ period.starts_at }} to {{ period.ends_at|default:'No end punch' }} · {% if period.paid %}Paid{% else %}Unpaid{% endif %} — {{ period.start.break_pay_reason|default:'Paid by default' }}{% if period.start.pk != punch.pk %} · <a href="{% url 'punch_detail' period.start.pk %}">Break details / classification</a>{% endif %}</p>{% empty %}<p>No break punches recorded for this tour.</p>{% endfor %}{% for issue in tour.issues %}<p class="message warning">{{ issue }}</p>{% endfor %}{% empty %}<p>No paired tour found.</p>{% endfor %}
+  <h2>Holdovers</h2>
+  {% for hold in holdovers %}<p>Scheduled end: {{ hold.scheduled_ends_at }}<br>Expected release: {{ hold.expected_release_at|default:'Awaiting relief' }}<br>Recorded release: {{ hold.held_until|default:'Not recorded' }}<br>{{ hold.get_reason_display }} · Reliever: {{ hold.relief|default:'Not assigned' }}<br>{{ hold.note }}<br>Recorded by {{ hold.recorded_by }} at {{ hold.created_at }}</p>{% empty %}<p>No holdover recorded for this officer on this shift.</p>{% endfor %}
+  <h2>Correct time</h2><p>Requires a reason; the original time remains unchanged. Payroll locks apply.</p>
+  <form method="post" action="{% url 'punch_detail' punch.pk %}{% if request.GET.modal %}?modal=1{% endif %}">{% csrf_token %}{{ correction_form.as_p }}<button class="button" type="submit" name="action" value="correct">Save audited correction</button></form>
+  {% if punch.kind == 'break_start' %}<h2>Break pay classification</h2><form method="post" action="{% url 'punch_detail' punch.pk %}{% if request.GET.modal %}?modal=1{% endif %}">{% csrf_token %}
+    <label>Break pay<select name="paid"><option value="yes"{% if punch.break_paid %} selected{% endif %}>Paid</option><option value="no"{% if not punch.break_paid %} selected{% endif %}>Unpaid</option></select></label>
+    <label>Classification reason<input name="reason" minlength="5" maxlength="255" required></label><button class="button" name="action" value="break_pay" type="submit">Save break classification</button>
+  </form>{% endif %}
+  <h2>Corrections</h2>{% for item in punch.adjustments.all %}<p>{{ item.get_status_display }}: {{ item.proposed_at }} — {{ item.reason }} · Requested by {{ item.requested_by }}{% if item.reviewed_by %} · Reviewed by {{ item.reviewed_by }} at {{ item.reviewed_at }} — {{ item.review_note }}{% endif %}</p>{% empty %}<p>No corrections.</p>{% endfor %}
+  <h2>Review history</h2>{% for event in history %}<p>{{ event.occurred_at }} · {{ event.actor|default:'System' }} · {{ event.action }}{% if event.metadata.reason %} — {{ event.metadata.reason }}{% endif %}{% if event.metadata.note %} — {{ event.metadata.note }}{% endif %}{% if event.metadata.before %}<br>{{ event.metadata.before }} → {{ event.metadata.after }}{% endif %}{% if event.metadata.status %} · {{ event.metadata.status }}{% endif %}{% if event.action == 'break.classified' %} · {% if event.metadata.before_paid %}Paid{% else %}Unpaid{% endif %} → {% if event.metadata.paid %}Paid{% else %}Unpaid{% endif %}{% endif %}</p>{% empty %}<p>No additional review history.</p>{% endfor %}
+</section></div>
+<script src="{% static 'js/punch-map.js' %}" defer></script>
+<script src="{% static 'js/timesheets.js' %}" defer></script>
+{% endblock %}

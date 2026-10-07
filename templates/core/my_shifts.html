@@ -6,6 +6,18 @@
   {% if not person %}
   <div class="message">Your sign-in is not linked to a personnel record. Ask HR / Compliance to send a sign-in invitation.</div>
   {% else %}
+  <section class="panel" id="attendance-alerts" aria-labelledby="my-attendance-heading">
+    <h2 id="my-attendance-heading">My attendance alerts</h2>
+    <p>{{ attendance_open_count }} open alert{{ attendance_open_count|pluralize }} on your personnel record. Contact dispatch or your supervisor about an alert. Clock real arrivals and departures; request a correction if a punch was missed. Do not leave a staffed post just because an alert arrived.</p>
+    <p class="muted">An alert means punch evidence was missing when checked, not a finding of absence. Offline punches may still be syncing. Internal management notes are not shown here.</p>
+    <form method="get" action="{% url 'my_shifts' %}#attendance-alerts" class="filter-bar">
+      <input type="hidden" name="week" value="{{ week.offset }}">
+      <label>Attendance status<select name="attendance_status"><option value="open"{% if attendance_status == 'open' %} selected{% endif %}>Open alerts</option><option value="resolved"{% if attendance_status == 'resolved' %} selected{% endif %}>Resolved alerts</option><option value="all"{% if attendance_status == 'all' %} selected{% endif %}>All alerts</option></select></label><button class="button secondary button-small" type="submit">Show alerts</button>
+    </form>
+    {% if selected_attendance %}{% include 'core/_my_attendance_alert.html' with case=selected_attendance %}{% endif %}
+    {% for case in attendance_alerts %}{% if case.pk != selected_attendance.pk %}{% include 'core/_my_attendance_alert.html' %}{% endif %}{% empty %}<p class="muted">No attendance alerts match this status.</p>{% endfor %}
+    {% if attendance_alerts.has_other_pages %}<nav class="pagination" aria-label="Attendance alert pages"><span>Page {{ attendance_alerts.number }} of {{ attendance_alerts.paginator.num_pages }}</span>{% if attendance_alerts.has_previous %}<a href="{% querystring attendance_page=attendance_alerts.previous_page_number %}#attendance-alerts">Previous alerts</a>{% endif %}{% if attendance_alerts.has_next %}<a href="{% querystring attendance_page=attendance_alerts.next_page_number %}#attendance-alerts">Next alerts</a>{% endif %}</nav>{% endif %}
+  </section>
   {% if not proposals and not incoming %}{% include 'core/_my_week.html' with week_anchor='' %}{% endif %}
   <section class="panel" id="responses"><h2>Your response required</h2><p class="muted">These offers need your answer, not a manager's decision yet. No assignment moves when you accept.</p>
     {% if proposals %}<h3>Trades offered to you</h3>{% endif %}

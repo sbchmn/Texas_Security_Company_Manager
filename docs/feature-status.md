@@ -1,5 +1,67 @@
 # Feature implementation status
 
+## SMS program disclosures (2026-10-07)
+
+- Migration 0070 adds company-specific public HTTPS privacy/terms URLs. Settings ->
+  Messaging delivery lets Owners/Admins configure them and the existing company support
+  email, with an audit event. Missing/invalid details disable new opt-ins and START
+  re-enrollment without discarding existing consent or interfering with STOP.
+- All web consent surfaces use optional unchecked consent, the same workforce-program
+  description, variable frequency, rates, HELP/STOP, support and clickable policy links.
+  Leaving an existing subscriber's checkbox unchecked does not revoke consent; the
+  explicit Turn texts off action does. First-login consent now submits its checkbox,
+  and a checked checkbox cannot override a No/Off action.
+- A new web grant atomically queues one enrollment-confirmation SMS; duplicate granted
+  saves do not create another. Delivery uses the ordinary consent/suppression/retry path.
+  START remains prior-grant-only and returns disclosures directly, without a second SMS.
+  HELP includes support, frequency and rates. STOP records revocation even for a number
+  without earlier consent.
+- Operational SMS rendering and previews append STOP instructions after default/custom
+  wording. Existing queued bodies remain immutable. Legal entity/DBA, policy content,
+  proof screenshots, public accessibility, real production domains, carrier registration
+  and provider-managed keyword responses still need deployment/business verification.
+
+## Timesheets and recorded breaks (2026-10-07)
+
+- Timesheets replaces the primary punch-review destination. Legacy `/time/review/` links
+  redirect with their filters preserved. Worked tours, employee/site/date filters, pending
+  review queues, and correction requests share one surface with the existing reviewer scopes.
+- Previous / This / Next week navigation uses the same configured workweek boundary as the
+  schedule calendar. Custom dates and other filters are available under Advanced filters.
+  Week navigation preserves officer/site/review filters and resets pagination/custom dates;
+  selected payroll periods remain pinned until explicitly switched back to weekly browsing.
+- Punch details open in an accessible modal, with a direct-page fallback. Details include
+  original/effective/received times, authorized photos, location measurements, break evidence,
+  officer-specific holdovers, and correction/review history.
+- Start break and End break are explicit punches on the phone, offline queue, and shared
+  PIN station. They do not clock the officer out. Breaks are paid by default; only an authorized
+  reviewer may classify a recorded break as unpaid, with a reason and audit event.
+- Payroll deducts only completed accepted unpaid break intervals. Missing/invalid sequences
+  remain visible exceptions, not invented times. Legacy manual break designations conflict
+  visibly with recorded breaks and require reconciliation before approval; they are not
+  deducted a second time. New manual break designations are refused on shifts with break punches.
+- Manager corrections append approved adjustments rather than overwrite captured timestamps.
+  Latest approved correction wins. Locks cover original and effective times and corrected
+  target periods. Changes flag existing payroll drafts for regeneration.
+- Optional deployment-admin map configuration supports disabled, Google Maps, or OSM-compatible
+  raster tiles. Maps load only on an explicit user action; site geofences are labeled current,
+  not historical. No employee name or internal note is supplied to map providers.
+
+## Attendance integrated into scheduling (2026-10-07)
+
+- The schedule/calendar includes a scoped Attendance follow-up widget showing current open
+  cases, counts, and the five earliest deadlines. A selected site also filters the widget;
+  week/layout/post filters do not hide current cases. Full manager follow-up and history
+  remain accessible from the widget and notification deep links.
+- My Shifts includes the employee's own paginated attendance alerts, with open/resolved/all
+  filters, shift/deadline/status information, and contact/correction guidance. Internal
+  manager notes, action history, policy metadata, and closing explanations are not disclosed.
+- Non-manager attendance links redirect to their own My Shifts alert; foreign case IDs
+  remain inaccessible and non-manager POSTs remain forbidden. The standalone quick-access
+  link is removed. Today and Schedule workspace pointers lead into the integrated surfaces.
+- These are read-only projections; loading them does not evaluate or change attendance cases,
+  punches, assignments, or pay. The existing worker and manager action workflow are unchanged.
+
 ## Provider webhook settings (2026-10-07)
 
 - Messaging delivery shows full, read-only, copyable URLs for Twilio, Mailjet, Postmark,

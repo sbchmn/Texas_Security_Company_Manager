@@ -60,7 +60,7 @@ class TimeWorkflowTest(TestCase):
         self.correction(self.punch(status=Punch.Review.ACCEPTED))
         self.login()
         today = self.client.get(reverse("workspace_today"))
-        summary = next(row for row in today.context["work_priorities"] if row["label"] == "Time review")
+        summary = next(row for row in today.context["work_priorities"] if row["label"] == "Timesheets")
         self.assertEqual(summary["count"], 2)
         self.assertIsNotNone(summary["oldest"])
         workspace = self.client.get(reverse("workspace_payroll"))

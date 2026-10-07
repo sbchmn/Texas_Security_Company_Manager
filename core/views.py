@@ -13,7 +13,7 @@ from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.db.models.manager import BaseManager
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -505,7 +505,7 @@ def invitation_accept(request, token):
     if existing and (not request.user.is_authenticated or request.user.pk != existing.pk):
         messages.info(request, "Sign in to the invited account before accepting this invitation.")
         return redirect(f'{reverse("account_login")}?next={request.path}')
-    form = None if existing else InvitationAcceptanceForm(request.POST or None)
+    form = None if existing else InvitationAcceptanceForm(request.POST or None, organization=invitation.organization)
     if request.method=="POST" and (existing or form.is_valid()):
         user = existing
         if user is None:
@@ -1429,6 +1429,7 @@ def schedule(request):
     identical to one starting in an hour.
     """
     org = request.organization
+    from .attendance import attendance_widget
     scope = scope_for(request)
     today = timezone.localdate()
     try:
@@ -1502,6 +1503,7 @@ def schedule(request):
         "published_count": sum(1 for shift in shifts if shift.status == Shift.Status.PUBLISHED),
         "draft_count": sum(1 for shift in shifts if shift.status == Shift.Status.DRAFT),
         "authority_scope": scope if scope.restricted else None,
+        "attendance_widget": attendance_widget(org, scope, site),
     })
 
 def _schedule_grid(org, scope, shifts, week_start, leaves, *, today, everyone):
@@ -2080,6 +2082,8 @@ def my_shifts(request):
     """
     person = _linked_person(request)
     if person is None:
+        if request.GET.get("attendance"):
+            raise Http404
         return render(request, "core/my_shifts.html", {"person": None, "upcoming": [], "incoming": [],
                                                    "outgoing": [], "proposals": [], "outgoing_exchanges": []})
     now = timezone.now()
@@ -2145,10 +2149,23 @@ def my_shifts(request):
     except ValueError:
         offset = 0
     week = _my_week(request.organization, person, offset, {shift.pk for shift in upcoming})
+    from .models import AttendanceCase
+    attendance_cases = request.organization.attendance_cases.filter(person=person).select_related("shift__site__client")
+    attendance_status = request.GET.get("attendance_status", "open")
+    if attendance_status not in ("open", "resolved", "all"):
+        messages.error(request, "Unknown attendance filter; showing open alerts.")
+        attendance_status = "open"
+    selected_attendance = None
+    if request.GET.get("attendance"):
+        selected_attendance = get_object_or_404(attendance_cases, pk=_uuid_or_none(request.GET["attendance"]))
+    attendance_rows = attendance_cases if attendance_status == "all" else attendance_cases.filter(status=attendance_status)
+    attendance_page = Paginator(attendance_rows.order_by("-opened_at", "pk"), 5).get_page(request.GET.get("attendance_page"))
     return render(request, "core/my_shifts.html", {"person": person, "upcoming": upcoming, "week": week,
         "incoming": incoming, "outgoing": outgoing, "proposals": proposals,
         "outgoing_exchanges": outgoing_exchanges, "received": received,
-        "received_exchanges": received_exchanges})
+        "received_exchanges": received_exchanges, "attendance_alerts": attendance_page,
+        "attendance_status": attendance_status, "selected_attendance": selected_attendance,
+        "attendance_open_count": attendance_cases.filter(status="open").count()})
 
 
 @membership_required()
@@ -4123,11 +4140,11 @@ def text_alerts(request):
         messages.error(request, "This sign-in is not linked to a personnel record, so there is no number to text.")
         return redirect("dashboard")
     current = current_consent(organization, person.mobile_phone) if person.mobile_phone else None
-    form = TextAlertsForm(request.POST or None, initial={"mobile_phone": person.mobile_phone,
-        "opt_in": bool(current and current.state == MessageConsent.State.GRANTED)})
+    form = TextAlertsForm(request.POST or None, organization=organization,
+        initial={"mobile_phone": person.mobile_phone, "opt_in": False})
     if request.method == "POST" and form.is_valid():
         mobile = form.cleaned_data["mobile_phone"]
-        opted_in = form.cleaned_data["opt_in"]
+        opted_in = form.cleaned_data["opt_in"] and request.POST.get("choice") not in ("off", "no")
         if mobile and person.mobile_phone != mobile:
             person.mobile_phone = mobile
             person.save(update_fields=["mobile_phone"])
@@ -4136,10 +4153,10 @@ def text_alerts(request):
                 state=MessageConsent.State.GRANTED, source=MessageConsent.Source.PROFILE,
                 wording=sms_consent_wording(organization),
                 evidence={"surface": "text_alerts", "ip": client_ip(request)}, actor=request.user)
-            messages.success(request, "Text alerts are on for that number. Reply STOP to any message and"
-                                       " this stops immediately.")
+            messages.success(request, "Text alerts are on for that number. An enrollment confirmation is"
+                                       " queued when consent is newly granted. Reply STOP to opt out.")
             return redirect("text_alerts")
-        if current and current.state == MessageConsent.State.GRANTED:
+        if current and current.state == MessageConsent.State.GRANTED and request.POST.get("choice") in ("off", "no"):
             record_consent(organization=organization, person=person, destination=current.destination,
                 state=MessageConsent.State.REVOKED, source=MessageConsent.Source.PROFILE,
                 wording="turned off from the Text alerts page",
@@ -4174,7 +4191,7 @@ def text_alerts(request):
 
 # NTF-1's surface imports its own three names here rather than joining the block at the top of the
 # file, so the channel-rule views read as one section: what they touch is exactly what they import.
-from .forms import ChannelRuleForm
+from .forms import ChannelRuleForm, SmsProgramForm
 from .models import ChannelRule
 from .services import audience_reach, confirm_sns_subscription
 
@@ -4192,6 +4209,14 @@ def messaging_settings(request):
     about to save can reach anybody.
     """
     organization = request.organization
+    program_form = SmsProgramForm(request.POST or None, instance=organization)
+    if request.method == "POST" and program_form.is_valid():
+        program_form.save()
+        AuditEvent.objects.create(organization=organization, actor=request.user,
+            action="message.sms_program_updated", target_type="organization",
+            target_id=str(organization.pk), metadata={"fields": program_form.changed_data})
+        messages.success(request, "SMS program disclosures saved. New text-alert opt-ins are available.")
+        return redirect("messaging_settings")
     callback_definitions = (
         ("twilio", "Twilio SMS", "Set both the messaging status callback and the incoming-message webhook to this URL, using HTTP POST."),
         ("mailjet", "Mailjet email", "In Mailjet Event Tracking, configure this URL for the email events you want to receive, including bounces, complaints, and unsubscribes."),
@@ -4219,6 +4244,7 @@ def messaging_settings(request):
             editing = None
     return render(request, "core/messaging_settings.html", {
         "organization": organization,
+        "program_form": program_form,
         "webhook_token": organization.webhook_token or "",
         "callbacks": callbacks,
         "rules": rules,
@@ -4601,12 +4627,16 @@ def _time_review_query(request, run=None):
         value = request.GET.get(name, "")
         if value.isdigit():
             params[name] = value
+    for name in ("person", "site", "start", "end", "view", "week"):
+        if request.GET.get(name):
+            params[name] = request.GET[name]
     if run is not None:
         params["run"] = str(run.pk)
     return urlencode(params)
 
 
 @membership_required(*TIME_REVIEWERS)
+@never_cache
 def time_review(request):
     scope=scope_for(request)
     from .time_workflow import pending_time_review_counts
@@ -4627,6 +4657,12 @@ def time_review(request):
             "person", "shift__site", "selfie__document_type"
         )
     ).order_by("-occurred_at")
+    from .timesheet_views import filtered_punches, timesheet_context
+    sheet_queryset = filtered_punches(request, punch_queryset, run)
+    sheet_context = timesheet_context(request, sheet_queryset, run)
+    review_window_filtered = any(request.GET.get(name) for name in ("person", "site", "start", "end", "week"))
+    if review_window_filtered:
+        punch_queryset = sheet_queryset
     if run is not None:
         punch_queryset = punch_queryset.filter(
             occurred_at__gte=run.period_start, occurred_at__lt=run.period_end,
@@ -4659,6 +4695,8 @@ def time_review(request):
             "punch__person", "requested_by", "reviewed_by"
         )
     ).order_by("-created_at")
+    if review_window_filtered:
+        adjustment_queryset = adjustment_queryset.filter(punch_id__in=sheet_queryset.values("pk"))
     if run is not None:
         adjustment_queryset = adjustment_queryset.filter(
             punch__occurred_at__gte=run.period_start, punch__occurred_at__lt=run.period_end,
@@ -4671,7 +4709,12 @@ def time_review(request):
         request.GET.get("adjustment_page")
     )
     pending_counts = pending_time_review_counts(request.organization, scope, run=run)
-    return render(request, "core/time_review.html", {
+    if review_window_filtered:
+        pending_counts["punches"] = sheet_queryset.filter(review_status=Punch.Review.PENDING).count()
+        pending_counts["corrections"] = scope.filter_adjustments(request.organization.punch_adjustments.filter(
+            status=PunchAdjustment.Status.REQUESTED, punch_id__in=sheet_queryset.values("pk"))).count()
+    return render(request, "core/timesheets.html", {
+        **sheet_context,
         "punches": punches,
         "adjustments": adjustments,
         "punch_filter": punch_filter,
@@ -4680,6 +4723,7 @@ def time_review(request):
         "pending_corrections_count": pending_counts["corrections"],
         "selected_run": run, "review_query": _time_review_query(request, run),
         "authority_scope": scope if scope.restricted else None,
+        "review_window_filtered": review_window_filtered,
     })
 
 @require_POST
@@ -4694,12 +4738,18 @@ def punch_review(request,punch_id):
         # Reviewing a punch is the one place where an out-of-scope approval would quietly
         # accept time evidence the actor's own company does not answer for.
         raise Http404
+    state = payroll_lock_state(request.organization, punch.occurred_at, *lock_subject(punch))
+    if state["locked"]:
+        messages.error(request, f"This payroll period is locked — {state['by']}.")
+        return redirect(return_url)
     action=request.POST.get("action"); reason=request.POST.get("reason","").strip()
     if action not in (Punch.Review.ACCEPTED,Punch.Review.REJECTED) or (action==Punch.Review.REJECTED and len(reason)<5):
         messages.error(request,"Choose approve/reject and provide a rejection reason.")
         return redirect(return_url)
     before=punch.review_status;punch.review_status=action;punch.exception_reason=reason;punch.save(update_fields=["review_status","exception_reason"])
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="punch.reviewed",target_type="punch",target_id=str(punch.pk),metadata={"before":before,"after":action,"reason":reason})
+    from .timekeeping import invalidate_drafts
+    invalidate_drafts(punch)
     messages.success(request,"Punch review saved.")
     return redirect(return_url)
 
@@ -4752,8 +4802,15 @@ def adjustment_review(request,adjustment_id):
     if state["locked"]:
         messages.error(request,f"This payroll period is locked — {state['by']}.")
         return redirect(return_url)
+    if status == PunchAdjustment.Status.APPROVED and payroll_lock_state(
+        request.organization, item.proposed_at, *lock_subject(item.punch))["locked"]:
+        messages.error(request, "The corrected time falls in a locked payroll period.")
+        return redirect(return_url)
     item.status=status;item.reviewed_by=request.user;item.reviewed_at=timezone.now();item.review_note=note;item.save(update_fields=["status","reviewed_by","reviewed_at","review_note"])
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="punch_adjustment.reviewed",target_type="punch_adjustment",target_id=str(item.pk),metadata={"status":status,"note":note})
+    if status == PunchAdjustment.Status.APPROVED:
+        from .timekeeping import invalidate_drafts
+        invalidate_drafts(item.punch)
     # The officer is the only party who does not have a screen to check, so the outcome is pushed.
     queue_notice(organization=request.organization,recipients={item.requested_by_id}-{request.user.pk},
         event_type=f"punch.correction_{status}",

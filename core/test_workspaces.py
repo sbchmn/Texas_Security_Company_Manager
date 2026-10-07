@@ -359,7 +359,7 @@ class WorkspaceWorkflowTest(TestCase):
     def test_supervisor_cannot_see_company_payroll_and_dispatcher_has_no_time_review_link(self):
         self.sign_in(Membership.Role.SUPERVISOR)
         page = self.client.get(reverse("workspace_payroll"))
-        self.assertContains(page, "<h1>Time review</h1>")
+        self.assertContains(page, "<h1>Timesheets</h1>")
         self.assertNotContains(page, f'href="{reverse("payroll")}"')
         self.assertNotContains(page, "Latest payroll")
         self.assertEqual(page.context["runs"], [])

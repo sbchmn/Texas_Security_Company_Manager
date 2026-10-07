@@ -30,6 +30,17 @@ def scoped_cases(organization, scope):
     shifts = scope.filter_shifts(organization.shifts.all()).values("pk")
     return organization.attendance_cases.filter(shift_id__in=shifts)
 
+def attendance_widget(organization, scope, site=None):
+    cases = scoped_cases(organization, scope).filter(status=AttendanceCase.Status.OPEN)
+    if site is not None:
+        cases = cases.filter(shift__site=site)
+    return {
+        "total": cases.count(),
+        "arrival": cases.filter(kind=AttendanceCase.Kind.ARRIVAL).count(),
+        "departure": cases.filter(kind=AttendanceCase.Kind.DEPARTURE).count(),
+        "cases": list(cases.select_related("person", "shift__site__client").order_by("deadline_at", "pk")[:5]),
+    }
+
 
 def departure_target(shift):
     latest = shift.hold_overs.filter(Q(officer_id=shift.officer_id) | Q(officer__isnull=True)).order_by("-sequence", "-created_at", "-pk").first()

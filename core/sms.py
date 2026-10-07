@@ -511,7 +511,7 @@ def render_sms(organization, key, context=None, subject="", first_name="", templ
     wording = template if template is not None else wording_for(organization, notice)
     if not values["link"]:
         wording = drop_link(wording)
-    return company_prefix(organization) + tidy(fill(wording, values))
+    return company_prefix(organization) + tidy(fill(wording, values)) + " Reply STOP to opt out."
 
 
 def sample_link(organization, notice, *, base_url=None):
@@ -529,7 +529,7 @@ def preview_sms(organization, notice, template=None, *, base_url=None):
     wording = template if template is not None else wording_for(organization, notice)
     if not values["link"]:
         wording = drop_link(wording)
-    return company_prefix(organization) + tidy(fill(wording, values))
+    return company_prefix(organization) + tidy(fill(wording, values)) + " Reply STOP to opt out."
 
 
 def resolve_key(event_type, sms):

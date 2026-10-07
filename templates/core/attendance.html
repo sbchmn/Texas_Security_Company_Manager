@@ -1,9 +1,9 @@
 {% extends 'base.html' %}
-{% block title %}Live attendance{% endblock %}
+{% block title %}Attendance follow-up{% endblock %}
 {% block content %}
 <div class="page">
-  <div class="page-heading"><div><p class="eyebrow">Operational follow-up</p><h1>Live attendance</h1><p>No recorded punch is not proof of absence or departure. Confirm the officer's status and coverage before deciding. Offline punches may still be syncing. This queue never changes punches, assignments, or pay.</p></div>
-    <div class="actions"><a class="button secondary" href="{% url 'my_shifts' %}">My shifts</a><a class="button secondary" href="{% url 'clock' %}">Time clock</a>{% if can_manage %}<a class="button secondary" href="{% url 'workspace_schedule' %}">Schedule</a>{% endif %}</div>
+  <div class="page-heading"><div><p class="eyebrow">Operational follow-up</p><h1>Attendance follow-up</h1><p>No recorded punch is not proof of absence or departure. Confirm the officer's status and coverage before deciding. Offline punches may still be syncing. This queue never changes punches, assignments, or pay.</p></div>
+    <div class="actions"><a class="button secondary" href="{% url 'my_shifts' %}">My shifts</a><a class="button secondary" href="{% url 'clock' %}">Time clock</a>{% if can_manage %}<a class="button secondary" href="{% url 'schedule' %}#attendance-alerts">Back to schedule</a>{% endif %}</div>
   </div>
   {% include 'core/scope_note.html' %}
   <div class="actions"><span class="pill pending">{{ counts.arrival }} late-arrival case{{ counts.arrival|pluralize }}</span><span class="pill pending">{{ counts.departure }} overdue-departure case{{ counts.departure|pluralize }}</span></div>

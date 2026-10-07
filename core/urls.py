@@ -4,6 +4,7 @@ from . import signing_views
 from . import workspace_views
 from . import attendance_views
 from . import personnel_private_views
+from . import timesheet_views
 
 urlpatterns = [
     path("people/<uuid:person_id>/private/", personnel_private_views.private_personnel, name="private_personnel"),
@@ -78,7 +79,10 @@ urlpatterns = [
     # its confirmation, because the address to fetch arrives inside an unauthenticated body.
     path("settings/messaging/subscriptions/<uuid:event_id>/confirm/", views.messaging_confirm_subscription, name="messaging_confirm_subscription"),
     path("webhooks/<str:provider>/<str:token>/", views.provider_callback, name="provider_callback"),
-    path("time/review/",views.time_review,name="time_review"),path("time/punches/<uuid:punch_id>/review/",views.punch_review,name="punch_review"),path("time/punches/<uuid:punch_id>/correction/",views.adjustment_request,name="adjustment_request"),path("time/adjustments/<uuid:adjustment_id>/review/",views.adjustment_review,name="adjustment_review"),
+    path("timesheets/", views.time_review, name="time_review"),
+    path("time/review/", timesheet_views.legacy_review, name="legacy_time_review"),
+    path("timesheets/punches/<uuid:punch_id>/", timesheet_views.punch_detail, name="punch_detail"),
+    path("time/punches/<uuid:punch_id>/review/",views.punch_review,name="punch_review"),path("time/punches/<uuid:punch_id>/correction/",views.adjustment_request,name="adjustment_request"),path("time/adjustments/<uuid:adjustment_id>/review/",views.adjustment_review,name="adjustment_review"),
     path("payroll/",views.payroll,name="payroll"),path("payroll/codes/",views.pay_codes,name="pay_codes"),path("payroll/codes/new/",views.pay_code_create,name="pay_code_create"),path("payroll/codes/<int:code_id>/edit/",views.pay_code_edit,name="pay_code_edit"),path("payroll/codes/<int:code_id>/remove/",views.pay_code_remove,name="pay_code_remove"),path("payroll/<uuid:run_id>/approve/",views.payroll_approve,name="payroll_approve"),path("payroll/<uuid:run_id>/reopen/",views.payroll_reopen,name="payroll_reopen"),path("payroll/<uuid:run_id>/lock/",views.payroll_segment_lock,name="payroll_segment_lock"),path("payroll/<uuid:run_id>/export/",views.payroll_run_export,name="payroll_run_export"),
     path("settings/security/",views.security_settings,name="security_settings"),
     path("organizations/select/",views.tenant_select,name="tenant_select"),path("settings/domains/",views.domains,name="domains"),path("settings/domains/<int:domain_id>/verify/",views.domain_verify,name="domain_verify"),path("platform/",views.platform_admin,name="platform_admin"),

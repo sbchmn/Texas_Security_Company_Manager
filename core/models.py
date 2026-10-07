@@ -84,6 +84,22 @@ class Organization(models.Model):
     email_from = models.EmailField(blank=True)
     sms_provider = models.CharField(max_length=20, choices=SmsProvider.choices, default=SmsProvider.SNS)
     sms_from = models.CharField(max_length=30, blank=True)
+    sms_privacy_url = models.URLField(max_length=2048, blank=True)
+    sms_terms_url = models.URLField(max_length=2048, blank=True)
+
+    @property
+    def sms_program_ready(self):
+        from django.core.exceptions import ValidationError
+        from django.core.validators import URLValidator, validate_email
+        validate_url = URLValidator(schemes=["https"])
+        try:
+            validate_url(self.sms_privacy_url)
+            validate_url(self.sms_terms_url)
+            validate_email(self.support_email)
+        except ValidationError:
+            return False
+        return bool(self.display_name.strip())
+
     # NTF-4. The path segment a provider callback has to name to reach this company's message log. It is
     # generated on first use, not in a migration, because an empty column on every existing row would
     # collide under a plain unique index — NULL does not, on either backend.
@@ -2523,6 +2539,8 @@ class Punch(models.Model):
         IN = "in", "Clock in"
         OUT = "out", "Clock out"
         CHECKPOINT = "checkpoint", "Checkpoint"
+        BREAK_START = "break_start", "Start break"
+        BREAK_END = "break_end", "End break"
     class Review(models.TextChoices):
         ACCEPTED = "accepted", "Accepted"
         PENDING = "pending", "Pending review"
@@ -2541,6 +2559,8 @@ class Punch(models.Model):
     review_status = models.CharField(max_length=20, choices=Review.choices, default=Review.ACCEPTED)
     exception_reason = models.CharField(max_length=255, blank=True)
     source = models.CharField(max_length=30, default="web")
+    break_paid = models.BooleanField(default=True, help_text="Breaks are paid unless explicitly classified as unpaid by an authorized reviewer.")
+    break_pay_reason = models.CharField(max_length=255, blank=True)
     device_id = models.UUIDField(null=True, blank=True)
     device_sequence = models.PositiveBigIntegerField(null=True, blank=True)
     checkpoint = models.ForeignKey("Checkpoint",on_delete=models.SET_NULL,null=True,blank=True,related_name="punches")

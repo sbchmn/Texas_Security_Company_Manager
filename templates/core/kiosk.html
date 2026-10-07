@@ -31,6 +31,8 @@
 {% if kiosk.site %}<label class="kiosk-point-label">Patrol point<select data-kiosk-checkpoint><option value="">Not a patrol scan</option>{% for point in kiosk.site.checkpoints.all %}{% if point.active %}<option value="{{ point.scan_code }}" data-site="{{ point.site_id }}">{{ point.name }}</option>{% endif %}{% endfor %}</select></label>
 <p class="kiosk-hint">Only points at this station's post are listed. A scan that cannot name a patrol point proves a button was pressed, not that anyone was anywhere.</p>{% endif %}
 <div class="kiosk-actions"><button type="button" class="button" data-kiosk-punch="in">Clock in</button><button type="button" class="button secondary" data-kiosk-punch="out">Clock out</button>{% if kiosk.site %}<button type="button" class="button secondary" data-kiosk-punch="checkpoint">Patrol point</button>{% endif %}</div>
+<div class="kiosk-actions"><button type="button" class="button secondary" data-kiosk-punch="break_start">Start break</button><button type="button" class="button secondary" data-kiosk-punch="break_end">End break</button></div>
+<p class="kiosk-hint">Remain clocked in during your break. Breaks are paid unless explicitly classified as unpaid by an authorized reviewer.</p>
 <button type="button" class="kiosk-finish button text" data-kiosk-finish>Done — forget me</button>
 </div>
 </section>

@@ -1,0 +1,5 @@
+<article class="person-row" id="attendance-{{ case.pk }}"><div>
+  <strong>{{ case.get_kind_display }} &middot; {{ case.get_status_display }}</strong>
+  <p>{{ case.shift.site.client.name }} / {{ case.shift.site.name }} &middot; {{ case.shift.starts_at|date:'D M j, g:i A' }} to {{ case.shift.ends_at|date:'D M j, g:i A' }}</p>
+  <small>Alert deadline {{ case.deadline_at|date:'D M j, g:i A' }} &middot; Observed {{ case.opened_at|date:'D M j, g:i A' }}{% if case.resolved_at %} &middot; Resolved {{ case.resolved_at|date:'D M j, g:i A' }}{% endif %}</small>
+</div></article>

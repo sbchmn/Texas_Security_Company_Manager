@@ -15,6 +15,21 @@ APP_PUBLISHER = {"name": "Bachman Group, LLC", "address": "PO Box 4, Lancaster, 
 # DOTENV_PATH lets CI or a container point at a different env file; the test runner uses it
 # to avoid importing a developer's deployment values.
 load_dotenv(os.getenv("DOTENV_PATH") or BASE_DIR / ".env")
+TIMESHEET_MAP_PROVIDER = os.getenv("TIMESHEET_MAP_PROVIDER", "disabled").lower()
+GOOGLE_MAPS_BROWSER_KEY = os.getenv("GOOGLE_MAPS_BROWSER_KEY", "")
+TIMESHEET_MAP_TILE_URL = os.getenv("TIMESHEET_MAP_TILE_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+TIMESHEET_MAP_ATTRIBUTION = os.getenv("TIMESHEET_MAP_ATTRIBUTION", "© OpenStreetMap contributors")
+if TIMESHEET_MAP_PROVIDER not in ("disabled", "osm", "google"):
+    raise ImproperlyConfigured("TIMESHEET_MAP_PROVIDER must be disabled, osm, or google.")
+if TIMESHEET_MAP_PROVIDER == "google" and not GOOGLE_MAPS_BROWSER_KEY:
+    raise ImproperlyConfigured("Google timesheet maps require GOOGLE_MAPS_BROWSER_KEY.")
+if TIMESHEET_MAP_PROVIDER == "osm":
+    from urllib.parse import urlsplit
+    tile_origin = urlsplit(TIMESHEET_MAP_TILE_URL)
+    if tile_origin.scheme != "https" or not tile_origin.hostname or tile_origin.username or tile_origin.password or "*" in tile_origin.netloc:
+        raise ImproperlyConfigured("Timesheet tiles require an HTTPS URL without credentials or host wildcards.")
+    if not all(part in TIMESHEET_MAP_TILE_URL for part in ("{z}", "{x}", "{y}")):
+        raise ImproperlyConfigured("The tile URL must include {z}, {x}, and {y}.")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 LOGGING = {
     "version": 1,

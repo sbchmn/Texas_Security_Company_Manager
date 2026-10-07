@@ -302,7 +302,7 @@ class LiveAttendanceTest(TestCase):
     def test_history_and_queue_scope_including_cross_tenant(self):
         case = self.case()
         self.client.force_login(self.officer)
-        response = self.client.get(reverse("attendance_detail", args=[case.pk]))
+        response = self.client.get(reverse("attendance_detail", args=[case.pk]), follow=True)
         self.assertContains(response, "Contact dispatch or your supervisor")
         self.assertNotContains(response, "Record follow-up</h3>")
         self.assertEqual(self.client.post(reverse("attendance_detail", args=[case.pk]), {}).status_code, 403)
@@ -335,15 +335,79 @@ class LiveAttendanceTest(TestCase):
         case = self.case()
         self.client.force_login(self.owner)
         today = self.client.get(reverse("workspace_today"))
-        priority = next(item for item in today.context["work_priorities"] if item["label"] == "Live attendance")
+        priority = next(item for item in today.context["work_priorities"] if item["label"] == "Attendance follow-up")
         self.assertEqual(priority["count"], 1)
-        self.assertContains(self.client.get(reverse("workspace_schedule")), "Live attendance (1)")
+        self.assertEqual(priority["url"], reverse("schedule") + "#attendance-alerts")
+        self.assertContains(self.client.get(reverse("workspace_schedule")), "Attendance follow-up (1)")
         for user, member in ((self.owner, self.owner_member),
                              (self.officer, Membership.objects.get(user=self.officer))):
             notification = Notification.objects.filter(recipient=user, event_type="punch.late_arrival").first()
             request = SimpleNamespace(user=user, organization=self.org, membership=member)
             action = notification_action(request, notification)
             self.assertEqual(action["url"], reverse("attendance_detail", args=[case.pk]))
+
+    def test_schedule_widget_scope_site_filter_and_no_week_filter_or_get_mutation(self):
+        case = self.case()
+        self.client.force_login(self.owner)
+        count = AttendanceCaseAction.objects.count()
+        response = self.client.get(reverse("schedule"), {"week": 4, "show": "open", "layout": "list"})
+        self.assertEqual(response.context["attendance_widget"]["total"], 1)
+        self.assertContains(response, reverse("attendance_detail", args=[case.pk]))
+        self.assertContains(response, "Attendance follow-up")
+        self.assertNotIn(reverse("attendance_queue"), {item["url"] for item in response.context["quick_links"]})
+        self.assertNotContains(response, ">Live attendance<")
+        other_site = Site.objects.create(organization=self.org, client=self.customer, name="Other gate")
+        response = self.client.get(reverse("schedule"), {"site": other_site.pk})
+        self.assertEqual(response.context["attendance_widget"]["total"], 0)
+        hidden, _ = self.supervisor(covered=False)
+        self.client.force_login(hidden)
+        response = self.client.get(reverse("schedule"))
+        self.assertEqual(response.context["attendance_widget"]["total"], 0)
+        self.assertNotContains(response, reverse("attendance_detail", args=[case.pk]))
+        self.assertEqual(AttendanceCaseAction.objects.count(), count)
+
+    def test_my_shifts_attendance_is_private_paginated_and_deep_links_work(self):
+        case = self.case()
+        follow_up(case, self.owner, "contact", "Internal management note must remain private.")
+        other = Person.objects.create(organization=self.org, first_name="Peer", last_name="Officer")
+        peer_shift = Shift.objects.create(organization=self.org, site=self.site, officer=other,
+            starts_at=self.now - timedelta(minutes=20), ends_at=self.now + timedelta(hours=1),
+            status=Shift.Status.PUBLISHED)
+        reconcile_shift(peer_shift.pk, now=self.now)
+        peer_case = AttendanceCase.objects.get(person=other)
+        self.client.force_login(self.officer)
+        response = self.client.get(reverse("attendance_detail", args=[case.pk]), follow=True)
+        self.assertContains(response, "My attendance alerts")
+        self.assertNotContains(response, "Internal management note must remain private.")
+        self.assertNotContains(response, "Follow-up history")
+        self.assertNotContains(response, reverse("attendance_detail", args=[peer_case.pk]))
+        self.assertEqual(response.context["selected_attendance"], case)
+        self.assertEqual(self.client.get(reverse("my_shifts"), {"attendance": peer_case.pk}).status_code, 404)
+        self.assertEqual(self.client.get(reverse("my_shifts"), {"attendance": "invalid"}).status_code, 404)
+        self.assertRedirects(self.client.get(reverse("attendance_queue")), reverse("my_shifts") + "#attendance-alerts")
+        follow_up(case, self.owner, "closed", "Internal closing reason is also private.")
+        response = self.client.get(reverse("my_shifts"), {"attendance_status": "resolved"})
+        self.assertContains(response, "Resolved")
+        self.assertNotContains(response, "Internal closing reason is also private.")
+        self.assertEqual(response.context["attendance_open_count"], 0)
+        self.assertContains(self.client.get(reverse("attendance_detail", args=[case.pk]), follow=True), "Resolved")
+        for number in range(6):
+            shift = Shift.objects.create(organization=self.org, site=self.site, officer=self.person,
+                starts_at=self.now - timedelta(minutes=20 + number), ends_at=self.now + timedelta(hours=2),
+                status=Shift.Status.PUBLISHED)
+            reconcile_shift(shift.pk, now=self.now)
+        response = self.client.get(reverse("my_shifts"), {"attendance_page": 2})
+        self.assertEqual(response.context["attendance_alerts"].number, 2)
+        self.assertEqual(len(response.context["attendance_alerts"]), 1)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.get(reverse("my_shifts")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("my_shifts"), {"attendance": case.pk}).status_code, 404)
+        widget = self.client.get(reverse("schedule")).context["attendance_widget"]
+        self.assertEqual(widget["total"], 7)
+        self.assertEqual(len(widget["cases"]), 5)
+        expected = list(self.org.attendance_cases.filter(status=AttendanceCase.Status.OPEN)
+                        .order_by("deadline_at", "pk").values_list("pk", flat=True)[:5])
+        self.assertEqual([row.pk for row in widget["cases"]], expected)
 
     def test_departure_email_override_and_default_wording_link(self):
         self.departure()
@@ -454,7 +518,7 @@ class LiveAttendanceTest(TestCase):
         response = self.client.get(reverse("time_policy_override", args=[override.pk]))
         self.assertContains(response, 'value="no" selected')
         self.assertContains(response, 'value="0"')
-        self.assertContains(self.client.get(reverse("time_policy")), "Live attendance policies")
+        self.assertContains(self.client.get(reverse("time_policy")), "Attendance alert policies")
 
     def test_punch_resolution_does_not_upgrade_the_parent_shift_lock(self):
         case = self.case()

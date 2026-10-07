@@ -3,7 +3,7 @@ import re
 from django import forms
 from django.contrib.auth.password_validation import validate_password
 from .models import PERSONNEL_CATEGORIES, ROTATING_PRESETS, SERIES_MAX_DAYS, WEEKDAY_CHOICES, AuthorityScope, AvailabilityRule, ChannelRule, Checkpoint, Client, ClockKiosk, ComplianceRule, Credential, CredentialType, CustomFieldDefinition, DispositionRequest, DocumentType, Branch, ImportBatch, Membership, MessageConsent, Notification, OnboardingItem, Organization, PayCode, Person, PersonDocument, Shift, ShiftTemplate, Site, TimeOffRequest, TimePolicy, TimePolicyOverride, TrainingRecord
-from .services import normalize_destination, validate_clock_pin
+from .services import normalize_destination, sms_consent_wording, sms_enrollment_message, validate_clock_pin
 from .form_ui import InheritedPostOrdersForm, WorkflowForm, WorkflowModelForm
 
 class MembershipInvitationForm(WorkflowForm):
@@ -103,7 +103,65 @@ class AuthorityScopeForm(WorkflowModelForm):
             "follows_own_branch": "Their authority follows the branch on their own personnel file, including after a reassignment. Use this instead of naming a branch, never alongside it.",
         }
 
-class InvitationAcceptanceForm(WorkflowForm):
+class SmsConsentFormMixin:
+    sms_consent_field = "opt_in"
+
+    def __init__(self, *args, organization=None, **kwargs):
+        self.sms_organization = organization
+        super().__init__(*args, **kwargs)
+        field = self.fields[self.sms_consent_field]
+        field.label = "I agree to receive workforce text alerts"
+        field.disabled = organization is None or not organization.sms_program_ready
+        if organization is not None:
+            from django.utils.html import format_html
+            field.help_text = (format_html(
+                '{} <a href="{}">SMS Terms</a> and <a href="{}">Privacy Policy</a>.',
+                sms_consent_wording(organization), organization.sms_terms_url,
+                organization.sms_privacy_url) if organization.sms_program_ready
+                else sms_consent_wording(organization))
+
+    def clean(self):
+        data = super().clean()
+        if (self.data.get(self.sms_consent_field)
+                and (self.sms_organization is None or not self.sms_organization.sms_program_ready)):
+            self.add_error(self.sms_consent_field, "New SMS opt-ins are unavailable until the company configures SMS terms, privacy and support information.")
+        return data
+
+
+class SmsProgramForm(WorkflowModelForm):
+    class Meta:
+        model = Organization
+        fields = ["sms_privacy_url", "sms_terms_url", "support_email"]
+        labels = {"sms_privacy_url": "SMS privacy policy URL", "sms_terms_url": "SMS terms URL",
+                  "support_email": "SMS / company support email"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in self.fields:
+            self.fields[name].required = True
+        self.fields["support_email"].help_text = "A monitored support address shown in consent, enrollment and HELP messages."
+        for name in ("sms_privacy_url", "sms_terms_url"):
+            self.fields[name].help_text = "Public HTTPS URL for this company's published policy; no login required."
+
+    def clean(self):
+        data = super().clean()
+        for name in ("sms_privacy_url", "sms_terms_url"):
+            value = data.get(name, "")
+            if value and not value.startswith("https://"):
+                self.add_error(name, "Use a public HTTPS URL.")
+        if not self.errors:
+            organization = Organization(display_name=self.instance.display_name,
+                support_email=data["support_email"], sms_terms_url=data["sms_terms_url"],
+                sms_privacy_url=data["sms_privacy_url"])
+            if not organization.sms_program_ready:
+                raise forms.ValidationError("Set the company display name in Company settings before enabling SMS opt-ins.")
+            if len(sms_consent_wording(organization)) > 4096 or len(sms_enrollment_message(organization)) > 1024:
+                raise forms.ValidationError("The SMS disclosures are too long. Use shorter company-owned policy URLs or a shorter support address.")
+        return data
+
+
+class InvitationAcceptanceForm(SmsConsentFormMixin, WorkflowForm):
+    sms_consent_field = "text_alerts"
     first_name = forms.CharField(max_length=150)
     last_name = forms.CharField(max_length=150)
     password = forms.CharField(widget=forms.PasswordInput, min_length=12, help_text="Use at least 12 characters.")
@@ -606,7 +664,7 @@ class ClockKioskForm(WorkflowModelForm):
             "site": "Where the station physically stands. A punch taken here is placed at this post.",
         }
 
-class TextAlertsForm(WorkflowForm):
+class TextAlertsForm(SmsConsentFormMixin, WorkflowForm):
     """The officer's own text-message decision (NTF-4), number and consent in one submit.
 
     Split from ``PersonForm`` because the two are answered by different people for different reasons:

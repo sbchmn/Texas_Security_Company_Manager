@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}{% if can_payroll %}Time & Payroll{% else %}Time review{% endif %}{% endblock %}
+{% block title %}{% if can_payroll %}Time & Payroll{% else %}Timesheets{% endif %}{% endblock %}
 
 {% block content %}
 <div class="page">
   <div class="page-heading">
     <div>
-      <h1>{% if can_payroll %}Time & Payroll{% else %}Time review{% endif %}</h1>
+      <h1>{% if can_payroll %}Time & Payroll{% else %}Timesheets{% endif %}</h1>
       <p>{% if can_payroll %}Review time exceptions, then generate and approve payroll.{% else %}Review your team's punches and correction requests.{% endif %}</p>
     </div>
   </div>
@@ -25,7 +25,7 @@
           {% endfor %}
         </ul>
       {% endif %}
-      <div class="card-actions"><a class="button button-small" href="{% url 'time_review' %}">Review time queue</a></div>
+      <div class="card-actions"><a class="button button-small" href="{% url 'time_review' %}#review-queues">Review Timesheets</a></div>
     </article>
 
     {% if can_payroll %}

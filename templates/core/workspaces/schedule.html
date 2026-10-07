@@ -11,7 +11,7 @@
     <div class="actions">
       <a class="button" href="{% url 'shift_create' %}">+ New post</a>
       <a class="button secondary" href="{% url 'schedule' %}">View calendar</a>
-      <a class="button secondary" href="{% url 'attendance_queue' %}">Live attendance ({{ attendance_count }})</a>
+      <a class="button secondary" href="{% url 'schedule' %}#attendance-alerts">Attendance follow-up ({{ attendance_count }})</a>
     </div>
   </div>
 

@@ -3,6 +3,16 @@
 <p>What the email and text providers have told us back, who is blocked from receiving anything, and every consent decision on record. DD requires these events to be <em>processed and retained</em>, which means both a table you can read and a send path that consults it.</p></div><div class="actions"><a class="button" href="{% url 'sms_templates' %}">Notification wording</a><a class="button secondary" href="{% url 'settings' %}">Company settings</a><a class="button secondary" href="{% url 'notifications' %}">Notifications</a></div></div>
 
 <section class="panel">
+<h2>SMS program disclosures</h2>
+{% if organization.sms_program_ready %}<p class="message">New employee SMS opt-ins are available.</p>
+{% else %}<p class="message warning">New SMS opt-ins and START re-enrollment are disabled until these details are configured. Existing consent is preserved; STOP still works.</p>{% endif %}
+<p>Workforce text alerts cover scheduling, coverage, attendance, timecards, payroll, credentials, training, onboarding and employment documents. Message frequency varies. These settings do not enable SMS delivery rules or register a carrier campaign.</p>
+<form method="post" class="data-form">{% csrf_token %}{{ program_form.as_div }}
+<div class="form-actions"><button class="button" type="submit">Save SMS program disclosures</button></div></form>
+<p class="helptext">The published policies must name the sending company. The privacy policy must explain collection and use and state that SMS opt-in data is not sold or shared for third-party marketing. SMS terms must describe the program, variable frequency, rates, support, HELP and STOP, link to the privacy policy, and explain that carriers are not liable for delayed or undelivered messages. Review the policies yourself; TSCM validates URL format, not their content or public accessibility.</p>
+</section>
+
+<section class="panel">
 <h2>Provider webhook URLs</h2>
 <p class="muted">Give the provider the URL for the channel it posts about. The address is a secret: it is what identifies the company to the endpoint, so it belongs in a provider's configuration and not in a shared screenshot.</p>
 {% if webhook_token %}

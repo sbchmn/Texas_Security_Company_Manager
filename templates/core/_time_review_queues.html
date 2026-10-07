@@ -1,9 +1,7 @@
-{% extends 'base.html' %}{% block title %}Time review{% endblock %}
-{% block content %}
-<div class="page">
-  <div class="page-heading"><div><p class="eyebrow">Time and attendance</p><h1>Review punches</h1><p>Resolve geofence exceptions and correction requests without changing raw evidence.</p></div></div>
-  {% include 'core/scope_note.html' %}
-  <p><a href="{% url 'attendance_queue' %}">Live attendance follow-up</a> is separate from payroll evidence review. Pending punches count as recorded evidence for live alerts; rejected punches do not.</p>
+<section id="review-queues">
+  <h2>Needs review and punch history</h2>
+  <p class="muted">{% if review_window_filtered %}Review queues and pending counts follow the selected week/date range and officer/site filters.{% else %}Review queues include all dates unless you choose a week, apply advanced filters, or select a payroll period. Counts show pending work across your authority scope for the selected payroll period, if any.{% endif %}</p>
+  <p>{% if can_manage_people %}<a href="{% url 'schedule' %}#attendance-alerts">Attendance follow-up</a>{% else %}Operational attendance follow-up{% endif %} is separate from payroll evidence review. Pending punches count as recorded evidence for live alerts; rejected punches do not.</p>
   {% if selected_run %}<section class="panel"><h2>Selected payroll period</h2><p>{{ selected_run.period_start|date:'M j, Y H:i' }} &ndash; {{ selected_run.period_end|date:'M j, Y H:i' }}. Both queues below are limited to this period.</p><a class="button secondary" href="{% url 'payroll' %}?run={{ selected_run.pk }}">Return to this payroll period</a></section>{% endif %}
   <section class="panel table-panel">
     <h2>Punches <span class="pill pending">{{ pending_count }} pending</span></h2>
@@ -15,13 +13,14 @@
         <option value="all" {% if punch_filter == 'all' %}selected{% endif %}>All punches</option>
       </select>
       <input type="hidden" name="adjustments" value="{{ adjustment_filter }}">
+      {% include 'core/_timesheet_filter_hidden.html' %}
       {% if selected_run %}<input type="hidden" name="run" value="{{ selected_run.pk }}">{% endif %}
       <button class="button secondary button-small" type="submit">Apply</button>
     </form>
     <div class="table-wrap"><table>
       <thead><tr><th>Officer</th><th>Event</th><th>Time</th><th>Evidence</th><th>Review</th></tr></thead>
       <tbody>{% for punch in punches.object_list %}<tr>
-        <td>{{ punch.person.full_name }}</td><td>{{ punch.get_kind_display }}</td><td>{{ punch.occurred_at }}</td>
+        <td>{{ punch.person.full_name }}</td><td><a href="{% url 'punch_detail' punch.pk %}" data-punch-detail-link>{{ punch.get_kind_display }}</a></td><td>{{ punch.occurred_at }}</td>
         <td>
           {% if punch.station_name %}<div class="tags"><span>{{ punch.station_name }} &middot; PIN-verified</span></div>{% endif %}
           {% if punch.offline %}<div class="tags"><span>captured offline</span></div>{% endif %}
@@ -39,8 +38,8 @@
     </table></div>
     {% if punches.has_other_pages %}
       <nav class="pagination" aria-label="Punch pages"><span class="muted">{{ punches.paginator.count }} punches · page {{ punches.number }} of {{ punches.paginator.num_pages }}</span><div class="actions">
-        {% if punches.has_previous %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.previous_page_number }}&amp;adjustment_page={{ adjustments.number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">← Previous</a>{% endif %}
-        {% if punches.has_next %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.next_page_number }}&amp;adjustment_page={{ adjustments.number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">Next →</a>{% endif %}
+        {% if punches.has_previous %}<a class="button secondary button-small" href="{% querystring punch_page=punches.previous_page_number %}#review-queues">← Previous</a>{% endif %}
+        {% if punches.has_next %}<a class="button secondary button-small" href="{% querystring punch_page=punches.next_page_number %}#review-queues">Next →</a>{% endif %}
       </div></nav>
     {% elif punches.paginator.count %}<p class="muted pagination-total">{{ punches.paginator.count }} punch{{ punches.paginator.count|pluralize:"es" }} on this page.</p>{% endif %}
   </section>
@@ -54,6 +53,7 @@
         <option value="all" {% if adjustment_filter == 'all' %}selected{% endif %}>All requests</option>
       </select>
       <input type="hidden" name="punches" value="{{ punch_filter }}">
+      {% include 'core/_timesheet_filter_hidden.html' %}
       {% if selected_run %}<input type="hidden" name="run" value="{{ selected_run.pk }}">{% endif %}
       <button class="button secondary button-small" type="submit">Apply</button>
     </form>
@@ -71,10 +71,9 @@
     </table></div>
     {% if adjustments.has_other_pages %}
       <nav class="pagination" aria-label="Correction request pages"><span class="muted">{{ adjustments.paginator.count }} requests · page {{ adjustments.number }} of {{ adjustments.paginator.num_pages }}</span><div class="actions">
-        {% if adjustments.has_previous %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.number }}&amp;adjustment_page={{ adjustments.previous_page_number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">← Previous</a>{% endif %}
-        {% if adjustments.has_next %}<a class="button secondary button-small" href="?punches={{ punch_filter }}&amp;adjustments={{ adjustment_filter }}&amp;punch_page={{ punches.number }}&amp;adjustment_page={{ adjustments.next_page_number }}{% if selected_run %}&amp;run={{ selected_run.pk }}{% endif %}">Next →</a>{% endif %}
+        {% if adjustments.has_previous %}<a class="button secondary button-small" href="{% querystring adjustment_page=adjustments.previous_page_number %}#review-queues">← Previous</a>{% endif %}
+        {% if adjustments.has_next %}<a class="button secondary button-small" href="{% querystring adjustment_page=adjustments.next_page_number %}#review-queues">Next →</a>{% endif %}
       </div></nav>
     {% elif adjustments.paginator.count %}<p class="muted pagination-total">{{ adjustments.paginator.count }} requests — all of them, on this page.</p>{% endif %}
   </section>
-</div>
-{% endblock %}
+</section>

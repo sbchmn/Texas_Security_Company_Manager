@@ -1,0 +1,51 @@
+{% extends 'base.html' %}{% load static %}
+{% block title %}Timesheets{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-heading"><div><p class="eyebrow">Time and attendance</p><h1>Timesheets</h1><p>Review worked tours, recorded breaks, holdovers, and punch evidence. Corrections preserve the original capture.</p></div><a class="button secondary" href="#review-queues">Needs review: {{ pending_count }} punches / {{ pending_corrections_count }} corrections</a></div>
+  {% include 'core/scope_note.html' %}
+  <section class="panel">
+    {% if selected_run %}
+    <div class="message">Pinned to payroll period {{ selected_run.period_start }} – {{ selected_run.period_end }}. <a href="{% querystring run=None week=0 start=None end=None sheet_page=None punch_page=None adjustment_page=None %}">Browse schedule weeks instead</a>.</div>
+    {% else %}
+    <div class="schedule-toolbar">
+      <nav class="segmented" aria-label="Timesheet week">
+        {% if sheet_previous != None %}<a href="{% querystring week=sheet_previous start=None end=None sheet_page=None punch_page=None adjustment_page=None %}" aria-label="Previous week">&larr; Previous week</a>{% else %}<span aria-disabled="true">Previous week</span>{% endif %}
+        <a href="{% querystring week=0 start=None end=None sheet_page=None punch_page=None adjustment_page=None %}"{% if sheet_current %} aria-current="page"{% endif %}>This week</a>
+        {% if sheet_next != None %}<a href="{% querystring week=sheet_next start=None end=None sheet_page=None punch_page=None adjustment_page=None %}" aria-label="Next week">Next week &rarr;</a>{% else %}<span aria-disabled="true">Next week</span>{% endif %}
+      </nav>
+      <strong>{{ sheet_start|date:'M j' }} – {{ sheet_end|date:'M j, Y' }}{% if sheet_custom %} · Custom range{% endif %}</strong>
+    </div>
+    {% endif %}
+    <details{% if sheet_advanced %} open{% endif %}>
+      <summary>Advanced filters</summary>
+    <form method="get" class="filter-bar">
+      {% if request.GET.punches %}<input type="hidden" name="punches" value="{{ request.GET.punches }}">{% endif %}
+      {% if request.GET.adjustments %}<input type="hidden" name="adjustments" value="{{ request.GET.adjustments }}">{% endif %}
+      {% if selected_run %}<input type="hidden" name="run" value="{{ selected_run.pk }}"><p>Selected payroll period: {{ selected_run.period_start }} to {{ selected_run.period_end }}</p>{% else %}
+      <input type="hidden" name="week" value="{{ sheet_offset }}">
+      <label>From<input type="date" name="start" value="{{ sheet_start|date:'Y-m-d' }}" required></label>
+      <label>Through<input type="date" name="end" value="{{ sheet_end|date:'Y-m-d' }}" required></label>{% endif %}
+      <label>Officer<select name="person"><option value="">All officers in scope</option>{% for person in sheet_people %}<option value="{{ person.pk }}"{% if request.GET.person == person.pk|stringformat:'s' %} selected{% endif %}>{{ person.full_name }}</option>{% endfor %}</select></label>
+      <label>Site<select name="site"><option value="">All sites in scope</option>{% for site in sheet_sites %}<option value="{{ site.pk }}"{% if request.GET.site == site.pk|stringformat:'s' %} selected{% endif %}>{{ site.client.name }} / {{ site.name }}</option>{% endfor %}</select></label>
+      <label>View<select name="view"><option value="all">All tours</option><option value="review"{% if sheet_view == 'review' %} selected{% endif %}>Tours needing review</option></select></label>
+      <button class="button" type="submit">Apply advanced filters</button>
+    </form>
+    </details>
+    <p class="muted">Tours with punches in this window include their surrounding evidence so an overnight shift is not cut in half. Hours below are for the full tour: elapsed time less explicitly unpaid recorded breaks, before payroll rounding and other pay categories. Paid breaks remain included. Pending evidence is visible here but is not approved payroll time. A missing punch is never filled in automatically.</p>
+    <div class="table-wrap"><table><thead><tr><th>Officer / site</th><th>Clock in</th><th>Clock out</th><th>Recorded breaks</th><th>Hours before rounding</th><th>Evidence / issues</th></tr></thead><tbody>
+    {% for tour in tours %}<tr><td>{{ tour.start.person.full_name }}<br>{{ tour.start.shift.site|default:'No assigned site' }}</td>
+      <td><a href="{% url 'punch_detail' tour.start.pk %}" data-punch-detail-link>{{ tour.starts_at }}</a></td>
+      <td>{% if tour.end %}<a href="{% url 'punch_detail' tour.end.pk %}" data-punch-detail-link>{{ tour.ends_at }}</a>{% else %}Not recorded{% endif %}</td>
+      <td>{% for period in tour.breaks %}<div><a href="{% url 'punch_detail' period.start.pk %}" data-punch-detail-link>{{ period.starts_at|date:'H:i' }} – {% if period.ends_at %}{{ period.ends_at|date:'H:i' }}{% else %}not ended{% endif %}</a> · {% if period.paid %}Paid{% else %}Unpaid{% endif %}</div>{% empty %}No recorded breaks{% endfor %}</td>
+      <td>{% if tour.hours != None %}{{ tour.hours|floatformat:2 }}{% else %}Incomplete{% endif %}</td>
+      <td>{% if tour.needs_review %}<span class="pill pending">Needs review</span>{% endif %}{% for issue in tour.issues %}<p>{{ issue }}</p>{% endfor %}</td>
+    </tr>{% empty %}<tr><td colspan="6">No worked tours match this view.</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% if sheet_page.has_other_pages %}<nav class="pagination" aria-label="Timesheet pages"><span>Page {{ sheet_page.number }} of {{ sheet_page.paginator.num_pages }}</span>{% if sheet_page.has_previous %}<a href="{% querystring sheet_page=sheet_page.previous_page_number %}">Previous</a>{% endif %}{% if sheet_page.has_next %}<a href="{% querystring sheet_page=sheet_page.next_page_number %}">Next</a>{% endif %}</nav>{% endif %}
+  </section>
+  {% include 'core/_time_review_queues.html' %}
+</div>
+<dialog data-timesheet-dialog class="timesheet-dialog" aria-label="Punch details"><button type="button" class="button secondary" data-timesheet-close>Close</button><p role="status" data-timesheet-status></p><div data-timesheet-body></div></dialog>
+<script src="{% static 'js/timesheets.js' %}" defer></script>
+{% endblock %}
