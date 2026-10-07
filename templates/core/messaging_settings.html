@@ -3,15 +3,26 @@
 <p>What the email and text providers have told us back, who is blocked from receiving anything, and every consent decision on record. DD requires these events to be <em>processed and retained</em>, which means both a table you can read and a send path that consults it.</p></div><div class="actions"><a class="button" href="{% url 'sms_templates' %}">Notification wording</a><a class="button secondary" href="{% url 'settings' %}">Company settings</a><a class="button secondary" href="{% url 'notifications' %}">Notifications</a></div></div>
 
 <section class="panel">
-<h2>Callback address</h2>
+<h2>Provider webhook URLs</h2>
 <p class="muted">Give the provider the URL for the channel it posts about. The address is a secret: it is what identifies the company to the endpoint, so it belongs in a provider's configuration and not in a shared screenshot.</p>
-{% if webhook_token %}<div class="invite-link"><p><code>/webhooks/twilio/&lt;token&gt;/</code> — text status and inbound STOP/HELP<br>
-<code>/webhooks/mailjet/&lt;token&gt;/</code> · <code>/webhooks/postmark/&lt;token&gt;/</code> · <code>/webhooks/sns/&lt;token&gt;/</code> — email delivery events</p>
-<p><strong>{{ request.scheme }}://{{ request.get_host }}{% url 'provider_callback' provider='twilio' token=webhook_token %}</strong></p>
-<form method="post" action="{% url 'messaging_rotate_token' %}">{% csrf_token %}<button class="button secondary button-small">Issue a new address</button></form></div>
-{% else %}<p class="muted">No address has been issued yet — it is created the first time a consent decision or a callback needs it, or press the button below.</p>
-<form method="post" action="{% url 'messaging_rotate_token' %}">{% csrf_token %}<button class="button button-small">Create the callback address</button></form>{% endif %}
-<p class="helptext"><strong>What proves a callback came from the provider.</strong> Twilio signs its posts, and when <code>TWILIO_AUTH_TOKEN</code> is configured an unsigned or wrongly signed post is refused outright. Amazon SNS and Mailjet document nothing equivalent on this path, so a post from them is accepted on the strength of the address and TLS, and the retained event is marked <em>unverified</em>. That difference is recorded per event rather than averaged into a general claim about the endpoint.</p>
+{% if webhook_token %}
+<div class="data-form">
+{% for callback in callbacks %}
+<div>
+  <label for="webhook-{{ callback.provider }}">{{ callback.label }}</label>
+  <input id="webhook-{{ callback.provider }}" type="text" value="{{ callback.url }}" readonly autocomplete="off" spellcheck="false" aria-describedby="webhook-help-{{ callback.provider }}">
+  <p class="helptext" id="webhook-help-{{ callback.provider }}">{{ callback.instructions }}</p>
+  <button type="button" class="button secondary button-small" data-copy-input="webhook-{{ callback.provider }}" aria-label="Copy {{ callback.label }} webhook URL">Copy URL</button>
+  <span data-copy-status role="status" aria-live="polite"></span>
+</div>
+{% endfor %}
+</div>
+<p class="helptext">Use your public HTTPS domain when configuring providers. Localhost URLs cannot be reached by external providers. Each URL uses the same company secret, with a different provider path.</p>
+<p class="helptext"><strong>Rotating affects every provider.</strong> All old webhook URLs stop working immediately. Update every configured provider, including existing SNS subscriptions, after rotation.</p>
+<form method="post" action="{% url 'messaging_rotate_token' %}" data-confirm="Rotate all provider webhook URLs? Every old Twilio, Mailjet, Postmark, and SNS URL will stop working immediately.">{% csrf_token %}<button class="button secondary button-small">Rotate all webhook URLs</button></form>
+{% else %}<p class="muted">No webhook URLs have been issued yet. Create them below to see an address for every supported provider. Viewing this page does not create or rotate the secret.</p>
+<form method="post" action="{% url 'messaging_rotate_token' %}">{% csrf_token %}<button class="button button-small">Create provider webhook URLs</button></form>{% endif %}
+<p class="helptext"><strong>What this build verifies.</strong> Twilio signatures are required when <code>TWILIO_AUTH_TOKEN</code> is configured. Without it, Twilio events are unverified. Mailjet, Postmark, and SNS callbacks currently rely on the secret URL and HTTPS and are retained as <em>unverified</em>; this build does not validate their provider signatures.</p>
 <p class="helptext">An SNS subscription also has to be confirmed before AWS will publish anything to it. The confirmation request goes to a URL inside the payload, so this build never follows it on its own — the address arrives in a body that an unauthenticated caller wrote, and fetching whatever such a body names is a way to make this server open its own cloud credentials. A pending one is listed below for a person who can see the topic it came from.</p>
 {% if pending_subscriptions %}<h3>Waiting to be confirmed ({{ pending_subscriptions|length }})</h3>
 {% for item in pending_subscriptions %}<div class="person-row"><div><strong>{{ item.destination }}</strong><small>from <code>{{ item.raw.subscribe_url_host }}</code> · {{ item.created_at|date:'M j, Y, g:i A' }}{% if item.raw.subscription_arn %} · {{ item.raw.subscription_arn }}{% endif %}</small></div>

@@ -307,15 +307,16 @@ services:
       SESSION_REMEMBER_DAYS: ${DOCUSEAL_SESSION_REMEMBER_DAYS:-7}
       PRESIGNED_URLS_EXPIRE_MINUTES: ${DOCUSEAL_PRESIGNED_URLS_EXPIRE_MINUTES:-240}
       FILE_URLS_EXPIRE_MINUTES: ${DOCUSEAL_FILE_URLS_EXPIRE_MINUTES:-40}
-      # Mail is deliberately not configured here. DocuSeal speaks SMTP only and cannot use the
-      # Mailjet/Postmark API keys the application already holds, so the plan in
+      # Mail is deliberately not configured here. DocuSeal uses SMTP rather than provider HTTP APIs;
+      # Mailjet SMTP can authenticate with its API key/secret, but is a separate delivery path. In
       # docs/development-roadmap.md §13 is that this app sends the invitation carrying the signing
       # link and DocuSeal stays a signing backend. These variables are also the second reason for
       # the docuseal.env hook: production.rb reads SMTP_ADDRESS with plain Ruby truthiness, so a
       # mapped-but-blank value would select the SMTP mailer with no host and swallow the failure
       # inside a retried job. If you ever let DocuSeal mail directly, put SMTP_ADDRESS, SMTP_PORT,
       # SMTP_DOMAIN, SMTP_USERNAME, SMTP_PASSWORD, SMTP_AUTHENTICATION and SMTP_FROM in
-      # docuseal.env, where a line you do not write stays genuinely unset.
+      # docuseal.env, where a line you do not write stays genuinely unset. Mailjet supports
+      # port 2525 with STARTTLS; test outbound connectivity for your hosting environment.
       # Unset bucket means files go to the mounted volume. Give DocuSeal its own bucket rather
       # than the application's: the retention clock on a signed document is not the retention
       # clock on a personnel file, and one bucket cannot serve two disposal rules. These four are

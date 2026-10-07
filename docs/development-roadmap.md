@@ -1072,10 +1072,18 @@ store now, and the remaining gap in this section is the packet and the signer, n
     white-labeling, which is Pro. Unmodified self-hosting makes the source-availability obligation
     nearly vacuous, but a network-facing AGPL service still owes its users corresponding source — that,
     not the logo, is what counsel should read before this is sold as a hosted product (→ SIG-4).
-  - **Mail cannot be shared.** DocuSeal speaks SMTP only; this application holds Mailjet/Postmark *API*
-    keys. Either the signer gets its own relay credentials, or — the shape SIG-1 assumes — this
-    application sends the invitation carrying the signing link and DocuSeal stays a pure signing backend.
-    The compose file takes the second option and says so in the file.
+  - **Separate mail paths.** DocuSeal uses SMTP rather than provider HTTP APIs. Mailjet SMTP can reuse
+    its API key/secret as username/password and supports STARTTLS on port 2525, an alternative to
+    DigitalOcean's documented blocked ports 25/465/587; connectivity still needs deployment testing.
+    TSCM already sends its signing invitations through its selected provider API with DocuSeal mail
+    disabled. The compose file keeps that default; SMTP would additionally enable DocuSeal's own mail.
+    A standalone SMTP-to-HTTPS relay remains a design option, not implemented functionality: private
+    SMTP ingress, provider API adapters, authenticated submission, a durable spool, retries, MIME
+    attachments, and observable failures would be required. Deploy on a TCP-capable host; do not
+    assume App Platform's public HTTP ingress can expose SMTP.
+    Sources: [DocuSeal SMTP](https://www.docuseal.com/docs/configuring-docuseal-via-environment-variables),
+    [Mailjet ports](https://dev.mailjet.com/docs/smtp-relay/configuration),
+    [DigitalOcean restrictions](https://docs.digitalocean.com/support/why-is-smtp-blocked/).
   **The tier read, corrected against the repository instead of the marketing pages.** The earlier
   version of this bullet claimed the vendor's pages said "the API/embedding surface is Pro", which was
   too broad and would have shelved a feature that is actually available: the README's own base feature

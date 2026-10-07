@@ -12,6 +12,20 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.body.classList.contains('menu-open')) setMenuOpen(false);
 });
 const search = document.querySelector('[data-table-search]');
+document.querySelectorAll('[data-copy-input]').forEach(button => {
+  button.addEventListener('click', async () => {
+    const input = document.getElementById(button.dataset.copyInput);
+    const status = button.parentElement.querySelector('[data-copy-status]');
+    try {
+      await navigator.clipboard.writeText(input.value);
+      status.textContent = 'URL copied.';
+    } catch {
+      input.focus();
+      input.select();
+      status.textContent = 'Clipboard unavailable. The URL is selected; copy it manually.';
+    }
+  });
+});
 document.querySelectorAll('[data-personnel-status]').forEach(status => {
   const date = status.form?.querySelector('[data-termination-date]');
   if (!date) return;

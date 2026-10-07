@@ -4179,6 +4179,7 @@ from .models import ChannelRule
 from .services import audience_reach, confirm_sns_subscription
 
 @membership_required(*PRIVILEGED)
+@never_cache
 def messaging_settings(request):
     """The callback address, the suppression list, and what the providers last told us.
 
@@ -4191,6 +4192,16 @@ def messaging_settings(request):
     about to save can reach anybody.
     """
     organization = request.organization
+    callback_definitions = (
+        ("twilio", "Twilio SMS", "Set both the messaging status callback and the incoming-message webhook to this URL, using HTTP POST."),
+        ("mailjet", "Mailjet email", "In Mailjet Event Tracking, configure this URL for the email events you want to receive, including bounces, complaints, and unsubscribes."),
+        ("postmark", "Postmark email", "In your Postmark server / message stream webhook settings, use this URL for delivery, bounce, spam complaint, and subscription-change events."),
+        ("sns", "Amazon SES via SNS", "Subscribe this HTTPS endpoint to the SNS topics configured for SES delivery, bounce, and complaint notifications. Confirm the pending subscription below. This endpoint does not process SNS SMS delivery logs."),
+    )
+    callbacks = [{
+        "provider": provider, "label": label, "instructions": instructions,
+        "url": request.build_absolute_uri(reverse("provider_callback", args=[provider, organization.webhook_token])),
+    } for provider, label, instructions in callback_definitions] if organization.webhook_token else []
     rules = list(organization.channel_rules.select_related("created_by"))
     for rule in rules:
         rule.text_reach = (audience_reach(organization, rule.audience, Notification.Channel.SMS)
@@ -4209,6 +4220,7 @@ def messaging_settings(request):
     return render(request, "core/messaging_settings.html", {
         "organization": organization,
         "webhook_token": organization.webhook_token or "",
+        "callbacks": callbacks,
         "rules": rules,
         "editing": editing,
         "rule_form": ChannelRuleForm(instance=editing) if editing else ChannelRuleForm(),
@@ -4461,8 +4473,8 @@ def sms_template_edit(request, notice_key):
 def messaging_rotate_token(request):
     organization = request.organization
     rotate_webhook_token(organization, request.user)
-    messages.success(request, "New callback address issued. Any provider still posting to the old one "
-                              "will get a not-found, so update them before leaving the page.")
+    messages.success(request, "New webhook URLs issued for all providers. Every old URL is now invalid; "
+                              "update Twilio, Mailjet, Postmark, and SNS wherever configured.")
     return redirect("messaging_settings")
 
 @require_POST

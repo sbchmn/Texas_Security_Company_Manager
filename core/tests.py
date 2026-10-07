@@ -9308,6 +9308,30 @@ class MessageConsentAndDeliveryLifecycleTest(TestCase):
             {"MessageStatus": "delivered", "To": self.PHONE}).status_code)
         self.assertTrue(AuditEvent.objects.filter(action="organization.webhook_rotated").exists())
 
+    def test_settings_show_every_provider_url_without_creating_or_rotating_token(self):
+        from .services import organization_webhook_token
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("messaging_settings"))
+        self.assertContains(response, "Create provider webhook URLs")
+        self.assertEqual(response.context["callbacks"], [])
+        self.org.refresh_from_db()
+        self.assertFalse(self.org.webhook_token)
+        token = organization_webhook_token(self.org)
+        response = self.client.get(reverse("messaging_settings"), secure=True, HTTP_HOST="testserver")
+        self.assertEqual({item["provider"] for item in response.context["callbacks"]},
+                         {"twilio", "mailjet", "postmark", "sns"})
+        for item in response.context["callbacks"]:
+            expected = "https://testserver" + reverse("provider_callback", args=[item["provider"], token])
+            self.assertEqual(item["url"], expected)
+            self.assertContains(response, f'value="{expected}"')
+            self.assertContains(response, f'data-copy-input="webhook-{item["provider"]}"')
+        self.assertContains(response, "Rotating affects every provider")
+        self.assertContains(response, "data-confirm=")
+        self.assertContains(response, "does not process SNS SMS delivery logs")
+        self.assertIn("no-store", response["Cache-Control"])
+        self.org.refresh_from_db()
+        self.assertEqual(self.org.webhook_token, token)
+
     # -- the surfaces --
 
     def test_accepting_an_invitation_can_carry_the_opt_in_and_a_blank_one_carries_nothing(self):
@@ -9402,8 +9426,8 @@ class MessageConsentAndDeliveryLifecycleTest(TestCase):
         self.client.force_login(self.owner)
         page = self.client.get(reverse("messaging_settings"))
         self.assertEqual(200, page.status_code)
-        self.assertIn("Callback address", page.content.decode())
-        self.assertIn("What proves a callback", page.content.decode(),
+        self.assertIn("Provider webhook URLs", page.content.decode())
+        self.assertIn("What this build verifies", page.content.decode(),
                       "the page has to say which events were signed and which were only addressed")
 
 

@@ -1,5 +1,17 @@
 # Feature implementation status
 
+## Provider webhook settings (2026-10-07)
+
+- Messaging delivery shows full, read-only, copyable URLs for Twilio, Mailjet, Postmark,
+  and Amazon SES via SNS, with provider-specific setup guidance. Viewing the page does not
+  issue or rotate the company secret. Clipboard failure selects the URL and explains manual copy.
+- Creation issues URLs for all providers; rotation confirms that every old URL becomes
+  invalid immediately, including existing SNS subscriptions. The settings response is no-store.
+- Twilio signatures are enforced when its auth token is configured. Other adapters currently
+  retain callbacks as unverified; the settings wording describes this implementation, not
+  an assertion that those providers cannot authenticate callbacks. SNS SMS delivery logs are
+  not supported by the SES/SNS email callback adapter.
+
 ## Terminated personnel and rehire decisions (2026-10-07)
 
 - Personnel status now includes Terminated, distinct from Inactive. Choosing it prompts for
