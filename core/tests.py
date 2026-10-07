@@ -5001,6 +5001,25 @@ class ComplianceDutyTest(TestCase):
         self.assertIn("not approved",self.duty.unevaluated_reason)
         self.assertEqual(self.duties()["total"],0)
 
+    def test_posting_duties_are_unmeasured_for_company_and_people_with_or_without_a_record_type(self):
+        for subject in (ComplianceRule.Subject.ORGANIZATION, ComplianceRule.Subject.PEOPLE):
+            for document_type in (None, self.certificate):
+                with self.subTest(subject=subject, document_type=document_type):
+                    self.duty.evidence = ComplianceRule.Evidence.POSTING
+                    self.duty.applies_to_subject = subject
+                    self.duty.applies_to = ["commissioned"]
+                    self.duty.document_type = document_type
+                    self.duty.save()
+
+                    section = self.duties()
+                    self.assertEqual(section["total"], 0)
+                    self.assertEqual(section["attention"], 0)
+                    self.assertEqual(section["unmeasured"], 1)
+                    self.assertEqual(section["rows"][0]["state"], "not-evaluated")
+                    self.assertIn("posting evidence is not tracked yet", section["rows"][0]["note"])
+                    page = self.client.get(reverse("compliance"), {"person": self.commissioned.pk})
+                    self.assertEqual(page.status_code, 200)
+
     # -- the ladder still applies to duties --
 
     def test_a_duty_whose_evidence_is_sealed_from_the_reader_says_not_measured_not_missing(self):

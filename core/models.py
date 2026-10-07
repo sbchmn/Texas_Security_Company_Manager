@@ -747,6 +747,8 @@ class ComplianceRule(RuleVocabulary, models.Model):
             return "no course is matched to these hours yet"
         if self.applies_to_subject==self.Subject.SITES:
             return "records cannot be filed against a site yet"
+        if self.evidence==self.Evidence.POSTING:
+            return "posting evidence is not tracked yet"
         if self.applies_to_subject==self.Subject.PEOPLE and not (self.applies_to or []):
             return "no personnel category is bound to it"
         return None

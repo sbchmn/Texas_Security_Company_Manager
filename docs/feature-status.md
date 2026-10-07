@@ -1,5 +1,13 @@
 # Feature implementation status
 
+## Posting-duty evaluation correction (2026-10-06)
+
+- Posting-evidence duties for the company or officers remain visible as Not evaluated:
+  posting evidence is not tracked yet. They do not enter the compliance-score denominator,
+  even if a record type is attached. Site duties retain their existing unevaluated explanation.
+- This prevents a compliance-page error when an approved posting duty has no record type.
+  Filed-record duties and their evidence-access checks are unchanged.
+
 ## Catalog cleanup and inherited post orders (2026-10-06)
 
 - Compliance settings has All, Delete-ready only, and In use (retire-only) filters for record
