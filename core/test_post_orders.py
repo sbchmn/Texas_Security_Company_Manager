@@ -132,7 +132,7 @@ class PostOrdersTest(TestCase):
         self.assertEqual(form["post_orders"].value(), post.post_orders)
 
     def test_recurring_posts_keep_inheritance_unless_the_series_has_orders(self):
-        day = timezone.localtime(self.start).date()
+        day = timezone.localtime(self.shift.ends_at).date() + timedelta(days=1)
         template = ShiftTemplate.objects.create(
             organization=self.org, site=self.site, name="Recurring gate",
             start_time=time(8), end_time=time(16), weekdays=[day.weekday()], series_start=day)

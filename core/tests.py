@@ -8296,13 +8296,17 @@ class SharedKioskPinTest(TestCase):
                              "the pad must not confirm which digits, or which people, exist")
 
     def test_a_departed_officers_pin_stops_working_at_the_station(self):
+        from django.utils import timezone
         from .services import find_person_by_pin
         self.pin()
-        self.ana.status = Person.Status.INACTIVE
-        self.ana.save(update_fields=["status"])
-        with self.assertRaises(ValidationError) as caught:
-            find_person_by_pin(self.org, self.PIN)
-        self.assertEqual("Clock PIN not recognised.", caught.exception.messages[0])
+        for status in Person.NON_WORKING_STATUSES:
+            with self.subTest(status=status):
+                self.ana.status = status
+                self.ana.termination_date = timezone.localdate() if status == Person.Status.TERMINATED else None
+                self.ana.save(update_fields=["status", "termination_date"])
+                with self.assertRaises(ValidationError) as caught:
+                    find_person_by_pin(self.org, self.PIN)
+                self.assertEqual("Clock PIN not recognised.", caught.exception.messages[0])
 
     # -- the station --
 

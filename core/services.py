@@ -176,6 +176,8 @@ def shift_eligibility(shift, officer=None, purpose="schedule", requirements=None
         return False,["No officer is assigned."]
     if officer.organization_id != shift.organization_id:
         return False,["Officer belongs to another organization."]
+    if officer.status == Person.Status.TERMINATED:
+        return False, ["Officer is terminated."]
     credentials={c.credential_type_id:c for c in officer.credentials.select_related("credential_type")}
     for required,origin in (post_requirements(shift) if requirements is None else requirements):
         if purpose == "schedule" and not required.blocks_scheduling: continue
@@ -525,7 +527,7 @@ def compliance_attendance(organization, scope, today=None, people=None, reader=N
     for item in scope.filter_by_person(org.credentials.select_related("credential_type")):
         held.setdefault(item.person_id, {})[item.credential_type_id] = item
     credential_rows = []
-    roster = people if people is not None else scope.filter_people(org.people.exclude(status=Person.Status.INACTIVE)).order_by("last_name", "first_name")
+    roster = people if people is not None else scope.filter_people(org.people.exclude(status__in=Person.NON_WORKING_STATUSES)).order_by("last_name", "first_name")
     # One query for every check the loaded credentials could have, newest per credential. The
     # credentials are already in `held`, so this does not scale with the roster.
     checks = registry_checks_by_credential(org, [item.pk for by_type in held.values() for item in by_type.values() if item.pk])
@@ -572,7 +574,7 @@ def compliance_attendance(organization, scope, today=None, people=None, reader=N
     if company_issued:
         for document_pk, person_pk in DocumentAcknowledgment.objects.filter(document_id__in=company_issued).values_list("document_id", "person_id"):
             signed.setdefault(document_pk, set()).add(person_pk)
-        active_roster = set(scope.filter_people(org.people.exclude(status=Person.Status.INACTIVE)).values_list("pk", flat=True))
+        active_roster = set(scope.filter_people(org.people.exclude(status__in=Person.NON_WORKING_STATUSES)).values_list("pk", flat=True))
     for item in documents:
         days = (item.expires_on - today).days if item.expires_on else None
         outstanding = None
@@ -875,7 +877,7 @@ def report_figures(organization, scope, today=None, days=SNAPSHOT_WINDOW_DAYS, n
             "rate": summary["rate"],
             "basis": {"window_days": days, "kinds": list(summary["kinds"]), "by_kind": summary["by_kind"],
                       "reader_basis": "company-wide: every record type counted",
-                      "excluded": "inactive personnel, and requirements whose categories do not apply to the person"},
+                      "excluded": "inactive or terminated personnel, and requirements whose categories do not apply to the person"},
             "exceptions": _attention_rows(attendance, summary["kinds"]),
         },
         ReportSnapshot.Metric.COVERAGE: {
@@ -2857,7 +2859,7 @@ def audience_reach(organization, audience, channel):
             granted[key] = consent.state == MessageConsent.State.GRANTED
     blocked = {key for key in (normalize_destination(row.destination) for row in
              organization.suppressions.filter(channel=MessageConsent.Channel.SMS, cleared_at__isnull=True)) if key}
-    people = list(organization.people.exclude(status=Person.Status.INACTIVE)
+    people = list(organization.people.exclude(status__in=Person.NON_WORKING_STATUSES)
                   .filter(user__isnull=False).exclude(mobile_phone="").only("mobile_phone", "user_id"))
     role_by_user = recipient_roles(organization, [person.user_id for person in people])
     return sum(1 for person in people
@@ -2965,7 +2967,7 @@ def open_post_candidates(shift):
     """
     candidates = []
     requirements = post_requirements(shift)
-    for person in shift.organization.people.exclude(status=Person.Status.INACTIVE).select_related("user"):
+    for person in shift.organization.people.exclude(status__in=Person.NON_WORKING_STATUSES).select_related("user"):
         if not person.user_id:
             continue
         allowed, _ = shift_eligibility(shift, officer=person, requirements=requirements)
@@ -2989,7 +2991,7 @@ def swap_candidates(shift, excluding=None):
     five answer the same question.
     """
     organization = shift.organization
-    people = list(organization.people.exclude(status=Person.Status.INACTIVE).select_related("user")
+    people = list(organization.people.exclude(status__in=Person.NON_WORKING_STATUSES).select_related("user")
                   .order_by("first_name", "last_name"))
     if excluding is not None:
         people = [item for item in people if item.pk != excluding.pk]
@@ -3341,7 +3343,7 @@ def queue_compliance_reminders(today=None):
         types = list(organization.credential_types.filter(active=True))
         if not types:
             continue
-        roster = {person.pk: person for person in organization.people.exclude(status=Person.Status.INACTIVE)}
+        roster = {person.pk: person for person in organization.people.exclude(status__in=Person.NON_WORKING_STATUSES)}
         # One index for the whole organization: which field managers are responsible for which
         # person. Built here rather than per row so the pass costs it once.
         coverage = manager_recipients_by_person(organization)
@@ -3447,7 +3449,7 @@ def outstanding_acknowledgments(document, people=None):
     signal for a workforce record, and using it hid every worker after the first signature.
     """
     if people is None:
-        people = document.organization.people.exclude(status=Person.Status.INACTIVE)
+        people = document.organization.people.exclude(status__in=Person.NON_WORKING_STATUSES)
     signed = set(DocumentAcknowledgment.objects.filter(document=document).values_list("person_id", flat=True))
     return list(people.exclude(pk__in=signed).order_by("last_name", "first_name"))
 
@@ -3483,7 +3485,7 @@ def signature_lineage(document, people=None):
     """
     chain = document_lineage(document)
     roster = list((people if people is not None
-                   else document.organization.people.exclude(status=Person.Status.INACTIVE))
+                   else document.organization.people.exclude(status__in=Person.NON_WORKING_STATUSES))
                   .order_by("last_name", "first_name"))
     signatures = defaultdict(list)
     for item in DocumentAcknowledgment.objects.filter(document_id__in=[row.pk for row in chain]).order_by("acknowledged_at"):
@@ -3557,6 +3559,16 @@ def preview_csv_import(*,organization,entity,upload,actor):
     try: text=raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc: raise ValidationError("CSV must be UTF-8 encoded.") from exc
     reader=csv.DictReader(StringIO(text)); fields=set(reader.fieldnames or []); required=IMPORT_COLUMNS.get(entity)
+    from .personnel_private import PRIVATE_FIELDS
+    private_headers = set(PRIVATE_FIELDS) | {
+        "social_security_number", "social_security", "social_security_no", "ssn_number",
+        "dl", "dl_number", "dl_state", "drivers_license_number", "drivers_license_state",
+        "driver_s_license_number", "driver_s_license_state", "driver_licence_number",
+        "driver_licence_state", "drivers_licence_number", "drivers_licence_state",
+        "driver_s_licence_number", "driver_s_licence_state",
+    }
+    if {re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_") for name in fields} & private_headers:
+        raise ValidationError("Restricted identifiers cannot be staged in CSV imports. Use the encrypted restricted personnel editor.")
     if required is None: raise ValidationError("Unsupported import type.")
     missing=required-fields
     if missing: raise ValidationError("Missing columns: "+", ".join(sorted(missing)))
@@ -3569,6 +3581,21 @@ def preview_csv_import(*,organization,entity,upload,actor):
         if entity in ("training",) and cleaned.get("completed_on"):
             try: date.fromisoformat(cleaned["completed_on"])
             except ValueError: row_errors.append("completed_on must use YYYY-MM-DD")
+        if entity == "people":
+            if cleaned.get("status") and cleaned["status"] not in Person.Status.values:
+                row_errors.append("status must be one of: " + ", ".join(Person.Status.values))
+            if cleaned.get("status") == Person.Status.TERMINATED and not cleaned.get("termination_date"):
+                row_errors.append("termination_date is required when status is terminated")
+            if cleaned.get("termination_date"):
+                try: date.fromisoformat(cleaned["termination_date"])
+                except ValueError: row_errors.append("termination_date must use YYYY-MM-DD")
+            try: _rehire_eligibility(cleaned.get("eligible_for_rehire", ""))
+            except ValidationError as exc: row_errors.extend(exc.messages)
+        if entity == "credentials":
+            for field, choices in (("handgun_qualification", Credential.Handgun.values),
+                                   ("shotgun_qualification", Credential.Shotgun.values)):
+                if cleaned.get(field) and cleaned[field] not in choices:
+                    row_errors.append(f"{field} must be one of: {', '.join(choices)}")
         if entity=="shifts":
             for field in ("starts_at","ends_at"):
                 try: datetime.fromisoformat(cleaned[field].replace("Z","+00:00"))
@@ -3580,6 +3607,16 @@ def preview_csv_import(*,organization,entity,upload,actor):
     return batch,created
 
 def _bool(value): return str(value).casefold() in ("1","true","yes","y")
+
+def _rehire_eligibility(value):
+    value = str(value).strip().casefold()
+    if not value:
+        return None
+    if value in ("yes", "true", "1"):
+        return True
+    if value in ("no", "false", "0"):
+        return False
+    raise ValidationError("eligible_for_rehire must be blank, Yes, or No")
 
 @transaction.atomic
 def apply_csv_import(batch,actor):
@@ -3593,9 +3630,13 @@ def apply_csv_import(batch,actor):
         elif batch.entity==ImportBatch.Entity.PEOPLE:
             branch=org.branches.filter(name=row.get("branch","")).first()
             defaults={"first_name":row["first_name"],"last_name":row["last_name"],"branch":branch,"status":row.get("status") or Person.Status.ONBOARDING,"is_unarmed_officer":_bool(row.get("is_unarmed_officer")),"is_commissioned_officer":_bool(row.get("is_commissioned_officer")),"is_ppo":_bool(row.get("is_ppo")),"is_private_investigator":_bool(row.get("is_private_investigator")),"is_shareholder":_bool(row.get("is_shareholder"))}
-            for field in ("employee_id","job_title","mobile_phone","address_line1","address_line2","city","state","postal_code","emergency_contact_name","emergency_contact_phone","hourly_rate","hire_date","termination_date","date_of_birth"):
+            for field in ("employee_id","job_title","mobile_phone","address_line1","address_line2","city","state","postal_code","emergency_contact_name","emergency_contact_phone","hourly_rate","hire_date","termination_date","date_of_birth",
+                          "middle_name","name_suffix","preferred_name","county","mailing_address_line1","mailing_address_line2","mailing_city","mailing_state","mailing_postal_code","birth_city","birth_state","emergency_contact_relationship"):
                 if row.get(field):defaults[field]=row[field]
-            Person.objects.update_or_create(organization=org,email=row["email"],defaults=defaults)
+            if "eligible_for_rehire" in row:
+                defaults["eligible_for_rehire"] = _rehire_eligibility(row["eligible_for_rehire"])
+            person, _ = Person.objects.update_or_create(organization=org,email=row["email"],defaults=defaults)
+            person.clean()
         elif batch.entity==ImportBatch.Entity.CLIENTS:
             Client.objects.update_or_create(organization=org,name=row["name"],defaults={"contact_name":row.get("contact_name", ""),"contact_email":row.get("contact_email","")})
         elif batch.entity==ImportBatch.Entity.SITES:
@@ -3603,7 +3644,12 @@ def apply_csv_import(batch,actor):
             Site.objects.update_or_create(organization=org,client=client,name=row["name"],defaults={"branch":branch,"address":row["address"],"latitude":row.get("latitude") or None,"longitude":row.get("longitude") or None,"geofence_radius_meters":int(row.get("geofence_radius_meters") or 200)})
         elif batch.entity==ImportBatch.Entity.CREDENTIALS:
             person=org.people.get(email=row["person_email"]); kind=org.credential_types.get(code=row["type_code"])
-            Credential.objects.update_or_create(organization=org,person=person,credential_type=kind,number=row.get("number",""),defaults={"status":row["status"],"issued_on":row.get("issued_on") or None,"expires_on":row.get("expires_on") or None})
+            defaults={"status":row["status"],"issued_on":row.get("issued_on") or None,"expires_on":row.get("expires_on") or None}
+            for field in ("handgun_qualification", "shotgun_qualification"):
+                if field in row:
+                    defaults[field] = row[field]
+            credential, _ = Credential.objects.update_or_create(organization=org,person=person,credential_type=kind,number=row.get("number",""),defaults=defaults)
+            credential.full_clean()
         elif batch.entity==ImportBatch.Entity.TRAINING:
             person=org.people.get(email=row["person_email"])
             TrainingRecord.objects.update_or_create(organization=org,person=person,course_name=row["course_name"],completed_on=row["completed_on"],defaults={"provider":row.get("provider",""),"expires_on":row.get("expires_on") or None,"certificate_number":row.get("certificate_number","")})
@@ -3734,7 +3780,9 @@ def personnel_file_bundle(organization, person, role, subject_person_id=None, se
         "custom_fields": custom,
         "credentials": [{"requirement": item.credential_type.name, "authority": item.credential_type.authority_reference,
                          "number": item.number, "status": item.effective_status, "issued_on": item.issued_on,
-                         "expires_on": item.expires_on} for item in credentials],
+                         "expires_on": item.expires_on,
+                         "handgun_qualification": item.handgun_qualification,
+                         "shotgun_qualification": item.shotgun_qualification} for item in credentials],
         "training": [{"course": item.course_name, "provider": item.provider, "completed_on": item.completed_on,
                       "expires_on": item.expires_on, "hours": str(item.hours)} for item in training],
         "time_off": [{"starts_at": item.starts_at, "ends_at": item.ends_at, "reason": item.reason,
@@ -3890,6 +3938,8 @@ def branded_email_html(notification, *, logo_cid=None):
 
 def person_snapshot(person):
     fields=("employee_id","first_name","last_name","email","mobile_phone","job_title","hire_date","termination_date","date_of_birth","address_line1","address_line2","city","state","postal_code","emergency_contact_name","emergency_contact_phone","hourly_rate","status","is_unarmed_officer","is_commissioned_officer","is_ppo","is_private_investigator","is_shareholder","branch_id")
+    fields += ("middle_name","name_suffix","preferred_name","county","mailing_address_line1","mailing_address_line2",
+               "mailing_city","mailing_state","mailing_postal_code","birth_city","birth_state","emergency_contact_relationship","eligible_for_rehire")
     return {field:str(getattr(person,field)) if getattr(person,field) is not None else None for field in fields}
 
 def record_person_history(person,before,actor):
@@ -4733,7 +4783,7 @@ def find_person_by_pin(organization, pin, kiosk=None, now=None):
         if row.clock_pin and check_password(supplied, row.clock_pin):
             person = row
             break
-    if person is None or person.status == Person.Status.INACTIVE:
+    if person is None or person.status in Person.NON_WORKING_STATUSES:
         # One wording for both. A lobby pad is not the place to confirm that a PIN belongs to someone
         # who no longer works here, and the difference is not one an honest officer needs.
         register_kiosk_pin_failure(kiosk)
@@ -4763,7 +4813,7 @@ def kiosk_identity(token, kiosk):
     if str(data.get("kiosk")) != str(kiosk.pk) or str(data.get("organization")) != str(kiosk.organization_id):
         raise ValidationError("This clock station's session was opened somewhere else. Enter the PIN again.")
     person = Person.objects.filter(pk=data.get("person"), organization_id=kiosk.organization_id).first()
-    if person is None or person.status == Person.Status.INACTIVE:
+    if person is None or person.status in Person.NON_WORKING_STATUSES:
         raise ValidationError("Enter the PIN again — that officer is no longer on the roster here.")
     return person
 

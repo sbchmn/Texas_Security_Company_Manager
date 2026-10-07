@@ -16,6 +16,8 @@ services:
     envs:
       - key: SECRET_KEY
         type: SECRET
+      - key: PERSONNEL_ENCRYPTION_KEYS
+        type: SECRET
       - key: TRUST_PROXY_SSL_HEADER
         value: "true"
       # The container is only reachable through the App Platform edge, so the forwarded
@@ -131,6 +133,8 @@ workers:
     instance_count: 1
     envs:
       - key: SECRET_KEY
+        type: SECRET
+      - key: PERSONNEL_ENCRYPTION_KEYS
         type: SECRET
       - key: ALLOWED_HOSTS
         value: ${APP_DOMAIN}

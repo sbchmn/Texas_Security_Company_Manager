@@ -70,6 +70,7 @@ if not PLATFORM_HOSTS:
 CSRF_TRUSTED_ORIGINS = [u.strip() for u in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if u.strip()]
 # Where links in text messages point (core.sms.public_base_url); a verified company domain wins.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+PERSONNEL_ENCRYPTION_KEYS = tuple(key.strip() for key in os.getenv("PERSONNEL_ENCRYPTION_KEYS", "").split(",") if key.strip())
 
 INSTALLED_APPS = [
     "django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes",

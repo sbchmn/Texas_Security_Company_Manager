@@ -1,5 +1,66 @@
 # Feature implementation status
 
+## Terminated personnel and rehire decisions (2026-10-07)
+
+- Personnel status now includes Terminated, distinct from Inactive. Choosing it prompts for
+  the existing termination-date field; saving a terminated record requires that date.
+- Eligible for Rehire is optional: blank/not recorded, Yes, or No. Existing records remain
+  blank. Both fields appear in profile editing/display, history snapshots, personnel exports,
+  and people CSV imports. Employees cannot edit their own employment decisions.
+- Terminated personnel are excluded wherever operational rosters already excluded inactive
+  personnel, including candidate lists, credential reminders, acknowledgment rosters, kiosk
+  identity checks, and live attendance monitoring. Scheduling eligibility refuses terminated
+  officers. Historical personnel, assignments, and pay records are retained.
+- Team-user access is not revoked by termination; manage it separately in Team access.
+  Status takes effect on save, not automatically on the recorded termination date.
+  Rehire eligibility does not reactivate employment or access.
+- People CSV imports accept `status=terminated` with an ISO termination date and optional
+  `eligible_for_rehire` (blank, Yes, No). An omitted rehire column preserves an existing value;
+  a present blank column clears it. Invalid values are reported before applying.
+- Migration 0068 adds the optional rehire field and the Terminated status choice.
+
+## Default personnel-file fields (2026-10-07)
+
+- Standard profile fields now include legal first/last name, middle name, suffix, preferred name,
+  county, separate mailing address/city/state/ZIP, birthplace city/state, and emergency-contact
+  relationship. Existing email, mobile, home address, ZIP, birth date, hire date, position,
+  emergency-contact name, and phone remain the same fields, not duplicate custom definitions.
+  Existing records retain their values; added fields are optional and initially blank.
+  Existing company-defined custom fields and their values are preserved, not silently merged
+  into standard fields or deleted.
+- Profile editing, self-service contact editing (addresses and emergency-contact relationship only),
+  history snapshots, personnel export, and people CSV imports include the appropriate new fields.
+  Full names include a recorded middle name and suffix; preferred names do not replace legal names.
+  Current duty assignment and location are derived from the current published schedule, with a
+  warning that a scheduled assignment is not proof of actual attendance.
+- License number and issue date remain credential fields. Credential type identifies the license
+  classification (unarmed, commissioned/armed, or PPO); there is no redundant editable level.
+  Credentials now also carry handgun qualification (semi-automatic, revolver-only, or not qualified), and shotgun
+  qualification/patterning (qualified or not qualified). Blank means not recorded. These values
+  appear in credential editing, the personnel credential tab, credential CSV imports, and file
+  exports. They document range qualification; they are not new automatic weapon-assignment gates.
+- Full SSNs and driver's license number/state use a separate encrypted personnel record.
+  Owner/admin/HR only; no officer, supervisor, dispatcher, payroll, or auditor access. SSNs are
+  masked by default and never prefilled in an edit form. Reveal is a reasoned POST with an audit
+  event; edits and reads are audited. Business purposes are encrypted in the audit event rather
+  than copied into plaintext logs. Responses are marked no-store and no-referrer.
+  Private values are excluded from ordinary profile snapshots/history and personnel bundles.
+  CSV imports reject recognized SSN and driver's-license identifier columns before staging
+  them in import batches. Arbitrary custom-field text is not encrypted by this feature;
+  sensitive identifiers must use the restricted editor.
+- Background-check completion belongs to an onboarding requirement, not duplicate date/reference
+  fields. Drug-test results belong to an operator-created restricted record type with the existing
+  evidence/retention controls; there is no duplicate drug-result profile field.
+- Migration 0066 adds these fields and the private-details table; migration 0067 removes the
+  redundant credential license-level column. Full SSN entry requires an
+  independently generated `PERSONNEL_ENCRYPTION_KEYS` deployment secret. Missing/invalid keys or
+  undecryptable records disable editing/reveal with an explicit error, never blank-overwrite data.
+  Payloads are bound to their company and personnel record to reject ciphertext copied across files.
+  Configure the same key set on all web instances; keep encrypted backups and keys separately.
+  The first comma-separated Fernet key encrypts new writes; later keys permit reading old records.
+  Keep old keys until every record (including encrypted audit purposes and retained backups)
+  has been migrated or reached its authorized retention endpoint.
+
 ## Live arrival and departure follow-up (2026-10-07)
 
 - Time and payroll policy now has separate late-arrival and overdue-departure enable switches

@@ -225,7 +225,7 @@ def manager_recipients_by_person(organization):
     per reminder pass.
     """
     fielded = list(organization.memberships.filter(active=True, role__in=SCOPE_CAPABLE_ROLES))
-    roster = list(organization.people.exclude(status=Person.Status.INACTIVE).values_list("id", flat=True))
+    roster = list(organization.people.exclude(status__in=Person.NON_WORKING_STATUSES).values_list("id", flat=True))
     if not fielded or not roster:
         return {}
     rows_by_membership = defaultdict(list)

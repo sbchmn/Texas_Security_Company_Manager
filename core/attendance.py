@@ -46,7 +46,7 @@ def _state(shift, kind, policy, now, punches):
     rule = policy.attendance_alert(kind)
     target = shift.starts_at if kind == AttendanceCase.Kind.ARRIVAL else departure_target(shift)
     deadline = target + timedelta(minutes=rule["grace_minutes"]) if target else None
-    if shift.status != Shift.Status.PUBLISHED or shift.officer is None or shift.officer.status == Person.Status.INACTIVE:
+    if shift.status != Shift.Status.PUBLISHED or shift.officer is None or shift.officer.status in Person.NON_WORKING_STATUSES:
         return False, deadline, rule, "Assignment is no longer active"
     arrivals = [at for kind, at in punches if kind == Punch.Kind.IN]
     if kind == AttendanceCase.Kind.ARRIVAL and arrivals:

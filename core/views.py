@@ -742,6 +742,7 @@ def person_detail(request, person_id):
         tab = "profile"
     context = {
         "person": person, "manager": manager, "is_self": is_self,
+        "can_private_personnel": request.membership.role in (Membership.Role.OWNER, Membership.Role.ADMIN, Membership.Role.HR),
         "can_read_records": can_read_records,
         "can_write_credentials": manager,
         "can_write_records": request.membership.role in RECORD_WRITERS,
@@ -762,6 +763,9 @@ def person_detail(request, person_id):
     if tab == "history" and not manager:
         raise Http404
     if tab == "profile":
+        current_post = person.shifts.filter(status=Shift.Status.PUBLISHED,
+            starts_at__lte=timezone.now(), ends_at__gt=timezone.now()).select_related("site__client").order_by("starts_at").first()
+        context["current_post"] = current_post
         values = {item.definition_id: item for item in person.custom_values.select_related("definition")}
         custom = []
         for definition in request.organization.custom_field_definitions.filter(active=True):
@@ -975,6 +979,9 @@ def _scope_querysets(form, organization, scope=None):
             choices = model.filter(active=True) if hasattr(model.model, "active") else model.all()
             if choices.model is Site:
                 choices = choices.select_related("client").order_by("client__name", "client_id", "name")
+            if field == "officer":
+                choices = choices.filter(
+                    ~Q(status=Person.Status.TERMINATED) | Q(pk=getattr(form.instance, "officer_id", None)))
             form.fields[field].queryset = choices
     if "relief_for" in form.fields:
         shifts = form.fields["relief_for"].queryset.select_related("site__client", "officer")
@@ -1127,7 +1134,7 @@ def compliance(request):
     show=request.GET.get("show","attention")
     if show not in ("attention","all"):show="attention"
     scope=scope_for(request)
-    people=scope.filter_people(org.people.exclude(status=Person.Status.INACTIVE)).order_by("last_name","first_name")
+    people=scope.filter_people(org.people.exclude(status__in=Person.NON_WORKING_STATUSES)).order_by("last_name","first_name")
     person_scope=request.GET.get("person")
     person_object=None
     if person_scope:
@@ -1521,7 +1528,7 @@ def _schedule_grid(org, scope, shifts, week_start, leaves, *, today, everyone):
             open_cells[index].append(shift)
     roster = {person.pk: person for person in (shift.officer for shift in shifts if shift.officer_id)}
     if everyone:
-        for person in scope.filter_people(org.people.exclude(status=Person.Status.INACTIVE)):
+        for person in scope.filter_people(org.people.exclude(status__in=Person.NON_WORKING_STATUSES)):
             roster.setdefault(person.pk, person)
     rows = []
     for person in sorted(roster.values(), key=lambda person: (person.last_name.lower(), person.first_name.lower())):
@@ -1555,7 +1562,7 @@ def _shift_prefill(request, scope):
     if day:
         initial["starts_at"] = f"{day:%Y-%m-%d}T08:00"
         initial["ends_at"] = f"{day:%Y-%m-%d}T16:00"
-    officer = request.organization.people.exclude(status=Person.Status.INACTIVE).filter(pk=_uuid_or_none(request.GET.get("officer"))).first()
+    officer = request.organization.people.exclude(status__in=Person.NON_WORKING_STATUSES).filter(pk=_uuid_or_none(request.GET.get("officer"))).first()
     if officer and scope.permits_person(officer):
         initial["officer"] = officer.pk
     site = request.organization.sites.filter(pk=_uuid_or_none(request.GET.get("site")), active=True).first()
@@ -3742,7 +3749,7 @@ def document_acknowledgments(request,document_id):
     signed=document.acknowledgments.select_related("person").order_by("-acknowledged_at")
     # One roster for both questions on this page, so "outstanding on this text" and "never signed
     # any version" cannot be computed against different populations and disagree by construction.
-    roster=scope_for(request).filter_people(request.organization.people.exclude(status=Person.Status.INACTIVE))
+    roster=scope_for(request).filter_people(request.organization.people.exclude(status__in=Person.NON_WORKING_STATUSES))
     return render(request,"core/document_acknowledgments.html",{
         "document":document,"signed":signed,
         "outstanding":outstanding_acknowledgments(document,people=roster),
@@ -5247,7 +5254,7 @@ def onboarding_settings(request):
     scope = scope_for(request)
     progress = onboarding_progress(org, scope)
     roster = {person.pk: person for person in scope.filter_people(
-        org.people.exclude(status=Person.Status.INACTIVE)).select_related("branch")}
+        org.people.exclude(status__in=Person.NON_WORKING_STATUSES)).select_related("branch")}
     rows = sorted(({"person": roster[pid], "open": state["open"], "overdue": state["overdue"]}
                    for pid, state in progress.items() if pid in roster),
                   key=lambda row: (row["person"].last_name, row["person"].first_name))

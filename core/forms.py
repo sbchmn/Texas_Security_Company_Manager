@@ -183,34 +183,53 @@ class PayCodeForm(WorkflowModelForm):
 
 class PersonForm(WorkflowModelForm):
     field_sections = (
-        ("Identity", ("first_name", "last_name", "employee_id", "date_of_birth")),
-        ("Contact", ("email", "mobile_phone", "address_line1", "address_line2", "city", "state", "postal_code")),
-        ("Employment", ("branch", "job_title", "status", "hire_date", "termination_date", "hourly_rate")),
-        ("Emergency contact", ("emergency_contact_name", "emergency_contact_phone")),
+        ("Identity", ("first_name", "middle_name", "last_name", "name_suffix", "preferred_name", "employee_id", "date_of_birth", "birth_city", "birth_state")),
+        ("Contact", ("email", "mobile_phone", "address_line1", "address_line2", "city", "county", "state", "postal_code")),
+        ("Mailing address (if different)", ("mailing_address_line1", "mailing_address_line2", "mailing_city", "mailing_state", "mailing_postal_code")),
+        ("Employment", ("branch", "job_title", "status", "hire_date", "termination_date", "eligible_for_rehire", "hourly_rate")),
+        ("Emergency contact", ("emergency_contact_name", "emergency_contact_relationship", "emergency_contact_phone")),
         ("Personnel categories", ("is_unarmed_officer", "is_commissioned_officer", "is_ppo",
                                   "is_private_investigator", "is_shareholder")),
     )
     class Meta:
         model = Person
         fields = ["branch", "employee_id", "first_name", "last_name", "email", "mobile_phone", "job_title", "hire_date", "termination_date", "date_of_birth", "address_line1", "address_line2", "city", "state", "postal_code", "emergency_contact_name", "emergency_contact_phone", "hourly_rate", "status", "is_unarmed_officer", "is_commissioned_officer", "is_ppo", "is_private_investigator", "is_shareholder"]
+        fields += ["middle_name", "name_suffix", "preferred_name", "county", "mailing_address_line1",
+                   "mailing_address_line2", "mailing_city", "mailing_state", "mailing_postal_code",
+                   "birth_city", "birth_state", "emergency_contact_relationship", "eligible_for_rehire"]
         widgets={name:forms.DateInput(attrs={"type":"date"}) for name in ("hire_date","termination_date","date_of_birth")}
+        widgets["status"] = forms.Select(attrs={"data-personnel-status": ""})
+        widgets["termination_date"] = forms.DateInput(attrs={"type": "date", "data-termination-date": ""})
+        widgets["eligible_for_rehire"] = forms.NullBooleanSelect()
+        widgets["eligible_for_rehire"].choices = (("unknown", "Not recorded"), ("true", "Yes"), ("false", "No"))
         labels = {
             "employee_id": "Employee ID", "address_line1": "Address line 1", "address_line2": "Address line 2",
             "is_unarmed_officer": "Unarmed officer", "is_commissioned_officer": "Commissioned officer",
             "is_ppo": "Personal protection officer (PPO)", "is_private_investigator": "Private investigator",
             "is_shareholder": "Shareholder",
+            "first_name": "Legal first name", "last_name": "Legal last name", "name_suffix": "Suffix",
+            "postal_code": "ZIP / postal code", "mailing_postal_code": "Mailing ZIP / postal code",
+            "address_line1": "Home address (number and street)", "job_title": "Position / job title",
+        }
+        help_texts = {
+            "mailing_address_line1": "Leave the mailing address blank when it is the same as the home address.",
+            "termination_date": "Required when status is Terminated. Status changes take effect when saved, not automatically on this date.",
+            "status": "Terminated personnel leave operational rosters. Linked team-user access is managed separately in Team access.",
+            "eligible_for_rehire": "Optional employment decision. Leave blank if not assessed; this does not change status or team access.",
         }
 
 class SelfContactForm(WorkflowModelForm):
     """What an employee may correct about themselves. Identity, employment, pay and licensing stay HR's."""
     field_sections = (
-        ("Contact", ("email", "mobile_phone", "address_line1", "address_line2", "city", "state", "postal_code")),
-        ("Emergency contact", ("emergency_contact_name", "emergency_contact_phone")),
+        ("Contact", ("email", "mobile_phone", "address_line1", "address_line2", "city", "county", "state", "postal_code")),
+        ("Mailing address (if different)", ("mailing_address_line1", "mailing_address_line2", "mailing_city", "mailing_state", "mailing_postal_code")),
+        ("Emergency contact", ("emergency_contact_name", "emergency_contact_relationship", "emergency_contact_phone")),
     )
     class Meta:
         model = Person
         fields = ["email", "mobile_phone", "address_line1", "address_line2", "city", "state", "postal_code",
-                  "emergency_contact_name", "emergency_contact_phone"]
+                  "emergency_contact_name", "emergency_contact_phone", "emergency_contact_relationship", "county",
+                  "mailing_address_line1", "mailing_address_line2", "mailing_city", "mailing_state", "mailing_postal_code"]
         labels = {"email": "Personal email", "address_line1": "Address line 1", "address_line2": "Address line 2"}
         help_texts = {
             "email": "Where the company reaches you. Your sign-in email is changed separately under Sign-in & security.",
@@ -363,7 +382,8 @@ class PersonBoundForm:
 class CredentialForm(PersonBoundForm, WorkflowModelForm):
     class Meta:
         model = Credential
-        fields = ["person", "credential_type", "number", "status", "issued_on", "expires_on", "notes"]
+        fields = ["person", "credential_type", "number", "status", "issued_on", "expires_on",
+                  "handgun_qualification", "shotgun_qualification", "notes"]
         widgets = {"issued_on": forms.DateInput(attrs={"type": "date"}), "expires_on": forms.DateInput(attrs={"type": "date"})}
 
     def __init__(self, *args, **kwargs):

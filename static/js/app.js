@@ -12,6 +12,21 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.body.classList.contains('menu-open')) setMenuOpen(false);
 });
 const search = document.querySelector('[data-table-search]');
+document.querySelectorAll('[data-personnel-status]').forEach(status => {
+  const date = status.form?.querySelector('[data-termination-date]');
+  if (!date) return;
+  const prompt = document.createElement('p');
+  prompt.className = 'helptext';
+  prompt.setAttribute('aria-live', 'polite');
+  date.after(prompt);
+  const update = focus => {
+    date.required = status.value === 'terminated';
+    prompt.textContent = date.required ? 'Enter the termination date before saving this terminated employee.' : '';
+    if (focus && date.required && !date.value) date.focus();
+  };
+  status.addEventListener('change', () => update(true));
+  update(false);
+});
 const ordersDefaults = document.getElementById('post-orders-defaults');
 if (ordersDefaults) {
   const defaults = JSON.parse(ordersDefaults.textContent);

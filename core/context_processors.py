@@ -30,7 +30,7 @@ WORKSPACES = (
     ("People", "workspace_people", "MANAGERS", (
         "workspace_people", "people", "person_detail", "person_edit", "person_create", "person_access_invite", "person_access_link",
         "person_availability", "availability_remove", "person_credential_create", "person_training_create",
-        "person_document_upload", "document_acknowledge", "availability", "signing_queue"
+        "person_document_upload", "document_acknowledge", "availability", "signing_queue", "private_personnel"
     )),
     ("Schedule", "workspace_schedule", "MANAGERS", (
         "workspace_schedule", "schedule", "shift_create", "shift_edit", "shift_cancel", "shift_templates",

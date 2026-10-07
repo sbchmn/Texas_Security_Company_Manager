@@ -3,8 +3,10 @@ from . import views
 from . import signing_views
 from . import workspace_views
 from . import attendance_views
+from . import personnel_private_views
 
 urlpatterns = [
+    path("people/<uuid:person_id>/private/", personnel_private_views.private_personnel, name="private_personnel"),
     path("attendance/", attendance_views.attendance_queue, name="attendance_queue"),
     path("attendance/<uuid:case_id>/", attendance_views.attendance_queue, name="attendance_detail"),
     # Workspace navigation: role-based landing pages

@@ -143,9 +143,11 @@ class LiveAttendanceTest(TestCase):
         self.assertEqual(self.evaluate()["opened"], 0)
         self.shift.officer = self.person
         self.shift.save()
-        self.person.status = Person.Status.INACTIVE
-        self.person.save()
-        self.assertEqual(self.evaluate()["opened"], 0)
+        for status in Person.NON_WORKING_STATUSES:
+            self.person.status = status
+            self.person.termination_date = self.now.date() if status == Person.Status.TERMINATED else None
+            self.person.save()
+            self.assertEqual(self.evaluate()["opened"], 0)
 
     def test_arrival_does_not_create_retroactive_case_after_shift_end(self):
         self.shift.ends_at = self.now

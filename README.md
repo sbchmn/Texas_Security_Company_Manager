@@ -269,3 +269,26 @@ A test run ignores the service choices in a deployment `.env` unless `TEST_LIVE_
 so `manage.py test` works on any machine. CI runs both legs; the MySQL leg is what proves the
 tenant-integrity and audit-immutability triggers install and that the database — not only
 Python — refuses audit mutation.
+## Restricted personnel identifiers
+
+SSNs and driver's license details are entered through the restricted personnel editor
+(personnel profile -> Open restricted personnel details), not ordinary profile/custom fields
+or CSV imports. Access is limited to Owner, Administrator, and HR. SSNs are masked until an
+authorized, reasoned reveal; reads, changes, and reveals are audited. Ordinary personnel exports
+and profile history exclude these values. Background checks belong to onboarding; drug-test
+evidence should use an appropriately restricted record type.
+
+Before using the editor, set `PERSONNEL_ENCRYPTION_KEYS` in the deployment's secret environment
+(`.env` for Compose, a secret environment variable for DigitalOcean App Platform).
+Generate a separate Fernet key in the installed Python environment:
+
+```text
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Do not paste the key into chat, commit it, or reuse `SECRET_KEY`. All web instances must have the
+same keys. Back up keys separately from the database. A lost key makes existing encrypted records
+unreadable; the application refuses to overwrite them. To begin rotation, put the new key first
+and retain the previous keys after it, comma-separated. Old keys are still needed for existing
+records, encrypted audit purposes, and retained backups; do not remove them merely because a new
+key has been added. Migrations through 0068 must be applied before starting the updated application.

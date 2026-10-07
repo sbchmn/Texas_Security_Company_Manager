@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %}Restricted personnel details{% endblock %}
+{% block content %}
+<div class="page narrow">
+  <div class="page-heading"><div><p class="eyebrow">Restricted personnel record</p><h1>{{ person.full_name }}</h1><p>Owner, administrator, and HR access only. Reads, updates, and SSN reveals are audited. Sensitive values are encrypted separately and never copied into ordinary personnel history or bulk exports.</p></div><a class="button secondary" href="{% url 'person_detail' person.pk %}">Personnel profile</a></div>
+  {% if storage_error %}<div class="message error" role="alert">{{ storage_error }} No restricted data can be edited or revealed until this is corrected.</div>{% endif %}
+  <section class="panel"><h2>Social Security number</h2><p>{{ masked_ssn }}</p>
+    {% if revealed_ssn %}<p role="status">Revealed for this response: <strong>{{ revealed_ssn }}</strong></p><p>Do not share or capture this screen. <a href="{% url 'private_personnel' person.pk %}">Hide number</a></p>{% endif %}
+    {% if form %}<form method="post" class="data-form" autocomplete="off">{% csrf_token %}{{ reveal_form.as_div }}<button class="button secondary" type="submit" name="action" value="reveal">Reveal SSN for authorized work</button></form>{% endif %}
+  </section>
+  {% if form %}<form method="post" class="panel data-form" autocomplete="off">{% csrf_token %}<h2>Edit restricted details</h2>{{ form.as_div }}<button class="button" type="submit" name="action" value="save">Save encrypted details</button></form>{% endif %}
+</div>
+{% endblock %}

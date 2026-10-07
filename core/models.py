@@ -288,26 +288,41 @@ class Person(models.Model):
         ACTIVE = "active", "Active"
         ONBOARDING = "onboarding", "Onboarding"
         INACTIVE = "inactive", "Inactive"
+        TERMINATED = "terminated", "Terminated"
+    NON_WORKING_STATUSES = (Status.INACTIVE, Status.TERMINATED)
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="people")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="person_profiles")
     branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True, related_name="people")
     first_name = models.CharField(max_length=80)
     last_name = models.CharField(max_length=80)
+    middle_name = models.CharField(max_length=80, blank=True)
+    name_suffix = models.CharField(max_length=20, blank=True)
+    preferred_name = models.CharField(max_length=80, blank=True)
     email = models.EmailField(blank=True)
     mobile_phone = models.CharField(max_length=30, blank=True)
     employee_id = models.CharField(max_length=60, blank=True)
     job_title = models.CharField(max_length=120, blank=True)
     hire_date = models.DateField(null=True,blank=True)
     termination_date = models.DateField(null=True,blank=True)
+    eligible_for_rehire = models.BooleanField(null=True, blank=True)
     date_of_birth = models.DateField(null=True,blank=True)
     address_line1 = models.CharField(max_length=180,blank=True)
     address_line2 = models.CharField(max_length=180,blank=True)
     city = models.CharField(max_length=100,blank=True)
     state = models.CharField(max_length=2,default="TX")
     postal_code = models.CharField(max_length=12,blank=True)
+    county = models.CharField(max_length=100, blank=True)
+    mailing_address_line1 = models.CharField(max_length=180, blank=True)
+    mailing_address_line2 = models.CharField(max_length=180, blank=True)
+    mailing_city = models.CharField(max_length=100, blank=True)
+    mailing_state = models.CharField(max_length=2, blank=True)
+    mailing_postal_code = models.CharField(max_length=12, blank=True)
+    birth_city = models.CharField(max_length=100, blank=True)
+    birth_state = models.CharField(max_length=100, blank=True)
     emergency_contact_name = models.CharField(max_length=160,blank=True)
     emergency_contact_phone = models.CharField(max_length=30,blank=True)
+    emergency_contact_relationship = models.CharField(max_length=100, blank=True)
     hourly_rate = models.DecimalField(max_digits=9,decimal_places=2,null=True,blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ONBOARDING)
     # CLK-2. A shared clock station has to know which officer is standing in front of it, and a
@@ -346,7 +361,12 @@ class Person(models.Model):
                      # as well; this constraint is what holds on the hermetic leg and any Postgres move.
                      models.UniqueConstraint(fields=["organization","clock_pin_index"],condition=~models.Q(clock_pin_index=""),name="unique_clock_pin_in_org")]
     @property
-    def full_name(self): return f"{self.first_name} {self.last_name}"
+    def full_name(self):
+        return " ".join(part for part in (self.first_name, self.middle_name, self.last_name, self.name_suffix) if part)
+
+    def clean(self):
+        if self.status == self.Status.TERMINATED and not self.termination_date:
+            raise ValidationError({"termination_date": "Enter the termination date when setting status to Terminated."})
 
     def __str__(self):
         return f"{self.full_name} ({self.employee_id})" if self.employee_id else self.full_name
@@ -355,6 +375,19 @@ class Person(models.Model):
     def personnel_categories(self):
         """Category keys this person holds; a person may hold several at once."""
         return [code for code, flag in PERSONNEL_CATEGORY_CODES.items() if getattr(self, flag)]
+
+class PrivatePersonnelDetails(models.Model):
+    person = models.OneToOneField(Person, on_delete=models.CASCADE, related_name="private_details")
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="private_personnel_details")
+    encrypted_payload = models.TextField(blank=True)
+    ssn_last_four = models.CharField(max_length=4, blank=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    def clean(self):
+        if self.person_id and self.person.organization_id != self.organization_id:
+            raise ValidationError("Person must belong to the same company.")
+
 
 class PersonHistory(models.Model):
     person=models.ForeignKey(Person,on_delete=models.CASCADE,related_name="history")
@@ -754,6 +787,15 @@ class ComplianceRule(RuleVocabulary, models.Model):
         return None
 
 class Credential(models.Model):
+    class Handgun(models.TextChoices):
+        SEMI_AUTO = "semi_auto", "Semi-automatic pistol"
+        REVOLVER = "revolver", "Revolver only"
+        NONE = "none", "Not qualified"
+
+    class Shotgun(models.TextChoices):
+        QUALIFIED = "qualified", "Qualified / patterned"
+        NOT_QUALIFIED = "not_qualified", "Not qualified / not patterned"
+
     class Status(models.TextChoices):
         MISSING = "missing", "Missing"
         PENDING = "pending", "Pending"
@@ -771,6 +813,10 @@ class Credential(models.Model):
     expires_on = models.DateField(null=True, blank=True)
     verified_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    handgun_qualification = models.CharField(max_length=16, choices=Handgun.choices, blank=True,
+        help_text="Recorded range qualification for this credential. Blank means not recorded; revolver-only is not semi-automatic qualification.")
+    shotgun_qualification = models.CharField(max_length=16, choices=Shotgun.choices, blank=True,
+        help_text="Recorded shotgun patterning / qualification. Blank means not recorded, not permission to carry.")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
