@@ -2699,12 +2699,42 @@ def deliver_notification(notification):
             if not recipient: raise RuntimeError("Recipient has no email address")
             sender=notification.organization.email_from or settings.DEFAULT_FROM_EMAIL
             provider=notification.organization.email_provider
+            logo = email_logo_attachment(notification.organization)
+            html_body = branded_email_html(notification, logo_cid=logo.cid if logo else None)
             if provider==Organization.EmailProvider.MAILJET:
-                response=requests.post("https://api.mailjet.com/v3.1/send",auth=(_provider_secret("MAILJET_API_KEY"),_provider_secret("MAILJET_SECRET_KEY")),json={"Messages":[{"From":{"Email":sender,"Name":notification.organization.display_name},"To":[{"Email":recipient}],"Subject":notification.subject,"TextPart":notification.body,"HTMLPart":branded_email_html(notification)}]},timeout=15); response.raise_for_status()
+                message = {"From": {"Email": sender, "Name": notification.organization.display_name},
+                           "To": [{"Email": recipient}], "Subject": notification.subject,
+                           "TextPart": notification.body, "HTMLPart": html_body}
+                if logo:
+                    message["InlinedAttachments"] = [{"ContentType": logo.content_type,
+                        "Filename": logo.filename, "ContentID": logo.cid,
+                        "Base64Content": base64.b64encode(logo.content).decode("ascii")}]
+                response=requests.post("https://api.mailjet.com/v3.1/send",auth=(_provider_secret("MAILJET_API_KEY"),_provider_secret("MAILJET_SECRET_KEY")),json={"Messages":[message]},timeout=15); response.raise_for_status()
             elif provider==Organization.EmailProvider.POSTMARK:
-                response=requests.post("https://api.postmarkapp.com/email",headers={"X-Postmark-Server-Token":_provider_secret("POSTMARK_SERVER_TOKEN")},json={"From":sender,"To":recipient,"Subject":notification.subject,"TextBody":notification.body,"HtmlBody":branded_email_html(notification)},timeout=15); response.raise_for_status()
+                message = {"From": sender, "To": recipient, "Subject": notification.subject,
+                           "TextBody": notification.body, "HtmlBody": html_body}
+                if logo:
+                    message["Attachments"] = [{"ContentType": logo.content_type,
+                        "Name": logo.filename, "ContentID": f"cid:{logo.cid}",
+                        "Content": base64.b64encode(logo.content).decode("ascii")}]
+                response=requests.post("https://api.postmarkapp.com/email",headers={"X-Postmark-Server-Token":_provider_secret("POSTMARK_SERVER_TOKEN")},json=message,timeout=15); response.raise_for_status()
             elif provider==Organization.EmailProvider.SES:
-                boto3.client("ses",region_name=settings.AWS_REGION).send_email(Source=sender,Destination={"ToAddresses":[recipient]},Message={"Subject":{"Data":notification.subject},"Body":{"Text":{"Data":notification.body},"Html":{"Data":branded_email_html(notification)}}})
+                if logo:
+                    from email.message import EmailMessage
+                    from email.policy import SMTP
+                    message = EmailMessage(policy=SMTP)
+                    message["From"] = sender
+                    message["To"] = recipient
+                    message["Subject"] = notification.subject
+                    message.set_content(notification.body)
+                    message.add_alternative(html_body, subtype="html")
+                    message.get_payload()[1].add_related(logo.content, maintype="image",
+                        subtype=logo.content_type.split("/", 1)[1], cid=f"<{logo.cid}>",
+                        filename=logo.filename, disposition="inline")
+                    boto3.client("ses",region_name=settings.AWS_REGION).send_raw_email(
+                        Source=sender, Destinations=[recipient], RawMessage={"Data": message.as_bytes()})
+                else:
+                    boto3.client("ses",region_name=settings.AWS_REGION).send_email(Source=sender,Destination={"ToAddresses":[recipient]},Message={"Subject":{"Data":notification.subject},"Body":{"Text":{"Data":notification.body},"Html":{"Data":html_body}}})
         elif notification.channel == Notification.Channel.SMS:
             person=notification.organization.people.filter(user=notification.recipient).first() if notification.recipient else None
             destination=notification.destination or getattr(person,"mobile_phone","")
@@ -2859,6 +2889,7 @@ def queue_notice(*, organization, recipients, event_type, subject, body, dedup_k
     because the body is exactly what the provider sends (see `core.sms`).
     """
     from .sms import render_sms, resolve_key
+    from .email_wording import render_email
     if mandatory is None:
         mandatory = event_is_mandatory(event_type)
     recipients = set(recipients)
@@ -2869,6 +2900,7 @@ def queue_notice(*, organization, recipients, event_type, subject, body, dedup_k
     # more than the deliveries it is deciding.
     rules = list(organization.channel_rules.all())
     sms_key = resolve_key(event_type, sms)
+    email_template = organization.email_templates.filter(notice_key=sms_key).first()
     first_names = None
     texts = {}
     created = 0
@@ -2876,6 +2908,14 @@ def queue_notice(*, organization, recipients, event_type, subject, body, dedup_k
         audience = notification_audience(roles.get(user_id), is_subject=user_id in subjects)
         for channel in rule_channels(rules, event_type, audience, channels):
             text = body
+            title = subject
+            if email_template is not None and channel == Notification.Channel.EMAIL:
+                if first_names is None:
+                    from django.contrib.auth import get_user_model
+                    first_names = dict(get_user_model().objects.filter(pk__in=recipients)
+                                       .values_list("pk", "first_name"))
+                title, text = render_email(organization, sms_key, subject, body, sms,
+                                          first_names.get(user_id) or "", template=email_template)
             if channel == Notification.Channel.SMS:
                 if first_names is None:
                     from django.contrib.auth import get_user_model
@@ -2888,7 +2928,7 @@ def queue_notice(*, organization, recipients, event_type, subject, body, dedup_k
             _, was_created = Notification.objects.get_or_create(
                 organization=organization, recipient_id=user_id, channel=channel,
                 deduplication_key=f"{dedup_key}:{channel}",
-                defaults={"event_type": event_type, "subject": subject, "body": text,
+                defaults={"event_type": event_type, "subject": title, "body": text,
                           "mandatory": mandatory},
             )
             created += int(was_created)
@@ -3811,13 +3851,27 @@ def create_brand_version(organization,actor):
     version=(organization.brand_versions.aggregate(value=Max("version"))["value"] or 0)+1
     return BrandVersion.objects.create(organization=organization,version=version,snapshot=brand_snapshot(organization),created_by=actor)
 
-def branded_email_html(notification):
+EmailLogoAttachment = namedtuple("EmailLogoAttachment", "content content_type filename cid")
+
+
+def email_logo_attachment(organization):
+    import mimetypes
+    if not organization.logo:
+        return None
+    content_type = mimetypes.guess_type(organization.logo.name)[0]
+    if not content_type or not content_type.startswith("image/"):
+        raise ValidationError("The email logo must be an image.")
+    with organization.logo.open("rb") as handle:
+        content = handle.read(5 * 1024 * 1024 + 1)
+    if not content or len(content) > 5 * 1024 * 1024:
+        raise ValidationError("The email logo must be nonempty and 5 MiB or smaller.")
+    return EmailLogoAttachment(content, content_type, Path(organization.logo.name).name, "company-logo")
+
+
+def branded_email_html(notification, *, logo_cid=None):
     import html
     org=notification.organization
-    # Mail clients fetch images from outside the app session, so a locally stored logo has no
-    # URL a recipient can open; only a public object-storage URL is usable in email.
-    stored_url=org.logo.url if org.logo else ""
-    logo=f'<img src="{html.escape(stored_url)}" alt="{html.escape(org.display_name)} logo" style="max-height:56px">' if stored_url.startswith(("http://","https://")) else ""
+    logo=f'<img src="cid:{html.escape(logo_cid)}" alt="{html.escape(org.display_name)} logo" style="max-height:56px">' if logo_cid else ""
     return f'<div style="font-family:Arial,sans-serif;color:#172033"><div style="border-bottom:4px solid {org.accent_color};padding:16px 0">{logo}<strong>{html.escape(org.display_name)}</strong></div><h1 style="color:{org.primary_color};font-size:22px">{html.escape(notification.subject)}</h1><p>{html.escape(notification.body).replace(chr(10),"<br>")}</p></div>'
 
 def person_snapshot(person):

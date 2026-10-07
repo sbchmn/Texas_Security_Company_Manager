@@ -1544,6 +1544,22 @@ class SmsTemplate(models.Model):
         return f"{self.organization} · {self.notice_key}"
 
 
+class EmailTemplate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_templates")
+    notice_key = models.CharField(max_length=100)
+    subject = models.CharField(max_length=200)
+    body = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                  null=True, blank=True, related_name="email_templates")
+
+    class Meta:
+        ordering = ["notice_key"]
+        constraints = [models.UniqueConstraint(fields=["organization", "notice_key"],
+                                               name="one_email_template_per_notice")]
+
+
 class Notification(models.Model):
     class Channel(models.TextChoices):
         IN_APP="in_app","In app"

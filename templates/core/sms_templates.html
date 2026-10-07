@@ -1,28 +1,51 @@
-{% extends 'base.html' %}{% block title %}Text message wording{% endblock %}{% block content %}
-<div class="page"><div class="page-heading"><div><p class="eyebrow">Settings · Messaging</p><h1>Text message wording</h1>
-<p>Texts are written separately from email and in-app notices: short, in your local time, and starting with your company name so the recipient knows who is writing. Every text has built-in wording; change any of them for your company here.</p></div>
+{% extends 'base.html' %}{% block title %}Notification wording{% endblock %}{% block content %}
+<div class="page"><div class="page-heading"><div><p class="eyebrow">Settings · Messaging</p><h1>Notification wording</h1>
+<p>Review and customize email subjects, email bodies, and text messages by message ID. Channel rules and recipient permissions still decide who receives each notice.</p></div>
 <div class="actions"><a class="button secondary" href="{% url 'messaging_settings' %}">Messaging delivery</a></div></div>
 
-<section class="panel sms-summary">
-<p><strong>Every text starts with</strong> <code>{{ prefix|default:"(no company name set)" }}</code> — taken from your company name and added automatically.</p>
-<p>{% if base_url %}<strong>Links point to</strong> <code>{{ base_url }}</code>.{% else %}<strong>No links are added.</strong> Set <code>PUBLIC_BASE_URL</code> on the server (or verify a company domain) and texts will include a link to the page that needs attention.{% endif %}</p>
-<p class="muted">{{ custom_count }} text{{ custom_count|pluralize }} use{{ custom_count|pluralize:"s," }} your own wording. {% if multi_count %}{{ multi_count }} sample{{ multi_count|pluralize }} run{{ multi_count|pluralize:"s," }} past one segment (160 characters), which carriers bill as two or more texts.{% else %}Every sample fits in one segment.{% endif %}</p>
-<p class="helptext">If you registered sample messages for A2P 10DLC, keep them close to the wording here — carriers compare what you send against what you registered.</p>
+{% if editor_channel %}
+<section id="wording-editor" class="panel notification-editor-heading">
+<p class="eyebrow">{{ editor_channel|upper }} · <code>{{ notice.key }}</code></p>
+<h2>{{ notice.label }}</h2><p>Audience: <strong>{{ notice.audience }}</strong>.
+{% if custom %}<span class="pill granted">Custom wording</span>{% else %}<span class="pill inactive">Built-in wording</span>{% endif %}</p>
+<p class="helptext">Changes apply only to newly queued messages, not notices already queued or sent. In-app records remain unchanged. Preview values are illustrative, not personnel data.</p>
+<a href="{% url 'sms_templates' %}">Close editor</a>
 </section>
+{% if editor_channel == 'email' %}{% include 'core/email_template_edit.html' %}{% else %}{% include 'core/sms_template_edit.html' %}{% endif %}
+{% endif %}
 
-{% for family, rows in groups %}
 <section class="panel">
-<h2>{{ family }}</h2>
-<div class="table-wrap"><table class="sms-table"><thead><tr><th>Text</th><th>Goes to</th><th>Sample</th><th>Size</th><th></th></tr></thead><tbody>
-{% for row in rows %}<tr>
-<td><strong>{{ row.notice.label }}</strong><br>{% if row.custom %}<span class="pill granted">Your wording</span>{% else %}<span class="pill inactive">Built-in</span>{% endif %}</td>
+<h2>Message catalog</h2>
+<form method="get" action="{% url 'sms_templates' %}" class="notification-filters">
+<label for="wording-search">Search name, ID, or audience<input id="wording-search" name="q" value="{{ query }}" type="search"></label>
+<label for="wording-channel">Channel<select id="wording-channel" name="channel">
+<option value="">All channels</option><option value="email"{% if channel_filter == 'email' %} selected{% endif %}>Email</option><option value="sms"{% if channel_filter == 'sms' %} selected{% endif %}>SMS</option></select></label>
+<label for="wording-family">Category<select id="wording-family" name="family"><option value="">All categories</option>
+{% for key, label in families %}<option value="{{ key }}"{% if family_filter == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+<label for="wording-status">Wording<select id="wording-status" name="status"><option value="">All wording</option>
+<option value="custom"{% if status_filter == 'custom' %} selected{% endif %}>Customized</option><option value="default"{% if status_filter == 'default' %} selected{% endif %}>Built-in</option></select></label>
+<div class="actions"><button class="button">Filter</button><a href="{% url 'sms_templates' %}">Clear</a></div>
+</form>
+<p class="muted">{{ catalog_rows|length }} of {{ catalog_total }} message IDs. Each audience-specific variant has its own ID.</p>
+<div class="table-wrap"><table class="notification-wording-table"><thead><tr><th>Message and ID</th><th>Audience</th><th>Email</th><th>SMS</th></tr></thead><tbody>
+{% for row in catalog_rows %}<tr>
+<td><strong>{{ row.notice.label }}</strong><small><code>{{ row.notice.key }}</code></small></td>
 <td>{{ row.notice.audience }}</td>
-<td class="sms-sample">{{ row.preview }}</td>
-<td>{% if row.size.segments > 1 %}<span class="pill draft">{{ row.size.segments }} segments</span>{% else %}1 segment{% endif %}<small>{{ row.size.characters }} chars{% if row.size.encoding != "GSM-7" %} · Unicode{% endif %}</small></td>
-<td><a class="button secondary button-small" href="{% url 'sms_template_edit' row.notice.key %}">Edit</a></td>
-</tr>{% endfor %}
+<td><span class="pill {% if row.email_custom %}granted{% else %}inactive{% endif %}">{% if row.email_custom %}Custom{% else %}Built-in{% endif %}</span>
+<details><summary>Sample email</summary><strong>{{ row.email_subject }}</strong><p class="notification-sample">{{ row.email_preview }}</p></details>
+<a class="button secondary button-small" href="{% url 'email_template_edit' row.notice.key %}#wording-editor" aria-label="Edit {{ row.notice.label }} email">Edit email</a></td>
+<td>{% if row.sms %}<span class="pill {% if row.sms.custom %}granted{% else %}inactive{% endif %}">{% if row.sms.custom %}Custom{% else %}Built-in{% endif %}</span>
+<details><summary>Sample SMS · {{ row.sms.size.segments }} segment{{ row.sms.size.segments|pluralize }}</summary><p class="notification-sample">{{ row.sms.preview }}</p><small>{{ row.sms.size.characters }} characters · {{ row.sms.size.encoding }}</small></details>
+<a class="button secondary button-small" href="{% url 'sms_template_edit' row.notice.key %}#wording-editor" aria-label="Edit {{ row.notice.label }} SMS">Edit SMS</a>
+{% else %}<span class="muted">Email only</span>{% endif %}</td>
+</tr>{% empty %}<tr><td colspan="4" class="empty-cell">No messages match these filters.</td></tr>{% endfor %}
 </tbody></table></div>
 </section>
-{% endfor %}
+<section class="panel">
+<h2>Delivery safeguards</h2>
+<p>Emails retain company branding and an embedded logo. Texts start with <code>{{ prefix|default:"(company name)" }}</code> automatically. Editing wording does not enable a channel, waive SMS consent, or change an invitation's expiry.</p>
+<p>{% if base_url %}Ordinary action links point to <code>{{ base_url }}</code>.{% else %}Ordinary <code>{link}</code> placeholders need <code>PUBLIC_BASE_URL</code> or a verified company domain. Invitation and signing links are supplied by their workflows independently.{% endif %}</p>
+<p class="helptext">Keep SMS wording consistent with your registered A2P 10DLC samples. Login-provider and password-reset emails are outside this operational notification catalog.</p>
+</section>
 </div>
 {% endblock %}

@@ -1,8 +1,3 @@
-{% extends 'base.html' %}{% block title %}{{ notice.label }} · Text wording{% endblock %}{% block content %}
-<div class="page"><div class="page-heading"><div><p class="eyebrow">Settings · Text message wording</p><h1>{{ notice.label }}</h1>
-<p>Sent to: <strong>{{ notice.audience }}</strong>. {% if custom %}<span class="pill granted">Your wording</span>{% else %}<span class="pill inactive">Built-in wording</span>{% endif %}</p></div>
-<div class="actions"><a class="button secondary" href="{% url 'sms_templates' %}">All texts</a></div></div>
-
 <div class="sms-editor" data-sms-editor data-prefix="{{ prefix }}">
 <section class="panel">
 <form method="post" class="data-form">{% csrf_token %}
@@ -13,11 +8,12 @@
 <div class="sms-chips" aria-label="Placeholders you can use">{% for name, description, sample in placeholders %}
 <button type="button" class="sms-chip" data-sms-insert="{{ name }}" title="{{ description }}{% if sample %} — e.g. {{ sample }}{% endif %}">{{ "{" }}{{ name }}{{ "}" }}</button>{% endfor %}</div>
 <div class="form-actions"><button class="button" name="action" value="save">Save wording</button>
+<button class="button secondary" name="action" value="preview">Preview without saving</button>
 <button type="button" class="button secondary" data-sms-default>Load built-in wording</button></div>
 </form>
 {% if custom %}<form method="post" class="inline-form sms-reset">{% csrf_token %}<input type="hidden" name="action" value="reset">
-<button class="button secondary button-small">Reset to built-in wording</button></form>{% endif %}
-<textarea hidden data-sms-default-text>{{ default }}</textarea>
+<button class="button secondary button-small" data-confirm="Restore this SMS message's built-in wording?">Reset to built-in wording</button></form>{% endif %}
+<textarea hidden aria-label="Built-in SMS wording" data-sms-default-text>{{ default }}</textarea>
 </section>
 
 <section class="panel sms-preview-panel">
@@ -31,5 +27,3 @@
 </section>
 </div>
 {{ samples|json_script:"sms-samples" }}
-</div>
-{% endblock %}

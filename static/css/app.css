@@ -373,6 +373,15 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .sms-table .pill{margin-top:6px}
 .sms-sample{max-width:460px;white-space:pre-wrap;font-size:.92rem;color:#334155}
 .sms-editor{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:20px;align-items:start}
+.notification-filters{display:flex;flex-wrap:wrap;align-items:end;gap:12px}
+.notification-filters label{display:flex;flex-direction:column;gap:6px;flex:1 1 160px}
+.notification-filters input,.notification-filters select{width:100%}
+.notification-wording-table td{vertical-align:top}
+.notification-wording-table td:first-child{min-width:220px}
+.notification-wording-table details{margin:10px 0;max-width:420px}
+.notification-sample{white-space:pre-wrap;overflow-wrap:anywhere}
+.email-wording-preview{border:1px solid var(--line);border-radius:10px;padding:20px;overflow-wrap:anywhere}
+.notification-editor-heading{scroll-margin-top:24px}
 .sms-editor textarea{font:inherit;min-height:120px;resize:vertical}
 .sms-editor .data-form{display:flex;flex-direction:column;align-items:stretch;gap:14px}.sms-editor .data-form>.sms-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start;width:auto}
 .sms-chip{border:1px solid #cbd5e1;background:#f8fafc;color:#1e3a5f;border-radius:999px;padding:3px 10px;font:600 .82rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:pointer}

@@ -329,6 +329,8 @@ class WorkflowFormUITest(TestCase):
         for tab in ("profile", "onboarding", "credentials", "training", "documents", "time", "history"):
             targets.append((f"person_detail:{tab}", reverse("person_detail", args=[self.person.pk]) + f"?tab={tab}"))
         targets.append(("shift_hours:open", reverse("shift_hours", args=[self.open_shift.pk])))
+        targets.append(("email_template_edit", reverse("email_template_edit", args=["shift.published"])))
+        targets.append(("sms_template_edit", reverse("sms_template_edit", args=["shift.published"])))
         return targets
 
     def test_workflow_pages_render_without_internal_labels_or_broken_model_fields(self):

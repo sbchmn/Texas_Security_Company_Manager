@@ -356,7 +356,12 @@ def team(request):
             invitation, token = MembershipInvitation.issue(organization=request.organization, email=email, role=form.cleaned_data["role"], invited_by=request.user, expires_at=timezone.now() + timedelta(hours=72))
             AuditEvent.objects.create(organization=request.organization, actor=request.user, action="membership.invited", target_type="membership_invitation", target_id=str(invitation.pk), metadata={"email": email, "role": invitation.role})
             invitation_url=request.build_absolute_uri(reverse("invitation_accept", args=[token]))
-            Notification.objects.create(organization=request.organization,destination=email,channel=Notification.Channel.EMAIL,event_type="membership.invitation",subject=f"Join {request.organization.display_name}",body=f"You were invited as {invitation.get_role_display()}. Accept this single-use invitation within 72 hours: {invitation_url}",deduplication_key=f"membership-invitation:{invitation.pk}")
+            from .email_wording import render_email
+            email_subject, email_body = render_email(
+                request.organization, "membership.invitation", f"Join {request.organization.display_name}",
+                f"You were invited as {invitation.get_role_display()}. Accept this single-use invitation within 72 hours: {invitation_url}",
+                {"role": invitation.get_role_display(), "link": invitation_url})
+            Notification.objects.create(organization=request.organization,destination=email,channel=Notification.Channel.EMAIL,event_type="membership.invitation",subject=email_subject,body=email_body,deduplication_key=f"membership-invitation:{invitation.pk}")
             request.session["new_invitation_url"] = invitation_url
             messages.success(request, "Invitation queued for delivery. The single-use link is also shown below once.")
             return redirect("team")
@@ -602,11 +607,17 @@ def person_access_invite(request, person_id):
             organization=request.organization, email=email, role=form.cleaned_data["role"],
             invited_by=request.user, expires_at=timezone.now() + timedelta(hours=72), person=person)
         invitation_url = request.build_absolute_uri(reverse("invitation_accept", args=[token]))
+        from .email_wording import render_email
+        email_subject, email_body = render_email(
+            request.organization, "membership.invitation.person",
+            f"Set up your sign-in for {request.organization.display_name}",
+            f"{person.full_name}, you were given access to {request.organization.display_name}. "
+            f"Create your sign-in within 72 hours: {invitation_url}",
+            {"officer": person, "role": invitation.get_role_display(), "link": invitation_url},
+            first_name=person.first_name)
         Notification.objects.create(
             organization=request.organization, destination=email, channel=Notification.Channel.EMAIL,
-            event_type="membership.invitation", subject=f"Set up your sign-in for {request.organization.display_name}",
-            body=(f"{person.full_name}, you were given access to {request.organization.display_name}. "
-                  f"Create your sign-in within 72 hours: {invitation_url}"),
+            event_type="membership.invitation", subject=email_subject, body=email_body,
             deduplication_key=f"membership-invitation:{invitation.pk}")
         AuditEvent.objects.create(organization=request.organization, actor=request.user, action="person.signin_invited", target_type="person", target_id=str(person.pk), metadata={"role": invitation.role, "email": email})
         messages.success(request, f"Sign-in invitation queued for {email}.")
@@ -4265,35 +4276,123 @@ def messaging_rule_remove(request, rule_id):
     return redirect("messaging_settings")
 
 
-def _sms_rows(organization):
+def _sms_rows(organization, *, base_url=None):
     from .models import SmsTemplate
     from . import sms as sms_text
     custom = dict(SmsTemplate.objects.filter(organization=organization).values_list("notice_key", "body"))
     groups = {}
     for notice in sms_text.SMS_NOTICES.values():
         wording = custom.get(notice.key) or notice.default
-        preview = sms_text.preview_sms(organization, notice, wording)
+        preview = sms_text.preview_sms(organization, notice, wording, base_url=base_url)
         groups.setdefault(sms_text.FAMILY_LABELS.get(notice.family, "Other"), []).append({
             "notice": notice, "wording": wording, "custom": notice.key in custom,
             "preview": preview, "size": sms_text.segment_info(preview)})
     return groups
 
 
+def _wording_catalog(request):
+    from . import email_wording, sms as sms_text
+    from .models import EmailTemplate
+    organization = request.organization
+    base_url = sms_text.public_base_url(organization)
+    emails = {row.notice_key: row for row in EmailTemplate.objects.filter(organization=organization)}
+    texts = {row["notice"].key: row for rows in _sms_rows(organization, base_url=base_url).values() for row in rows}
+    rows = []
+    for notice in email_wording.EMAIL_NOTICES.values():
+        custom = emails.get(notice.key)
+        subject, body = email_wording.preview(organization, notice,
+            custom.subject if custom else email_wording.DEFAULT_SUBJECT,
+            custom.body if custom else email_wording.DEFAULT_BODY, base_url=base_url)
+        rows.append({"notice": notice, "email_custom": custom is not None,
+                     "email_subject": subject, "email_preview": body, "sms": texts.get(notice.key)})
+    query = request.GET.get("q", "").strip()
+    channel = request.GET.get("channel", "")
+    status = request.GET.get("status", "")
+    family = request.GET.get("family", "")
+    filtered = []
+    for row in rows:
+        notice = row["notice"]
+        if query and query.casefold() not in f"{notice.key} {notice.label} {notice.audience}".casefold():
+            continue
+        if channel == "sms" and row["sms"] is None:
+            continue
+        if family and family != notice.family:
+            continue
+        custom = (row["sms"]["custom"] if row["sms"] else False) if channel == "sms" else row["email_custom"] if channel == "email" else (
+            row["email_custom"] or bool(row["sms"] and row["sms"]["custom"]))
+        if status == "custom" and not custom or status == "default" and custom:
+            continue
+        filtered.append(row)
+    return {"catalog_rows": filtered, "catalog_total": len(rows), "query": query,
+            "channel_filter": channel, "status_filter": status, "family_filter": family,
+            "families": sorted({(row["notice"].family,
+                sms_text.FAMILY_LABELS.get(row["notice"].family, "Accounts")) for row in rows}),
+            "prefix": sms_text.company_prefix(organization),
+            "base_url": base_url}
+
+
 @membership_required(*PRIVILEGED)
 def sms_templates(request):
-    """Every text this company can send, in the words it will actually use."""
-    from . import sms as sms_text
-    organization = request.organization
-    groups = _sms_rows(organization)
-    rows = [row for items in groups.values() for row in items]
-    return render(request, "core/sms_templates.html", {
-        "groups": groups.items(), "prefix": sms_text.company_prefix(organization),
-        "base_url": sms_text.public_base_url(organization),
-        "custom_count": sum(1 for row in rows if row["custom"]),
-        "multi_count": sum(1 for row in rows if row["size"]["segments"] > 1)})
+    """One catalog for company email and SMS wording; legacy route names remain valid."""
+    return render(request, "core/sms_templates.html", _wording_catalog(request))
 
 
 @membership_required(*PRIVILEGED)
+@transaction.atomic
+def email_template_edit(request, notice_key):
+    from . import email_wording
+    from .models import EmailTemplate
+    notice = email_wording.notice_for(notice_key)
+    if notice is None:
+        raise Http404
+    organization = request.organization
+    row = organization.email_templates.filter(notice_key=notice.key).first()
+    subject = row.subject if row else email_wording.DEFAULT_SUBJECT
+    body = row.body if row else email_wording.DEFAULT_BODY
+    errors = []
+    if request.method == "POST":
+        action = request.POST.get("action", "save")
+        if action == "reset":
+            if row:
+                previous = {"subject": row.subject, "body": row.body}
+                row.delete()
+                AuditEvent.objects.create(organization=organization, actor=request.user,
+                    action="message.email_template_reset", target_type="email_template",
+                    target_id=notice.key, metadata={"notice": notice.key, "previous": previous})
+            messages.success(request, f"{notice.label} emails use the original workflow wording again.")
+            return redirect("sms_templates")
+        subject = request.POST.get("subject", "").strip()
+        body = request.POST.get("body", "").replace("\r\n", "\n").strip()
+        errors = email_wording.validate_wording(notice, subject, body)
+        if action not in ("save", "preview"):
+            errors.append("Choose Save wording or Preview.")
+        if not errors and action == "save":
+            previous = {"subject": row.subject, "body": row.body} if row else None
+            if (subject, body) == (email_wording.DEFAULT_SUBJECT, email_wording.DEFAULT_BODY):
+                if row:
+                    row.delete()
+            else:
+                EmailTemplate.objects.update_or_create(organization=organization, notice_key=notice.key,
+                    defaults={"subject": subject, "body": body, "updated_by": request.user})
+            AuditEvent.objects.create(organization=organization, actor=request.user,
+                action="message.email_template_updated", target_type="email_template", target_id=notice.key,
+                metadata={"notice": notice.key, "previous": previous, "subject": subject, "body": body})
+            messages.success(request, f"Saved {notice.label} email wording. Newly queued emails will use it.")
+            return redirect("sms_templates")
+    samples = email_wording.sample_values(organization, notice)
+    preview_subject, preview_body = email_wording.preview(organization, notice, subject, body)
+    return render(request, "core/sms_templates.html", {
+        **_wording_catalog(request), "editor_channel": "email", "notice": notice,
+        "subject_wording": subject, "wording": body, "errors": errors, "custom": row is not None,
+        "preview_subject": preview_subject, "preview": preview_body, "samples": samples,
+        "placeholders": [(name, email_wording.PLACEHOLDERS[name], samples.get(name, ""))
+                         for name in notice.allowed],
+        "default_subject": email_wording.DEFAULT_SUBJECT, "default": email_wording.DEFAULT_BODY,
+        "max_subject_length": email_wording.MAX_SUBJECT_LENGTH, "max_length": email_wording.MAX_BODY_LENGTH})
+
+
+@membership_required(*PRIVILEGED)
+@transaction.atomic
 def sms_template_edit(request, notice_key):
     """Reword one text, with the placeholders it may use and a preview of what a phone shows."""
     from .models import SmsTemplate
@@ -4316,7 +4415,10 @@ def sms_template_edit(request, notice_key):
             return redirect("sms_templates")
         wording = (request.POST.get("body") or "").replace("\r\n", "\n").strip()
         errors = sms_text.validate_template(notice, wording)
-        if not errors:
+        action = request.POST.get("action", "save")
+        if action not in ("save", "preview"):
+            errors.append("Choose Save wording or Preview.")
+        if not errors and action == "save":
             previous = row.body if row else None
             if wording == notice.default:
                 if row:
@@ -4333,7 +4435,8 @@ def sms_template_edit(request, notice_key):
                 f"characters ({size['segments']} segment{'s' if size['segments'] != 1 else ''}).")
             return redirect("sms_templates")
     preview = sms_text.preview_sms(organization, notice, wording)
-    return render(request, "core/sms_template_edit.html", {
+    return render(request, "core/sms_templates.html", {
+        **_wording_catalog(request), "editor_channel": "sms",
         "notice": notice, "wording": wording, "default": notice.default, "custom": row is not None,
         "errors": errors, "preview": preview, "size": sms_text.segment_info(preview),
         "prefix": sms_text.company_prefix(organization), "base_url": sms_text.public_base_url(organization),

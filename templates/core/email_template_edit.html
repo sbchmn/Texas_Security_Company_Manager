@@ -1,0 +1,27 @@
+<div class="sms-editor" data-email-editor>
+<section class="panel">
+<form method="post" class="data-form">{% csrf_token %}
+{% if errors %}<div class="form-error-summary" role="alert"><strong>The wording was not saved.</strong><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>{% endif %}
+<label for="email-wording-subject">Email subject<input id="email-wording-subject" name="subject" value="{{ subject_wording }}" maxlength="{{ max_subject_length }}" data-email-subject required></label>
+<label for="email-wording-body">Email body<textarea id="email-wording-body" name="body" rows="10" maxlength="{{ max_length }}" data-email-body required>{{ wording }}</textarea></label>
+<p class="helptext"><code>{subject}</code> and <code>{body}</code> insert the original workflow title and full message. Keep them to add an introduction or closing without losing variable details; replace them to write your own subject or body. Text is escaped in branded HTML, not executed as HTML or template code.</p>
+{% if notice.required_link %}<p class="helptext"><strong>Required:</strong> keep <code>{body}</code> or <code>{link}</code> in the body. The link is the actual single-use invitation or signing address, not the ordinary app link.</p>{% endif %}
+<div class="sms-chips" aria-label="Insert placeholder into the last focused subject or body">
+{% for name, description, sample in placeholders %}<button class="sms-chip" type="button" data-email-insert="{{ name }}" title="{{ description }}">{{ "{" }}{{ name }}{{ "}" }}</button>{% endfor %}</div>
+<div class="form-actions"><button class="button" name="action" value="save">Save wording</button>
+<button class="button secondary" name="action" value="preview">Preview without saving</button>
+<button class="button secondary" type="button" data-email-default>Load built-in wording</button></div>
+</form>
+{% if custom %}<form method="post" class="inline-form sms-reset">{% csrf_token %}<input type="hidden" name="action" value="reset">
+<button class="button secondary button-small" data-confirm="Restore this email's original workflow subject and body?">Reset to built-in wording</button></form>{% endif %}
+<textarea hidden aria-label="Built-in email subject" data-email-default-subject>{{ default_subject }}</textarea><textarea hidden aria-label="Built-in email body" data-email-default-body>{{ default }}</textarea>
+</section>
+<section class="panel">
+<h2>Email content preview</h2>
+<p class="muted">Illustrative values; real workflow details vary. Company branding and the embedded logo are applied when sent.</p>
+<div class="email-wording-preview"><strong>{{ request.organization.display_name }}</strong>
+<h3 data-email-preview-subject>{{ preview_subject }}</h3><p class="notification-sample" data-email-preview-body aria-live="polite">{{ preview }}</p></div>
+<h3>Available placeholders</h3><dl class="sms-placeholders">{% for name, description, sample in placeholders %}<dt><code>{{ "{" }}{{ name }}{{ "}" }}</code></dt><dd>{{ description }}</dd>{% endfor %}</dl>
+</section>
+</div>
+{{ samples|json_script:"email-wording-samples" }}

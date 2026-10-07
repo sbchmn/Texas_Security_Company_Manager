@@ -1,5 +1,39 @@
 # Feature implementation status
 
+## Unified notification wording (2026-10-07)
+
+- Settings -> Messaging -> Notification wording replaces the SMS-only catalog with a searchable
+  list of stable message IDs, audience labels, Email/SMS customization status, and sample content.
+  Category, channel, and customized/built-in filters help locate a particular notice.
+- Edit email or Edit SMS opens the editor above the catalog. Both have live sample previews,
+  placeholder-insertion buttons, server-side validation, preview without saving, and audited reset.
+  Email subjects and plain-text bodies are editable independently; HTML rendering escapes wording
+  and retains company branding and embedded logos.
+- Email defaults are `{subject}` and `{body}`: the original workflow-generated title and complete
+  message. Operators can retain those tokens to preserve conditional details or replace them with
+  their own wording and event-specific placeholders. Samples are illustrative, not delivered records.
+- Company overrides render at queue time, per recipient; retries and existing queued/sent notices
+  keep their content. Email edits do not change in-app records, SMS wording, channel selection,
+  consent/suppression, deduplication, or mandatory classifications.
+- Team/personnel invitations and signing notices (including signers without accounts) use the same
+  override mechanism. Their email bodies must retain `{body}` or `{link}`; the actual invitation or
+  signing address is supplied by the workflow. Ordinary app links use the public URL/domain setting.
+- Owners and administrators can edit only their own company's wording. Existing SMS overrides and
+  bookmarked SMS routes are retained. Migration 0063 adds the separate email override table.
+  Login-provider/password-reset emails remain outside this operational notification catalog.
+
+## Durable email logos (2026-10-07)
+
+- Notification emails embed the company logo as an inline Content-ID attachment for Mailjet,
+  Postmark, and Amazon SES. The bytes are read from private storage when sending; no signed
+  storage URL is placed in the email. Received emails retain that logo even after the storage
+  link would have expired or the company replaces its logo.
+- Companies without a logo still receive the existing text-and-HTML email. Logo-read failures
+  are recorded as failed deliveries for the existing retry workflow rather than silently omitted.
+- The shared email layout remains in `core/services.py` (`branded_email_html`); the unified
+  Notification wording editor above now configures operational subjects and bodies separately
+  from that layout. Company branding controls the name, logo, and colors.
+
 ## Posting-duty evaluation correction (2026-10-06)
 
 - Posting-evidence duties for the company or officers remain visible as Not evaluated:

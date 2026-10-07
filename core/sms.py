@@ -3,7 +3,7 @@
 An email can carry a subject, a paragraph and a signature; a text has about 160 characters before
 the carrier splits it and bills twice. So every notice that can be texted has its own short wording
 here rather than reusing the email body, and an owner can rewrite any of them from
-Settings → Messaging → Text message wording.
+Settings → Messaging → Notification wording.
 
 Three rules hold whatever an owner writes:
 
@@ -507,18 +507,18 @@ def render_sms(organization, key, context=None, subject="", first_name="", templ
     return company_prefix(organization) + tidy(fill(wording, values))
 
 
-def sample_link(organization, notice):
-    base = public_base_url(organization)
+def sample_link(organization, notice, *, base_url=None):
+    base = public_base_url(organization) if base_url is None else base_url
     if not base:
         return ""
     path = reverse(notice.link[0]) if notice.link and len(notice.link) == 1 else reverse("notifications")
     return base + path
 
 
-def preview_sms(organization, notice, template=None):
+def preview_sms(organization, notice, template=None, *, base_url=None):
     """A sample rendering with made-up values, for the settings page."""
     values = dict(SAMPLE_VALUES)
-    values["link"] = sample_link(organization, notice)
+    values["link"] = sample_link(organization, notice, base_url=base_url)
     wording = template if template is not None else wording_for(organization, notice)
     if not values["link"]:
         wording = drop_link(wording)

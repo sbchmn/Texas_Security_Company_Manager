@@ -65,7 +65,9 @@ urlpatterns = [
     path("settings/messaging/rules/", views.messaging_rule_save, name="messaging_rule_add"),
     path("settings/messaging/rules/<uuid:rule_id>/", views.messaging_rule_save, name="messaging_rule_edit"),
     path("settings/messaging/rules/<uuid:rule_id>/remove/", views.messaging_rule_remove, name="messaging_rule_remove"),
-    path("settings/messaging/texts/", views.sms_templates, name="sms_templates"),
+    path("settings/messaging/wording/", views.sms_templates, name="sms_templates"),
+    path("settings/messaging/texts/", views.sms_templates, name="sms_templates_legacy"),
+    path("settings/messaging/wording/email/<str:notice_key>/", views.email_template_edit, name="email_template_edit"),
     path("settings/messaging/texts/<str:notice_key>/", views.sms_template_edit, name="sms_template_edit"),
     # NTF-4's one operator-performed step: an SNS subscription stays unpublished until somebody clicks
     # its confirmation, because the address to fetch arrives inside an unauthenticated body.

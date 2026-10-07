@@ -342,6 +342,27 @@ class DocumentSigningTest(TestCase):
         self.assertIsNone(notice.recipient)
         self.assertEqual(notice.destination, self.person.email)
 
+    def test_custom_email_wording_uses_actual_signing_link_with_and_without_login(self):
+        from .models import EmailTemplate
+        EmailTemplate.objects.create(organization=self.org, notice_key="onboarding.signature_requested",
+            subject="Please sign {item}", body="Hello {first_name}. Sign here: {link}")
+        request = self.issue()
+        notice = Notification.objects.get(channel="email")
+        self.assertEqual(notice.subject, "Please sign Sign handbook")
+        self.assertEqual(notice.body, f"Hello . Sign here: {ORIGIN}/s/{request.signing_slug}")
+        self.assertTrue(notice.mandatory)
+        self.assertIn(f"{ORIGIN}/s/{request.signing_slug}",
+                      Notification.objects.get(channel="in_app").body)
+        from .document_signing import _queue_invitation
+        Notification.objects.all().delete()
+        self.person.user = None
+        self.person.save(update_fields=["user"])
+        request = SigningRequest.objects.select_related("task__person", "task__item", "organization").get(pk=request.pk)
+        _queue_invitation(request)
+        notice = Notification.objects.get(channel="email", recipient__isnull=True)
+        self.assertEqual(notice.body, f"Hello Alex. Sign here: {ORIGIN}/s/{request.signing_slug}")
+        self.assertEqual(notice.destination, self.person.email)
+
     def test_invitation_respects_subject_channel_rule_and_signer_email(self):
         ChannelRule.objects.create(
             organization=self.org, family="onboarding", audience=ChannelAudience.SUBJECT,

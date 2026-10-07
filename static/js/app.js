@@ -366,6 +366,35 @@ if(preview){
 }
 
 // Text wording editor: mirrors core/sms.py so the counter matches what the server will send.
+const emailEditor = document.querySelector('[data-email-editor]');
+if (emailEditor) {
+  const subject = emailEditor.querySelector('[data-email-subject]');
+  const body = emailEditor.querySelector('[data-email-body]');
+  const samples = JSON.parse(document.getElementById('email-wording-samples').textContent);
+  let activeInput = body;
+  const fill = text => text.replace(/\{([^{}]*)\}/g, (match, name) => samples[name] ?? '');
+  const render = () => {
+    emailEditor.querySelector('[data-email-preview-subject]').textContent = fill(subject.value);
+    emailEditor.querySelector('[data-email-preview-body]').textContent = fill(body.value);
+  };
+  [subject, body].forEach(input => {
+    input.addEventListener('focus', () => { activeInput = input; });
+    input.addEventListener('input', render);
+  });
+  emailEditor.querySelectorAll('[data-email-insert]').forEach(chip => chip.addEventListener('click', () => {
+    const start = activeInput.selectionStart ?? activeInput.value.length;
+    const end = activeInput.selectionEnd ?? start;
+    activeInput.setRangeText(`{${chip.dataset.emailInsert}}`, start, end, 'end');
+    activeInput.focus(); render();
+  }));
+  emailEditor.querySelector('[data-email-default]').addEventListener('click', () => {
+    subject.value = emailEditor.querySelector('[data-email-default-subject]').value;
+    body.value = emailEditor.querySelector('[data-email-default-body]').value;
+    body.focus(); render();
+  });
+  render();
+}
+
 const smsEditor = document.querySelector('[data-sms-editor]');
 if (smsEditor) {
   const input = smsEditor.querySelector('[data-sms-input]');

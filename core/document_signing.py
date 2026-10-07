@@ -232,7 +232,7 @@ def _queue_invitation(request):
             organization=request.organization, recipients={request.task.person.user_id},
             subject_user_ids={request.task.person.user_id}, event_type="onboarding.signature_requested",
             subject="Document ready to sign", body=body, dedup_key=key, mandatory=True,
-            sms={"item": request.task.item.name},
+            sms={"item": request.task.item.name, "link": link},
         )
         # Keep the email destination bound to the signer, without overriding channel rules.
         Notification.objects.filter(
@@ -240,10 +240,14 @@ def _queue_invitation(request):
             channel=Notification.Channel.EMAIL, deduplication_key=f"{key}:email", destination="",
         ).update(destination=request.signer_email)
     else:
+        from .email_wording import render_email
+        subject, body = render_email(request.organization, "onboarding.signature_requested",
+            "Document ready to sign", body, {"item": request.task.item.name, "link": link},
+            first_name=request.task.person.first_name)
         Notification.objects.get_or_create(
             organization=request.organization, destination=request.signer_email,
             channel=Notification.Channel.EMAIL, deduplication_key=f"{key}:email",
-            defaults={"event_type": "onboarding.signature_requested", "subject": "Document ready to sign",
+            defaults={"event_type": "onboarding.signature_requested", "subject": subject,
                       "body": body, "mandatory": True},
         )
 

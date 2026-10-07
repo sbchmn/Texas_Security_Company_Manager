@@ -79,7 +79,8 @@ SETTINGS_NAVIGATION = (
         "branding", "brand_rollback", "domains", "domain_verify"
     )),
     ("Security & policies", "security_settings", "PRIVILEGED", (
-        "security_settings", "time_policy", "messaging_settings", "messaging_rotate_token", "signing_settings"
+        "security_settings", "time_policy", "messaging_settings", "messaging_rotate_token", "signing_settings",
+        "sms_templates", "sms_templates_legacy", "sms_template_edit", "email_template_edit"
     )),
     ("Data & integrations", "imports", "RECORD_WRITERS", (
         "imports", "import_apply", "import_template", "import_errors"
@@ -133,6 +134,7 @@ NAVIGATION = (
     ("Setup", (
         ("Bulk imports", "imports", "RECORD_WRITERS", ("imports", "import_apply", "import_template", "import_errors")),
         ("Messaging delivery", "messaging_settings", "PRIVILEGED", ("messaging_settings", "messaging_rotate_token")),
+        ("Notification wording", "sms_templates", "PRIVILEGED", ("sms_templates", "sms_templates_legacy", "sms_template_edit", "email_template_edit")),
         ("Document signing", "signing_settings", "PRIVILEGED", ("signing_settings",)),
         ("Settings", "settings", "SETTINGS_VIEWERS", ("settings", "settings_compliance", "onboarding_settings", "onboarding_item_create", "onboarding_item_edit", "branding", "brand_rollback", "domains", "domain_verify", "security_settings", "time_policy", "credential_type_create", "credential_type_edit", "document_type_create", "document_type_edit", "document_type_remove", "custom_field_create", "custom_field_edit", "custom_field_remove", "compliance_rule_remove")),
     )),
