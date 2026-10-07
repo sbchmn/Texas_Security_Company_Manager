@@ -21,7 +21,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.db import DatabaseError, connection, transaction
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import Count, Exists, Max, OuterRef, Q
 from django.utils import timezone
 from .scope import ActorScope, dispatch_recipients_for_shift, manager_recipients_by_person
 from .sms import moment_label, shift_when
@@ -1160,6 +1160,15 @@ class ResolvedClockPolicy:
         return {"required": False if origin["value"] is None else bool(origin["value"]),
                 "source": origin["source"], "version": origin["version"]}
 
+    def attendance_alert(self, kind):
+        if kind not in ("arrival", "departure"):
+            raise ValueError("Unknown attendance alert kind.")
+        enabled = self.origin_of(f"{kind}_alert_enabled")
+        grace = self.origin_of(f"{kind}_grace_minutes")
+        return {"enabled": bool(enabled["value"]), "grace_minutes": grace["value"],
+                "enabled_source": enabled["source"], "enabled_version": enabled["version"],
+                "grace_source": grace["source"], "grace_version": grace["version"]}
+
     # Convenience for the two consumers, so neither has to know the shape above.
     @property
     def rounding_mode(self):
@@ -1228,9 +1237,11 @@ RULE_WATCHED = {
     # protect. A watched-but-unstored value is worse than an unwatched one, because it is promised.
     RuleRevision.Kind.CLOCK_POLICY: ("timezone", "workweek_start", "overtime_after_hours", "overtime_premium",
         "rounding_mode", "rounding_minutes", "require_geofence", "allow_kiosk", "flag_spoof_risk",
-        "require_selfie", "allow_reopen"),
+        "require_selfie", "allow_reopen", "arrival_alert_enabled", "arrival_grace_minutes",
+        "departure_alert_enabled", "departure_grace_minutes"),
     RuleRevision.Kind.CLOCK_RULE: ("require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie",
-        "rounding_mode", "rounding_minutes"),
+        "rounding_mode", "rounding_minutes", "arrival_alert_enabled", "arrival_grace_minutes",
+        "departure_alert_enabled", "departure_grace_minutes"),
     # `name` and `code` are deliberately absent: a label retyped is not a rule changed, and an
     # evaluation cannot come out differently because of it. What a version was *called* is carried
     # by the row's own label column instead, so history still reads as itself.
@@ -1838,6 +1849,9 @@ def record_punch(*, organization, person, client_event_id, kind, occurred_at, ac
             dedup_key=f"punch.exception:{punch.pk}",
             sms={"officer": person, "kind": "clock-in" if kind == Punch.Kind.IN else "clock-out",
                  "at": occurred_at, "note": " ".join(exceptions)})
+    if shift is not None:
+        from .attendance import reconcile_shift
+        reconcile_shift(shift.pk, now=now, create=False)
     return punch,True
 
 def round_minutes(minutes, policy):
@@ -4394,7 +4408,7 @@ def _punch_time(punch):
     return approved.proposed_at if approved else punch.occurred_at
 
 
-def recorded_tour_end(shift):
+def recorded_tour_end(shift, officer=None):
     """When the officer actually came off the post, from the clock rather than the schedule.
 
     ``None`` when the post has no accepted clock-out — which is the case SCH-3 deliberately does not
@@ -4403,6 +4417,8 @@ def recorded_tour_end(shift):
     """
     punches = shift.punches.filter(kind=Punch.Kind.OUT, review_status=Punch.Review.ACCEPTED)\
         .select_related("shift").prefetch_related("adjustments")
+    if officer is not None:
+        punches = punches.filter(person=officer)
     times = [_punch_time(item) for item in punches]
     return max(times) if times else None
 
@@ -4458,7 +4474,7 @@ def describe_hold_over(row):
 
 
 @transaction.atomic
-def record_hold_over(shift, reason, actor=None, held_until=None, relief=None, note="", scheduled_ends_at=None):
+def record_hold_over(shift, reason, actor=None, held_until=None, relief=None, note="", scheduled_ends_at=None, expected_release_at=None):
     """Store why a tour ran past its end. SCH-3's done-criterion, as one write.
 
     ``scheduled_ends_at`` defaults to the post's current end and is a parameter rather than a
@@ -4472,20 +4488,27 @@ def record_hold_over(shift, reason, actor=None, held_until=None, relief=None, no
     """
     if reason not in dict(HoldOver.Reason.choices):
         raise ValidationError({"reason": "Choose one of the recorded reasons."})
+    shift = Shift.objects.select_for_update().get(pk=shift.pk)
+    sequence = (shift.hold_overs.aggregate(last=Max("sequence"))["last"] or 0) + 1
     row = HoldOver(
-        shift=shift, organization=shift.organization, reason=reason,
+        shift=shift, organization=shift.organization, reason=reason, officer=shift.officer, sequence=sequence,
         scheduled_ends_at=scheduled_ends_at or shift.ends_at, held_until=held_until,
-        relief=relief, note=(note or "").strip(), recorded_by=actor)
+        relief=relief, note=(note or "").strip(), recorded_by=actor, expected_release_at=expected_release_at)
     row.full_clean()
     row.save()
     AuditEvent.objects.create(
         organization=shift.organization, actor=actor, action="shift.held_over",
         target_type="shift", target_id=str(shift.pk),
         metadata={"hold_over": str(row.pk), "reason": reason,
+                  "sequence": row.sequence,
                   "scheduled_ends_at": row.scheduled_ends_at.isoformat(),
                   "held_until": held_until.isoformat() if held_until else None,
+                  "expected_release_at": expected_release_at.isoformat() if expected_release_at else None,
                   "relief": str(relief.pk) if relief else None,
+                  "officer": str(row.officer_id) if row.officer_id else None,
                   "overrun_hours": row.overrun_hours})
+    from .attendance import reconcile_shift
+    reconcile_shift(shift.pk, create=False)
     return row
 
 
@@ -4502,9 +4525,9 @@ def close_stale_hold_overs(reference=None):
     """
     now = reference or timezone.now()
     closed = 0
-    open_rows = HoldOver.objects.filter(held_until__isnull=True).select_related("shift")
+    open_rows = HoldOver.objects.filter(held_until__isnull=True).select_related("shift", "officer")
     for row in open_rows:
-        actual = recorded_tour_end(row.shift)
+        actual = recorded_tour_end(row.shift, officer=row.officer)
         if actual and actual > row.scheduled_ends_at and actual <= now:
             row.held_until = actual
             row.save(update_fields=["held_until"])

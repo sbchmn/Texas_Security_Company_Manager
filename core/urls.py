@@ -2,8 +2,11 @@ from django.urls import path
 from . import views
 from . import signing_views
 from . import workspace_views
+from . import attendance_views
 
 urlpatterns = [
+    path("attendance/", attendance_views.attendance_queue, name="attendance_queue"),
+    path("attendance/<uuid:case_id>/", attendance_views.attendance_queue, name="attendance_detail"),
     # Workspace navigation: role-based landing pages
     path("workspace/today/", workspace_views.workspace_today, name="workspace_today"),
     path("workspace/people/", workspace_views.workspace_people, name="workspace_people"),

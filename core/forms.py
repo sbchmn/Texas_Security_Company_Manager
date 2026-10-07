@@ -644,6 +644,11 @@ class ClockPinForm(WorkflowForm):
         return data
 
 class TimePolicyForm(WorkflowModelForm):
+    field_sections = (
+        ("Workweek and payroll", ("timezone", "workweek_start", "overtime_after_hours", "rounding_mode", "rounding_minutes", "allow_reopen")),
+        ("Clock evidence", ("require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie")),
+        ("Live attendance", ("arrival_alert_enabled", "arrival_grace_minutes", "departure_alert_enabled", "departure_grace_minutes")),
+    )
     workweek_start = forms.TypedChoiceField(
         choices=WEEKDAY_CHOICES, coerce=int, label="Workweek starts on",
         help_text="Overtime is counted from this day.",
@@ -654,7 +659,10 @@ class TimePolicyForm(WorkflowModelForm):
     )
     class Meta:
         model = TimePolicy
-        fields = ["timezone", "workweek_start", "overtime_after_hours", "rounding_mode", "rounding_minutes", "require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie", "allow_reopen"]
+        fields = ["timezone", "workweek_start", "overtime_after_hours", "rounding_mode", "rounding_minutes", "require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie", "allow_reopen",
+                  "arrival_alert_enabled", "arrival_grace_minutes", "departure_alert_enabled", "departure_grace_minutes"]
+        labels = {"arrival_alert_enabled": "Late-arrival alerts", "departure_alert_enabled": "Overdue-departure alerts",
+                  "arrival_grace_minutes": "Arrival grace (minutes)", "departure_grace_minutes": "Departure grace (minutes)"}
         help_texts = {
             "workweek_start": "Monday is 0; Sunday is 6. Overtime is counted from this day.",
             "allow_reopen": "Off means an approved period stays locked for ever: reopening needs this switch, an owner or administrator, and a written reason.",
@@ -669,6 +677,8 @@ class TimePolicyForm(WorkflowModelForm):
                               "under their own retention window (90 days to start, editable, blank keeps them permanently) and opened by "
                               "the officer, owner, administrator, HR and dispatch — not by an outside auditor. "
                               "Not asked for at a shared station that has already verified the officer's PIN.",
+            "arrival_grace_minutes": "Minutes after scheduled start before raising a missing clock-in case: 0 through 240.",
+            "departure_grace_minutes": "Minutes after scheduled or authorized hold-over end before raising a missing clock-out case: 0 through 240.",
         }
 
 class TimePolicyOverrideForm(WorkflowModelForm):
@@ -679,7 +689,12 @@ class TimePolicyOverrideForm(WorkflowModelForm):
     freeze it: the site would stop following the baseline the moment the baseline moved, with
     nobody left to explain why.
     """
-    INHERIT = ("", "Inherit from the company policy")
+    field_sections = (
+        ("Applies to", ("client", "site")),
+        ("Clock evidence and rounding", ("require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie", "rounding_mode", "rounding_minutes")),
+        ("Live attendance", ("arrival_alert_enabled", "arrival_grace_minutes", "departure_alert_enabled", "departure_grace_minutes")),
+    )
+    INHERIT = ("", "Inherit from client/company")
     require_geofence = forms.ChoiceField(required=False, label="Geofence requirement", choices=(
         INHERIT, ("yes", "Require location inside the site fence"), ("no", "Do not require a fence")))
     # CLK-2. Same three-state shape, for the same reason: "no kiosk here" and "not decided" are
@@ -702,10 +717,15 @@ class TimePolicyOverrideForm(WorkflowModelForm):
     require_selfie = forms.ChoiceField(required=False, label="Clock photo", choices=(
         INHERIT, ("yes", "Require a photo at clock-in and clock-out"),
         ("no", "Do not require a photo at this level")))
+    arrival_alert_enabled = forms.ChoiceField(required=False, label="Late-arrival alerts", choices=(
+        ("", "Inherit from client/company"), ("yes", "Enable"), ("no", "Disable")))
+    departure_alert_enabled = forms.ChoiceField(required=False, label="Overdue-departure alerts", choices=(
+        ("", "Inherit from client/company"), ("yes", "Enable"), ("no", "Disable")))
 
     class Meta:
         model = TimePolicyOverride
-        fields = ["client", "site", "require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie", "rounding_mode", "rounding_minutes"]
+        fields = ["client", "site", "require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie", "rounding_mode", "rounding_minutes",
+                  "arrival_alert_enabled", "arrival_grace_minutes", "departure_alert_enabled", "departure_grace_minutes"]
         help_texts = {
             "client": "Every post under this contract, unless a single site says otherwise.",
             "site": "This post only. A site rule beats the contract's and the company's.",
@@ -724,6 +744,12 @@ class TimePolicyOverrideForm(WorkflowModelForm):
 
     def clean_require_selfie(self):
         return self._tri_state("require_selfie")
+
+    def clean_arrival_alert_enabled(self):
+        return self._tri_state("arrival_alert_enabled")
+
+    def clean_departure_alert_enabled(self):
+        return self._tri_state("departure_alert_enabled")
 
     def _tri_state(self, name):
         value = self.cleaned_data.get(name)

@@ -7,7 +7,7 @@ from pathlib import Path
 from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, RegexValidator
 from django.db import models, transaction
 from django.utils import timezone
 
@@ -2354,6 +2354,10 @@ class TimePolicy(models.Model):
     rounding_mode = models.CharField(max_length=12, choices=RoundingMode.choices, default=RoundingMode.EXACT)
     rounding_minutes = models.PositiveSmallIntegerField(default=1)
     require_geofence = models.BooleanField(default=True)
+    arrival_alert_enabled = models.BooleanField(default=False, help_text="Raise a live case when an assigned officer has no clock-in after the arrival grace period. Does not change pay.")
+    arrival_grace_minutes = models.PositiveSmallIntegerField(default=5, validators=[MaxValueValidator(240)])
+    departure_alert_enabled = models.BooleanField(default=False, help_text="Raise a live case when a clocked-in officer has no clock-out after the departure grace period. Approved hold-overs move the deadline.")
+    departure_grace_minutes = models.PositiveSmallIntegerField(default=5, validators=[MaxValueValidator(240)])
     # CLK-2. Whether a shared clock station is allowed at all. It defaults to allowed because the
     # switch is a *restriction* an authorised level imposes: the contract that requires each officer
     # to clock from a device bound to them sets this to false at that level, and DD's "policies may
@@ -2407,6 +2411,10 @@ class TimePolicyOverride(models.Model):
     client = models.ForeignKey("core.Client", on_delete=models.PROTECT, null=True, blank=True, related_name="time_policy_overrides")
     site = models.ForeignKey("core.Site", on_delete=models.PROTECT, null=True, blank=True, related_name="time_policy_overrides")
     require_geofence = models.BooleanField(null=True, blank=True, help_text="Leave unset to inherit the company rule.")
+    arrival_alert_enabled = models.BooleanField(null=True, blank=True)
+    arrival_grace_minutes = models.PositiveSmallIntegerField(null=True, blank=True, validators=[MaxValueValidator(240)], help_text="Blank inherits; zero alerts immediately after the scheduled start. Maximum 240 minutes.")
+    departure_alert_enabled = models.BooleanField(null=True, blank=True)
+    departure_grace_minutes = models.PositiveSmallIntegerField(null=True, blank=True, validators=[MaxValueValidator(240)], help_text="Blank inherits; zero alerts immediately after the expected departure. Maximum 240 minutes.")
     # CLK-2, and the second field on this row that has to be a *nullable* boolean. The defect the
     # roadmap warns about is exactly here: a plain BooleanField in a form turns "inherit" into False,
     # so a site that never decided anything would silently forbid its own kiosk. The tri-state test
@@ -2915,6 +2923,66 @@ class ReportSnapshot(models.Model):
         return "Whole company"
 
 
+class AttendanceCase(models.Model):
+    class Kind(models.TextChoices):
+        ARRIVAL = "arrival", "Late arrival"
+        DEPARTURE = "departure", "Overdue departure"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Needs follow-up"
+        RESOLVED = "resolved", "Resolved"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="attendance_cases")
+    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="attendance_cases")
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="attendance_cases")
+    kind = models.CharField(max_length=12, choices=Kind.choices)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.OPEN)
+    deadline_at = models.DateTimeField()
+    policy_snapshot = models.JSONField(default=dict)
+    opened_at = models.DateTimeField(default=timezone.now)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution = models.CharField(max_length=200, blank=True)
+    manager_closed = models.BooleanField(default=False)
+    cycle = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ["opened_at", "pk"]
+        constraints = [models.UniqueConstraint(fields=["shift", "person", "kind"], name="one_attendance_case_per_assignment")]
+
+    def __str__(self):
+        return f"{self.get_kind_display()}: {self.person.full_name} at {self.shift.site.name}"
+
+    def clean(self):
+        if self.shift_id and self.shift.organization_id != self.organization_id:
+            raise ValidationError("Shift must belong to this company.")
+        if self.person_id and self.person.organization_id != self.organization_id:
+            raise ValidationError("Officer must belong to this company.")
+
+
+class AttendanceCaseAction(models.Model):
+    class Kind(models.TextChoices):
+        OPENED = "opened", "Alert raised"
+        CONTACT = "contact", "Contact recorded"
+        RELIEF = "relief", "Relief coordination recorded"
+        HOLD_OVER = "hold_over", "Hold-over approved"
+        RESOLVED = "resolved", "Automatically resolved"
+        CLOSED = "closed", "Closed after manager review"
+
+    case = models.ForeignKey(AttendanceCase, on_delete=models.CASCADE, related_name="actions")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    note = models.TextField()
+    metadata = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
+
+    def __str__(self):
+        return f"{self.get_kind_display()}: {self.case}"
+
+
 class HoldOver(models.Model):
     """A tour that ran past its scheduled end, and the reason a person had to give for it. SCH-3.
 
@@ -2946,11 +3014,16 @@ class HoldOver(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="hold_overs")
     shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="hold_overs")
+    officer = models.ForeignKey(Person, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="hold_overs_worked", help_text="Officer authorized to remain, captured when recording the hold-over. Legacy rows without a snapshot apply to the post.")
+    sequence = models.PositiveIntegerField(null=True, blank=True, editable=False)
     scheduled_ends_at = models.DateTimeField(
         help_text="The post's end as it stood when the tour ran past it. The overrun is measured "
                   "against this, not against the post's current end, because that is what a dispatcher edits.")
     held_until = models.DateTimeField(null=True, blank=True,
         help_text="When the officer actually came off the post. Blank means they are still on it.")
+    expected_release_at = models.DateTimeField(null=True, blank=True,
+        help_text="Authorized expected departure, not an actual clock-out. Live departure alerts use this deadline; an open hold-over without one remains explicitly awaiting relief.")
     relief = models.ForeignKey(Person, on_delete=models.PROTECT, null=True, blank=True, related_name="relief_failures",
         help_text="Who was supposed to stand the next tour, if anybody was.")
     reason = models.CharField(max_length=24, choices=Reason.choices)
@@ -2961,6 +3034,7 @@ class HoldOver(models.Model):
 
     class Meta:
         ordering = ["shift__starts_at", "created_at"]
+        constraints = [models.UniqueConstraint(fields=["shift", "sequence"], name="holdover_shift_sequence")]
 
     def __str__(self):
         return f"Held over on {self.shift} — {self.get_reason_display().lower()}"
@@ -2968,6 +3042,8 @@ class HoldOver(models.Model):
     def clean(self):
         if self.shift_id and self.shift.organization_id != self.organization_id:
             raise ValidationError("Shift must belong to the same organization.")
+        if self.officer_id and self.officer.organization_id != self.organization_id:
+            raise ValidationError("Officer must belong to the same organization.")
         if self.relief_id:
             if self.relief.organization_id != self.organization_id:
                 raise ValidationError("Relief must belong to the same organization.")
@@ -2978,6 +3054,8 @@ class HoldOver(models.Model):
             raise ValidationError(
                 "That is not a hold-over — the officer came off before the post was due to end. "
                 "Correct the post's end time instead of recording an overrun.")
+        if self.expected_release_at and self.expected_release_at <= self.scheduled_ends_at:
+            raise ValidationError({"expected_release_at": "Expected release must be after the scheduled end."})
         if self.reason == self.Reason.OTHER and len((self.note or "").strip()) < 10:
             raise ValidationError({"note": "'Other' has to say what happened, in at least 10 characters."})
 

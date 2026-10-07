@@ -1,5 +1,43 @@
 # Feature implementation status
 
+## Live arrival and departure follow-up (2026-10-07)
+
+- Time and payroll policy now has separate late-arrival and overdue-departure enable switches
+  and grace periods. Defaults are disabled / five minutes. Each field inherits site -> client ->
+  company; explicit disable and zero-minute grace are preserved. Grace is bounded to 0–240 minutes.
+- `monitor_attendance` runs in both worker deployment definitions. A published, assigned post
+  raises a late-arrival case strictly after start plus grace while the post is still scheduled
+  to run, if no non-rejected clock-in is recorded. Departure requires recorded clock-in evidence
+  with no subsequent non-rejected clock-out after expected release plus grace. Checkpoint scans
+  are not departures. Pending punches are evidence, not payroll approval; approved time
+  corrections supply effective event times. Future evidence is not treated as a present event.
+- Newly raised cases cover assignments started in the preceding seven days; already-open cases
+  continue to be reconciled beyond that window. The existing `punch.missing` seven-day /
+  twelve-hour offline-sync cleanup is unchanged and still handles entirely missing tours.
+- A tenant/shift-scoped Live attendance queue is reachable from navigation, Today, Schedule,
+  and time review. Managers can record contact, relief coordination, a finite hold-over approval,
+  or a reasoned closure. Employees can read their own notices/history and are directed to contact
+  dispatch, record real punches, or request a correction. No GET triggers alerts or decisions.
+- Cases resolve when punch evidence arrives, assignment is cancelled/reassigned/inactivated,
+  policy disables the alert, or schedule/hold-over changes move the deadline. Manager closures
+  suppress subsequent alerts for that officer/kind on that assignment. Other resolved cases can
+  start another deduplicated episode if they become overdue again. Action history and audit
+  events retain each episode's deadline, policy provenance, actor, and reason.
+- Hold-over expected release is a new field, separate from the actual `held_until` time.
+  Recording an authorization captures the assigned officer so it does not transfer to a different
+  officer on reassignment. The latest applicable hold-over governs the operational deadline.
+  A locked per-post sequence orders approvals even when creation timestamps tie; legacy rows
+  without a sequence fall back to timestamp ordering. Legacy rows without an officer snapshot remain post-level records. An open-ended authorization
+  explicitly awaits relief and suppresses departure alerts; a new finite authorization replaces
+  that open-ended deadline. Accepted clock-outs still fill actual completion separately.
+- Distinct `punch.late_arrival` and `punch.overdue_departure` wording IDs appear in the unified
+  email/SMS catalog. Notices go to the officer's active account and authorized dispatch/
+  supervisors through existing channel, consent, and delivery rules. Recipient authority and
+  tenant access are rechecked when opening an inbox action.
+- These are missing-evidence follow-ups, not absence findings or orders to leave a post. No
+  automatic clock-out, assignment swap, time adjustment, pay deduction, or payroll approval occurs.
+  Install migrations 0064 and 0065 before starting the updated web/worker; enable policies deliberately.
+
 ## Unified notification wording (2026-10-07)
 
 - Settings -> Messaging -> Notification wording replaces the SMS-only catalog with a searchable

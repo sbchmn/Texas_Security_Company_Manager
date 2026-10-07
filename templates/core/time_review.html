@@ -3,6 +3,7 @@
 <div class="page">
   <div class="page-heading"><div><p class="eyebrow">Time and attendance</p><h1>Review punches</h1><p>Resolve geofence exceptions and correction requests without changing raw evidence.</p></div></div>
   {% include 'core/scope_note.html' %}
+  <p><a href="{% url 'attendance_queue' %}">Live attendance follow-up</a> is separate from payroll evidence review. Pending punches count as recorded evidence for live alerts; rejected punches do not.</p>
   {% if selected_run %}<section class="panel"><h2>Selected payroll period</h2><p>{{ selected_run.period_start|date:'M j, Y H:i' }} &ndash; {{ selected_run.period_end|date:'M j, Y H:i' }}. Both queues below are limited to this period.</p><a class="button secondary" href="{% url 'payroll' %}?run={{ selected_run.pk }}">Return to this payroll period</a></section>{% endif %}
   <section class="panel table-panel">
     <h2>Punches <span class="pill pending">{{ pending_count }} pending</span></h2>

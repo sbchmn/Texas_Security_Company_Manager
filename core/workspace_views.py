@@ -169,6 +169,17 @@ def workspace_today(request):
                 })
         context["setup_checks"] = setup_readiness(request)
 
+    from .attendance import scoped_cases
+    attendance_cases = (scoped_cases(org, scope) if role in views.MANAGERS
+                        else org.attendance_cases.filter(person__user=request.user))
+    live_cases = attendance_cases.filter(status="open")
+    if live_cases.exists():
+        priorities.append({
+            "label": "Live attendance", "count": live_cases.count(),
+            "owner": "Dispatch / supervisor" if role in views.MANAGERS else "Your dispatch / supervisor",
+            "oldest": live_cases.first().opened_at, "url": reverse("attendance_queue"),
+            "next_step": "Confirm arrival, departure, and relief; missing punch evidence is not proof of absence",
+        })
     if context["can_review"]:
         time_counts = pending_time_review_counts(org, scope)
         context["pending_review_count"] = time_counts["total"]
@@ -304,6 +315,7 @@ def workspace_schedule(request):
         "open_posts": open_posts[:15],
         "recurring_series_count": templates.count(),
         "scheduling_actions": actions,
+        "attendance_count": _attendance_count(org, scope),
         "action_queue": Paginator(actions["rows"], 10).get_page(request.GET.get("page")),
         "now": now,
         "authority_scope": scope if scope.restricted else None,
@@ -313,6 +325,11 @@ def workspace_schedule(request):
     }
     
     return render(request, "core/workspaces/schedule.html", context)
+
+
+def _attendance_count(org, scope):
+    from .attendance import scoped_cases
+    return scoped_cases(org, scope).filter(status="open").count()
 
 
 @membership_required(*views.TIME_REVIEWERS)

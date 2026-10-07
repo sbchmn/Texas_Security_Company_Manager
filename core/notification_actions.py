@@ -11,7 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import (
-    Credential, CredentialRegistryCheck, ImportBatch, Membership, OnboardingTask,
+    AttendanceCase, Credential, CredentialRegistryCheck, ImportBatch, Membership, OnboardingTask,
     PayrollRun, Person, PersonDocument, Punch, PunchAdjustment, Shift, ShiftClaim,
     ShiftExchange, ShiftSwap, ShiftTemplate, SigningRequest, TimeOffRequest,
     TrainingRecord, record_open_for, record_readable,
@@ -27,6 +27,7 @@ TIME_REVIEWERS = PAYROLL + (Membership.Role.SUPERVISOR,)
 
 # Prefixes and event names are intentionally paired: arbitrary keys do not confer access.
 TARGETS = {
+    "attendance": (AttendanceCase, {"punch.late_arrival", "punch.overdue_departure"}),
     "shift-published": (Shift, {"shift.published"}),
     "shift-changed": (Shift, {"shift.changed"}),
     "shift-cancelled": (Shift, {"shift.cancelled"}),
@@ -125,6 +126,13 @@ def notification_action(request, notification):
         return (shift.organization_id == request.organization.pk
                 and shift.site.organization_id == request.organization.pk
                 and shift.site.client.organization_id == request.organization.pk)
+
+    if isinstance(target, AttendanceCase):
+        if not shift_allowed(target.shift):
+            return None
+        if (role in MANAGERS and scope.permits_shift(target.shift)) or (role not in MANAGERS and target.person_id == own_id):
+            return link("attendance_detail", "Follow up on attendance" if role in MANAGERS else "View attendance notice", (target.pk,))
+        return None
 
     if isinstance(target, (ShiftSwap, ShiftExchange)):
         shifts = ([target.shift] if isinstance(target, ShiftSwap) else

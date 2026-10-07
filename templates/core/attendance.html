@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}Live attendance{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-heading"><div><p class="eyebrow">Operational follow-up</p><h1>Live attendance</h1><p>No recorded punch is not proof of absence or departure. Confirm the officer's status and coverage before deciding. Offline punches may still be syncing. This queue never changes punches, assignments, or pay.</p></div>
+    <div class="actions"><a class="button secondary" href="{% url 'my_shifts' %}">My shifts</a><a class="button secondary" href="{% url 'clock' %}">Time clock</a>{% if can_manage %}<a class="button secondary" href="{% url 'workspace_schedule' %}">Schedule</a>{% endif %}</div>
+  </div>
+  {% include 'core/scope_note.html' %}
+  <div class="actions"><span class="pill pending">{{ counts.arrival }} late-arrival case{{ counts.arrival|pluralize }}</span><span class="pill pending">{{ counts.departure }} overdue-departure case{{ counts.departure|pluralize }}</span></div>
+  {% if selected %}
+  <section class="panel" id="attendance-case"><h2>{{ selected.get_kind_display }}: {{ selected.person.full_name }}</h2>
+    <p>{{ selected.shift.site.client.name }} / {{ selected.shift.site.name }} &middot; {{ selected.shift.starts_at|date:"D M j, g:i A" }} to {{ selected.shift.ends_at|date:"D M j, g:i A" }}</p>
+    <p><span class="pill {% if selected.status == 'open' %}pending{% else %}accepted{% endif %}">{{ selected.get_status_display }}</span> &middot; Alert deadline {{ selected.deadline_at|date:"D M j, g:i A" }} &middot; Episode observed {{ selected.opened_at|date:"D M j, g:i A" }}</p>
+    <p class="muted">Policy at this alert: {{ selected.policy_snapshot.grace_minutes }} minute grace from {{ selected.policy_snapshot.grace_source }} ({{ selected.policy_snapshot.grace_version }}); alerts enabled by {{ selected.policy_snapshot.enabled_source }} ({{ selected.policy_snapshot.enabled_version }}). Episode {{ selected.cycle }}. Policy edits do not rewrite this snapshot.</p>
+    {% if selected.resolution %}<p>Resolved {{ selected.resolved_at|date:"D M j, g:i A" }}: {{ selected.resolution }}</p>{% endif %}
+    {% if form %}<form method="post" action="{% url 'attendance_detail' selected.pk %}" class="data-form">{% csrf_token %}<h3>Record follow-up</h3>{{ form.as_div }}<div class="form-actions"><button class="button" type="submit">Record follow-up</button><a class="button secondary" href="{% url 'shift_edit' selected.shift.pk %}">Review assignment / relief</a></div><p class="muted">A hold-over moves the expected departure deadline and resolves this episode; another episode is raised if no clock-out is recorded after the new deadline plus grace. Closing after review suppresses further alerts for this officer and this kind on this assignment; use a time correction separately if the timecard is wrong.</p></form>{% elif not can_manage %}<p>Contact dispatch or your supervisor about this notice. Clock real arrivals and departures; request a correction if a punch was missed. Do not leave a staffed post just because an alert arrived.</p>{% endif %}
+    <h3>Follow-up history</h3>
+    <ul>{% for action in history %}<li><strong>{{ action.get_kind_display }}</strong> &middot; {{ action.created_at|date:"D M j, g:i A" }} &middot; {{ action.actor|default:"System" }}<p>{{ action.note|linebreaksbr }}</p>{% if action.kind == 'opened' %}<small>Episode {{ action.metadata.cycle }} &middot; {{ action.metadata.policy.grace_minutes }} minute grace from {{ action.metadata.policy.grace_source }} ({{ action.metadata.policy.grace_version }}); deadline {{ action.metadata.deadline }}</small>{% endif %}</li>{% empty %}<li>No follow-up recorded.</li>{% endfor %}</ul>
+    {% if history.has_other_pages %}<nav class="pagination" aria-label="Follow-up history pages"><span>History page {{ history.number }} of {{ history.paginator.num_pages }}</span>{% if history.has_previous %}<a href="{% querystring history_page=history.previous_page_number %}">Previous history</a>{% endif %}{% if history.has_next %}<a href="{% querystring history_page=history.next_page_number %}">Next history</a>{% endif %}</nav>{% endif %}
+  </section>
+  {% endif %}
+  <section class="panel table-panel"><h2>Cases{% if not can_manage %} on your personnel record{% endif %}</h2>
+    <form method="get" action="{% url 'attendance_queue' %}" class="filter-bar">
+      <label>Search officer or site<input type="search" name="q" value="{{ search }}"></label>
+      <label>Status<select name="status"><option value="open" {% if status_filter == 'open' %}selected{% endif %}>Needs follow-up</option><option value="resolved" {% if status_filter == 'resolved' %}selected{% endif %}>Resolved history</option><option value="all" {% if status_filter == 'all' %}selected{% endif %}>All cases</option></select></label>
+      <label>Kind<select name="kind"><option value="">Both kinds</option><option value="arrival" {% if kind_filter == 'arrival' %}selected{% endif %}>Late arrival</option><option value="departure" {% if kind_filter == 'departure' %}selected{% endif %}>Overdue departure</option></select></label><button class="button secondary" type="submit">Filter</button>
+    </form>
+    <div class="table-wrap"><table><thead><tr><th>Officer</th><th>Post</th><th>Kind</th><th>Deadline</th><th>Status</th><th>Next step</th></tr></thead><tbody>
+      {% for case in cases %}<tr><td>{{ case.person.full_name }}</td><td>{{ case.shift.site.name }}<small>{{ case.shift.starts_at|date:"D M j, g:i A" }}</small></td><td>{{ case.get_kind_display }}</td><td>{{ case.deadline_at|date:"D M j, g:i A" }}</td><td>{{ case.get_status_display }}</td><td><a href="{% url 'attendance_detail' case.pk %}">{% if can_manage and case.status == 'open' %}Record follow-up{% else %}View history{% endif %}</a></td></tr>{% empty %}<tr><td colspan="6" class="empty-cell">No matching attendance cases. Alerts are disabled until enabled in company, client, or site time policy.</td></tr>{% endfor %}
+    </tbody></table></div>{% include 'core/pagination.html' with page=cases %}
+  </section>
+</div>
+{% endblock %}

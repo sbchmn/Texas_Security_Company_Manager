@@ -127,7 +127,7 @@ workers:
     # idempotent and `|| true`-guarded: one failing pass must not stop notification delivery.
     # This spec previously ran only compliance_reminders, which left recurring posts, missing-punch
     # reports, onboarding chases, stale-move closure and daily figures unattended on App Platform.
-    run_command: sh -c "while true; do python manage.py compliance_reminders || true; python manage.py generate_recurring_posts || true; python manage.py report_missing_punches || true; python manage.py onboarding_reminders || true; python manage.py close_stale_moves || true; python manage.py capture_reports || true; python manage.py process_notifications || true; sleep 60; done"
+    run_command: sh -c "while true; do python manage.py compliance_reminders || true; python manage.py generate_recurring_posts || true; python manage.py report_missing_punches || true; python manage.py onboarding_reminders || true; python manage.py close_stale_moves || true; python manage.py monitor_attendance || true; python manage.py capture_reports || true; python manage.py process_notifications || true; sleep 60; done"
     instance_count: 1
     envs:
       - key: SECRET_KEY

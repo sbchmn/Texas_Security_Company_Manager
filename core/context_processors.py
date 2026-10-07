@@ -24,7 +24,8 @@ WORKSPACES = (
         "workspace_today", "dashboard", "clock", "adjustment_request", "my_shifts", "offer_post", "swap_respond",
         "swap_withdraw", "exchange_respond", "exchange_withdraw", "my_onboarding", "document_acknowledge",
         "my_documents", "shift_claim", "open_posts", "shift_requests", "my_time_off", "my_time_off_cancel",
-        "text_alerts", "notifications", "notification_read", "my_account", "my_contact_edit"
+        "text_alerts", "notifications", "notification_read", "my_account", "my_contact_edit",
+        "attendance_queue", "attendance_detail"
     )),
     ("People", "workspace_people", "MANAGERS", (
         "workspace_people", "people", "person_detail", "person_edit", "person_create", "person_access_invite", "person_access_link",
@@ -54,6 +55,7 @@ WORKSPACES = (
 )
 
 QUICK_LINKS = (
+    ("Live attendance", "attendance_queue", ("attendance_queue", "attendance_detail")),
     ("Timeclock", "clock", ("clock", "adjustment_request")),
     ("My shifts", "my_shifts", ("my_shifts", "offer_post", "swap_respond", "swap_withdraw",
                                 "exchange_respond", "exchange_withdraw")),

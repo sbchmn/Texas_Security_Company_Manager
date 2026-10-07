@@ -3302,7 +3302,8 @@ OVERRIDE_FIELDS = RULE_WATCHED[RuleRevision.Kind.CLOCK_RULE]
 # Tri-state selects speak "yes"/"no"/"" while the row stores True/False/None. The mapping is a
 # dict-comp over this tuple so a new nullable field cannot be left out of the edit screen: an
 # explicit False rendered as "inherit" is how a waiver silently becomes a second waiver.
-TRISTATE_FIELDS = ("require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie")
+TRISTATE_FIELDS = ("require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie",
+                   "arrival_alert_enabled", "departure_alert_enabled")
 
 @membership_required(*PRIVILEGED)
 @transaction.atomic
@@ -5660,13 +5661,15 @@ def shift_hold_over(request, shift_id):
     try:
         scheduled = _form_datetime(request.POST.get("scheduled_ends_at")) or shift.ends_at
         held_until = _form_datetime(request.POST.get("held_until"))
+        expected_release_at = _form_datetime(request.POST.get("expected_release_at"))
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
         return redirect("shift_hours", shift_id=shift.pk)
     try:
         row = record_hold_over(shift, request.POST.get("reason"), actor=request.user,
                                held_until=held_until, relief=relief,
-                               note=request.POST.get("note"), scheduled_ends_at=scheduled)
+                               note=request.POST.get("note"), scheduled_ends_at=scheduled,
+                               expected_release_at=expected_release_at)
     except ValidationError as exc:
         # Field-level messages, not just the first one: a form that reports only that the relief was
         # wrong, while the real refusal was the time, sends the dispatcher back to the wrong field.

@@ -172,6 +172,7 @@ PLACEHOLDERS = {
     "actor": "Person who took the action",
     "hours": "Hours uncovered",
     "gaps": "What is missing, e.g. clock-out",
+    "minutes": "Minutes past the alert deadline when first observed",
     "action": "archive or delete",
     "link": "Link to the page to act on (needs PUBLIC_BASE_URL or a verified domain)",
     "subject": "The notice's in-app title",
@@ -185,7 +186,7 @@ SAMPLE_VALUES = {
     "officer": "Sam Rivera", "other": "Alex Kim", "note": "Coverage changed", "item": "Level III license",
     "status": "expired", "due": "Oct 30", "days": "21", "dates": "Oct 9-Oct 12", "kind": "clock-out",
     "time": "Fri Oct 9, 2:07 AM", "count": "3", "period": "Oct 1-Oct 15", "actor": "Pat Owner",
-    "hours": "8", "gaps": "clock-out", "action": "archive", "subject": "Notice title",
+    "hours": "8", "gaps": "clock-out", "action": "archive", "subject": "Notice title", "minutes": "2",
 }
 
 
@@ -306,6 +307,12 @@ SMS_NOTICES = {item.key: item for item in (
     _n("punch.missing", "Missing punch", "Officer and dispatch",
        "Missing {gaps} for {officer} at {site} {when}. Fix the timecard: {link}", S + ("officer", "gaps"),
        ("notifications",)),
+    _n("punch.late_arrival", "Late arrival: no clock-in recorded", "Officer and scoped dispatch / supervisors",
+       "No clock-in recorded for {officer} at {site} after {time}. Confirm arrival and coverage: {link}",
+       S + ("officer", "time", "minutes"), ("attendance_detail", "case_id")),
+    _n("punch.overdue_departure", "Overdue departure: no clock-out recorded", "Officer and scoped dispatch / supervisors",
+       "No clock-out recorded for {officer} at {site} after {time}. Confirm status and arrange relief; do not assume departure: {link}",
+       S + ("officer", "time", "minutes"), ("attendance_detail", "case_id")),
     _n("punch.correction_requested", "Time correction requested", "Time reviewers",
        "{officer} asked to move a {kind} to {time}. Review: {link}", ("officer", "kind", "time", "note"),
        ("time_review",)),

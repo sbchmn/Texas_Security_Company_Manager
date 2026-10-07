@@ -3332,12 +3332,13 @@ class EvidencePolicyInheritanceTest(TestCase):
         # review off, and now CLK-1's turning the photo rule off. That is what a tripwire test is for.
         payload={"timezone":"America/Chicago","workweek_start":0,"overtime_after_hours":"40.00",
                  "rounding_mode":"exact","rounding_minutes":1,"require_geofence":"on","allow_kiosk":"on",
-                 "flag_spoof_risk":"on","require_selfie":"","allow_reopen":""}
-        self.client.post(reverse("time_policy"),payload)
+                 "flag_spoof_risk":"on","require_selfie":"","allow_reopen":"",
+                 "arrival_grace_minutes":5,"departure_grace_minutes":5}
+        self.assertEqual(self.client.post(reverse("time_policy"),payload).status_code,302)
         self.company.refresh_from_db()
         self.assertEqual(self.company.revision,1)
         payload.update({"rounding_mode":"nearest","rounding_minutes":6})
-        self.client.post(reverse("time_policy"),payload)
+        self.assertEqual(self.client.post(reverse("time_policy"),payload).status_code,302)
         self.company.refresh_from_db()
         self.assertEqual(self.company.revision,2)
 
@@ -4025,8 +4026,9 @@ class RuleHistoryTest(TestCase):
         from .services import resolve_rule_version
         self.client.force_login(self.owner)
         payload={"timezone":"America/Chicago","workweek_start":0,"overtime_after_hours":"40.00",
-                 "rounding_mode":"nearest","rounding_minutes":"6","require_geofence":"on","allow_reopen":""}
-        self.client.post(reverse("time_policy"),payload)
+                 "rounding_mode":"nearest","rounding_minutes":"6","require_geofence":"on","allow_reopen":"",
+                 "arrival_grace_minutes":5,"departure_grace_minutes":5}
+        self.assertEqual(self.client.post(reverse("time_policy"),payload).status_code,302)
         self.policy.refresh_from_db()
         self.assertEqual(self.policy.revision,2)
         resolved=resolve_rule_version(self.org,"company",f"{self.policy.pk}:1")
