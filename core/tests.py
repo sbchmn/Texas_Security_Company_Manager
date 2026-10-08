@@ -4249,8 +4249,8 @@ class PayCodeAndLeaveExportTest(TestCase):
                          "not the officer's own, and not the calendar span")
         self.assertEqual(leave["estimated_bill"], "",
                          "a granted absence is the firm's cost; billing it to the client bills for nobody")
-        self.assertIn("8.00 displaced hours across 1 post", leave["exception"])
-        self.assertIn("not a payable figure", leave["exception"],
+        self.assertIn("8.00 displaced hours across 1 post", leave["note"])
+        self.assertIn("not a payable figure", leave["note"],
                       "the span it clipped stays readable, and stays not the number being paid")
         # The one that WAS worked keeps its row as evidence without claiming the hours a second time.
         worked_leave = next(row for row in rows if row["pay_category"] == "leave"
@@ -4258,7 +4258,7 @@ class PayCodeAndLeaveExportTest(TestCase):
         self.assertEqual(worked_leave["total_hours"], Decimal("0.00"))
         self.assertEqual(worked_leave["estimated_pay"], Decimal("0.00"),
                          "the worked rows already pay those hours; this row is evidence, not a duplicate")
-        self.assertIn("was worked and is on the worked rows", worked_leave["exception"])
+        self.assertIn("was worked and is on the worked rows", worked_leave["note"])
         self.assertEqual(off_post.status, Shift.Status.PUBLISHED)
 
     def test_leave_is_clipped_to_the_period_being_exported_rather_than_reported_whole(self):
@@ -7101,9 +7101,9 @@ class PayCategoryTest(TestCase):
         self.assertEqual(row["raw_hours"], Decimal("8.00"), "the displaced post, not the calendar span")
         self.assertEqual(row["estimated_pay"], Decimal("160.00"), "8h at $20 — no punches behind this post")
         self.assertEqual(row["estimated_bill"], "", "an absence is never billed on to the client")
-        self.assertIn("8.00 displaced hours across 1 post", row["exception"])
-        self.assertIn("rule v1", row["exception"], "the paidness of leave is a versioned rule too")
-        self.assertIn("not a payable figure", row["exception"])
+        self.assertIn("8.00 displaced hours across 1 post", row["note"])
+        self.assertIn("rule v1", row["note"], "the paidness of leave is a versioned rule too")
+        self.assertIn("not a payable figure", row["note"])
         self.assertEqual(leave.status, TimeOffRequest.Status.APPROVED)
 
         # Turn the rule off and the figure follows it, because the rule is the owner of the number.
@@ -7114,7 +7114,7 @@ class PayCategoryTest(TestCase):
         self.assertEqual(unpaid["estimated_pay"], Decimal("0.00"))
         self.assertEqual(unpaid["raw_hours"], Decimal("8.00"),
                          "the hours still count as displaced; only the money changed")
-        self.assertIn("leave is marked unpaid here", unpaid["exception"])
+        self.assertIn("leave is marked unpaid here", unpaid["note"])
 
     def test_a_leave_that_displaced_nothing_claims_no_money(self):
         """Two different 'no' answers, and the row has to say which one it is: nothing scheduled, or
@@ -7134,7 +7134,7 @@ class PayCategoryTest(TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["estimated_pay"], Decimal("0.00"))
         self.assertEqual(row["raw_hours"], Decimal("0.00"))
-        self.assertIn("no post was scheduled", row["exception"])
+        self.assertIn("no post was scheduled", row["note"])
 
     def test_leave_hours_cannot_be_designated_on_a_post(self):
         """The kind exists so paidness is a rule; it is not a bucket a clerk can mark, because leave

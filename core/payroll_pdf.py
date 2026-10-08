@@ -86,11 +86,13 @@ def render_payroll_pdf(rows, *, run=None):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 7), ("TOPPADDING", (0, 0), (-1, -1), 7),
     ]))
     story.append(table)
-    notes = [row for row in rows if row.get("exception")]
+    notes = [row for row in rows if row.get("note") or row.get("exception")]
     if notes:
         story += [Spacer(1, 14), text("Snapshot notes", heading)]
         for row in notes:
-            story.append(text(f"{row.get('employee', '')}: {row['exception']}"))
+            for field in ("note", "exception"):
+                if row.get(field):
+                    story.append(text(f"{row.get('employee', '')}: {row[field]}"))
 
     def footer(canvas, doc):
         canvas.saveState()

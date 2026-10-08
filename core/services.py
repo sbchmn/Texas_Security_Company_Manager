@@ -2110,6 +2110,10 @@ def payroll_rows(organization, start, end):
         overlap_end = min(leave.ends_at, end)
         if overlap_end <= overlap_start:
             continue
+        if leave.use_leave_bank:
+            from .leave_payroll import bank_payroll_rows
+            rows.extend(bank_payroll_rows(leave, start, end))
+            continue
         calendar_hours = (Decimal((overlap_end - overlap_start).total_seconds()) / Decimal(3600)).quantize(Decimal("0.01"))
         displaced = {}
         scheduled_minutes = 0
@@ -2128,23 +2132,31 @@ def payroll_rows(organization, start, end):
                 displaced[post] = minutes - worked
         displaced_hours = sum(displaced.values())
         pay = Decimal("0.00")
+        missing_rates = 0
         if leave_category is not None and leave_category.paid:
             for post, minutes in displaced.items():
                 rate = effective_rates(post, officer=leave.person)["pay_rate"]
                 if rate is not None:
                     pay += (Decimal(minutes) / Decimal(60) * Decimal(rate) * Decimal(leave_category.multiplier))
-        if leave_category is None:
+                else:
+                    missing_rates += 1
+        blocker = ""
+        if not displaced and scheduled_minutes:
+            reason = "the scheduled time inside this span was worked and is on the worked rows"
+        elif not displaced:
+            reason = "no post was scheduled for this officer inside the span, so there is no payable basis"
+        elif leave_category is None:
             # Seeded lazily by the screens that edit it, so a firm that has never opened Hour
             # categories has no leave rule at all — which is a different statement from "this firm
             # pays nothing for leave", and saying the wrong one would let a missing configuration read
             # as a decision.
             reason = "this company has no leave pay rule configured yet, so no money is claimed for it"
-        elif not displaced and scheduled_minutes:
-            reason = "the scheduled time inside this span was worked and is on the worked rows"
-        elif not displaced:
-            reason = "no post was scheduled for this officer inside the span, so there is no payable basis"
+            blocker = "Approved leave displaces scheduled work, but this company has no leave pay rule configured."
         elif not leave_category.paid:
             reason = "leave is marked unpaid here"
+        elif missing_rates:
+            reason = f"{missing_rates} displaced post(s) missing a pay rate; the payable leave estimate is incomplete"
+            blocker = reason
         else:
             reason = (f"{Decimal(displaced_hours) / Decimal(60):.2f} displaced hours across "
                       f"{len(displaced)} post{'s' if len(displaced) != 1 else ''} "
@@ -2166,14 +2178,18 @@ def payroll_rows(organization, start, end):
             # No rate on the row: the posts it displaced can each have carried a different one, and
             # showing the first or the average would be an invented figure the export cannot defend.
             "pay_rate": "", "pay_rate_source": "", "bill_rate": "", "bill_rate_source": "",
-            "estimated_pay": pay.quantize(Decimal("0.01")) if (displaced and leave_category is not None
-                                                               and leave_category.paid) else Decimal("0.00"),
+            "estimated_pay": "" if blocker else (
+                pay.quantize(Decimal("0.01")) if displaced and leave_category is not None
+                and leave_category.paid else Decimal("0.00")),
             # An absence is never billed on. The client is charged for the officer who stood the post,
             # and a leave row is the firm's cost, not a line on somebody's invoice.
             "estimated_bill": "", "margin": "",
-            "exception": (f"Approved leave {overlap_start:%b %d} – {overlap_end:%b %d %H:%M}; "
+            "exception": blocker,
+            "note": (f"Approved leave {overlap_start:%b %d} – {overlap_end:%b %d %H:%M}; "
                           f"covers {calendar_hours} calendar hours, which is not a payable figure — {reason}"),
         })
+    for row in rows:
+        row.setdefault("note", "")
     return rows
 
 
@@ -2237,6 +2253,8 @@ def payroll_snapshot_summary(rows):
 @transaction.atomic
 def create_payroll_run(*,organization,start,end,actor):
     from .models import AuditEvent, PayrollRun, Punch
+    from .leave import lock_bank
+    lock_bank(organization)
     rows=payroll_rows(organization,start,end)
     exceptions=[{"employee":row["employee"],"reason":row["exception"]} for row in rows if row["exception"]]
     pending=organization.punches.filter(occurred_at__gte=start,occurred_at__lt=end,review_status=Punch.Review.PENDING).count()
@@ -2271,6 +2289,9 @@ def reopen_payroll_run(run, actor, reason):
     hidden: a draft run must not present a name that no longer stands behind it.
     """
     from .models import AuditEvent, PayrollRun, TimePolicy
+    from .leave import lock_bank
+    lock_bank(run.organization)
+    run.refresh_from_db()
     if run.status == PayrollRun.Status.DRAFT:
         raise ValidationError("This period is not locked.")
     policy = TimePolicy.objects.filter(organization=run.organization).first()
@@ -2278,6 +2299,8 @@ def reopen_payroll_run(run, actor, reason):
         raise ValidationError("Reopening a locked period is not enabled for this company (Time and payroll policy).")
     if len(reason.strip()) < 10:
         raise ValidationError("Give a reopening reason of at least 10 characters.")
+    from .leave_payroll import undo_settlement
+    undo_settlement(run, actor)
     previous = run.status
     run.status = PayrollRun.Status.DRAFT
     run.approved_by = None; run.approved_at = None
@@ -2304,8 +2327,13 @@ def reopen_payroll_run(run, actor, reason):
 @transaction.atomic
 def approve_payroll_run(run,actor):
     from .models import AuditEvent, PayrollRun
+    from .leave import lock_bank
+    lock_bank(run.organization)
+    run.refresh_from_db()
     if run.status!=PayrollRun.Status.DRAFT: raise ValidationError("Only draft payroll runs can be approved.")
     if run.exceptions: raise ValidationError("Resolve payroll exceptions before approval.")
+    from .leave_payroll import settle_run
+    settle_run(run, actor)
     run.status=PayrollRun.Status.APPROVED;run.approved_by=actor;run.approved_at=timezone.now();run.save(update_fields=["status","approved_by","approved_at"])
     AuditEvent.objects.create(organization=run.organization,actor=actor,action="payroll.approved",target_type="payroll_run",target_id=str(run.pk),metadata={"rows":len(run.snapshot)})
     # NTF-3: the lock and the unlock are payroll *state*, and today neither reaches anyone who is
@@ -2384,6 +2412,13 @@ def set_payroll_lock_segment(run, actor, status, reason, branch=None, client=Non
     here writes an event, so the superseded state is still readable.
     """
     from .models import AuditEvent, PayrollLockSegment
+    from .leave import lock_bank
+    lock_bank(run.organization)
+    if branch is None and client is None and status == PayrollLockSegment.Status.LOCKED and run.status == "draft" and (
+            any(row.get("leave_day_id") for row in run.snapshot) or
+            run.organization.time_off_requests.filter(status="approved", use_leave_bank=True,
+                starts_at__lt=run.period_end, ends_at__gt=run.period_start).exists()):
+        raise ValidationError("Bank leave must be settled by whole-period approval, not a partial company-wide lock.")
     if status not in PayrollLockSegment.Status.values:
         raise ValidationError({"status": "Choose locked or open."})
     existing = PayrollLockSegment.objects.filter(run=run, branch=branch, client=client).first()
@@ -2423,7 +2458,7 @@ def payroll_csv(organization,start,end):
 PAYROLL_EXPORT_FIELDS=["employee_id","employee","pay_category","pay_code","pay_code_name","cost_centre","pay_code_source",
                        "client","site","post","raw_hours","regular_hours","overtime_hours","total_hours",
                        "rounding_mode","rounding_minutes","policy_source","policy_version",
-                       "pay_rate","pay_rate_source","bill_rate","bill_rate_source","estimated_pay","estimated_bill","margin","exception"]
+                       "pay_rate","pay_rate_source","bill_rate","bill_rate_source","estimated_pay","estimated_bill","margin","exception","note"]
 PAYROLL_PDF_FIELDS=["employee","pay_category","pay_code","client","site","total_hours","overtime_hours","pay_rate","bill_rate","estimated_pay","estimated_bill","margin"]
 
 def safe_cell(value):

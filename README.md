@@ -72,6 +72,46 @@ not invented, and policy/rate/schedule issues still require their corresponding 
 or scheduling workflow. Locked periods retain their existing reopening/authority rules.
 Counts use original capture times, matching payroll's period selection.
 
+Approved leave explanations are informational snapshot notes, not approval blockers:
+no scheduled work, fully worked scheduled time, properly priced paid leave, and explicitly
+unpaid leave can complete payroll. Legacy/non-bank leave pays only displaced scheduled hours, never the
+calendar span (two eight-hour shifts in a two-day absence are 16 hours, not 48).
+Displaced leave with a missing leave rule, or paid leave missing any resolved post pay rate,
+still blocks approval and reports its pay estimate as unset. Refresh existing drafts to
+replace old leave-note blockers; locked snapshots are not rewritten. CSV/XLSX include an
+additive `note` column, and payroll/PDF keep informational notes visible.
+
+### Optional paid leave bank
+
+In **Settings -> Paid leave bank**, Owner/Admin can enable an annual-hours allowance and
+choose prorated upfront grants, earned-in-arrears pay-period accrual, or manual HR grants.
+Set the no-shift daily-hours suggestion, unused-hour carryover cap (zero expires unused
+available hours), and optional fallback pay rate. Configure the **Approved leave** hour
+category as paid. Existing bank-year grant/calendar terms stay fixed; policy edits apply
+to new enrollments and future years, with audited HR adjustments for current-year changes.
+
+HR enrolls each eligible employee with an eligibility date on their personnel Profile's
+**Leave bank** card. It shows available, reserved and paid hours, recent ledger activity,
+and inline enrollment/manual adjustment controls. Employees request bank leave from
+**My time off**. A scoped reviewer must explicitly confirm the suggested hours or override
+them; approval reserves them immediately and cannot overdraw the bank.
+
+Published displaced shifts supply the suggestion and day/rate weighting; without shifts,
+the daily default applies to each local calendar day touched (an end at midnight excludes
+the next day). The no-shift rate uses the employee hourly rate, then the company fallback.
+The default is never added on top of displaced shifts, and dates never imply 24-hour pay.
+Payroll clips the confirmed allocations to its period and deducts accepted worked time.
+Whole-period approval records the actual leave paid and returns unused reserved hours.
+Reopening reverses those refunds; if the hours have already been spent, an audited HR
+adjustment must restore them first. Bank leave is not settled by partial company-wide locks.
+HR can cancel approved leave and restore its outstanding reservation only while no part
+is locked. Changed leave invalidates overlapping drafts; refresh them before approval.
+
+The worker runs `accrue_leave`, also safe to invoke manually. Synchronization is audited
+and idempotent. Reserved hours are protected at rollover; disabling the bank prevents new
+enrollment/approval but preserves existing commitments and bank-year terms. Existing
+non-bank requests and previously approved payroll snapshots are not converted.
+
 Payroll PDFs use ReportLab to produce landscape, paginated snapshot reports with company,
 period, run and approval information, wrapped text, repeated table headers, totals, notes,
 and numbered confidential footers. Unset amounts are explicit and excluded from estimate

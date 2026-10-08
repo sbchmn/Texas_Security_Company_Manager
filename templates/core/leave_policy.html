@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block title %}Leave bank policy{% endblock %}{% block content %}
+<div class="page narrow"><div class="page-heading"><div><p class="eyebrow">Company setup</p><h1>Leave bank policy</h1><p>Optional annual hours bank. HR enrolls each eligible employee on their personnel Profile.</p></div></div>
+<section class="panel"><details><summary>How grants, approvals and payroll settlement work</summary>
+<p>Bank-year grant, accrual, carryover and pay-calendar terms are fixed when the year is first recorded. Changes apply to new enrollments and future years, not hours already earned. Use audited HR adjustments for current-year changes.</p>
+<p>Annual upfront grants are prorated from eligibility through December 31. Per-period accrual earns eligible calendar days only after each completed period, with the final year fragment settled at January 1. Zero carryover expires unused available hours; reserved hours remain committed.</p>
+<p>The daily default counts every local calendar day touched, excluding an end exactly at midnight. It is a suggestion, never automatic approval. Confirmed hours are reserved at approval and cannot exceed available hours. Disabling the bank blocks new enrollments and bank approvals; existing bank commitments and year terms are retained.</p>
+<p>Worked hours never receive leave pay as well. Unused reserved hours return to the bank at whole-period payroll approval. Reopening restores the reservation and reverses that refund; if the refund has already been spent, HR must restore sufficient hours first. Bank leave is settled by whole-period approval, not a partial company-wide lock.</p>
+</details>
+<p>Configure <a href="{% url 'settings_pay_categories' %}">Approved leave</a> as paid before approving bank leave. Paidness is separate from approving an absence.</p></section>
+<form method="post" class="panel data-form">{% csrf_token %}{{ form.as_div }}<div class="form-actions"><button class="button" type="submit">Save leave policy</button><a class="button secondary" href="{% url 'time_policy' %}">Time and payroll policy</a></div></form></div>
+{% endblock %}

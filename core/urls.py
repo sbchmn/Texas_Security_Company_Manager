@@ -5,8 +5,12 @@ from . import workspace_views
 from . import attendance_views
 from . import personnel_private_views
 from . import timesheet_views
+from . import leave_views
 
 urlpatterns = [
+    path("settings/leave/", leave_views.leave_policy, name="leave_policy"),
+    path("people/<uuid:person_id>/leave/", leave_views.employee_leave, name="employee_leave"),
+    path("time-off/<uuid:request_id>/cancel-approved/", leave_views.leave_cancel, name="leave_cancel"),
     path("people/<uuid:person_id>/private/", personnel_private_views.private_personnel, name="private_personnel"),
     path("attendance/", attendance_views.attendance_queue, name="attendance_queue"),
     path("attendance/<uuid:case_id>/", attendance_views.attendance_queue, name="attendance_detail"),

@@ -259,6 +259,7 @@ def settings(request):
             link("Branches","Operating locations that group personnel and sites.","branches",manager),
             link("Clock stations","Shared kiosks for punching in at a post, and officer PINs.","clock_kiosks",manager),
             link("Time and payroll policy","Workweek, overtime, rounding, and the contract or site rules that differ.","time_policy",privileged),
+            link("Paid leave bank","Annual hours, grant method, carryover and daily leave suggestions.","leave_policy",privileged),
             link("Pay codes","Job and cost-centre codes customer payroll keys an hour on.","pay_codes",manager),
             link("Hour categories","What a break, holiday, training, travel or double-time hour pays, and whether it counts toward overtime.","settings_pay_categories",role in PAYROLL or privileged),
             link("Rule history","Every version a clock rule or credential requirement has had.","rule_history",privileged),
@@ -796,6 +797,16 @@ def person_detail(request, person_id):
     if tab == "history" and not manager:
         raise Http404
     if tab == "profile":
+        from .leave import HR_ROLES, balance
+        from .leave_forms import LeaveAdjustmentForm, LeaveEnrollmentForm
+        from .models import LeaveAccount
+        if is_self or request.membership.role in HR_ROLES:
+            account = LeaveAccount.objects.filter(person=person, organization=request.organization).first()
+            context.update({
+                "show_leave_bank": True, "leave_bank": balance(account) if account else None,
+                "can_manage_leave": request.membership.role in HR_ROLES,
+                "leave_adjustment_form": LeaveAdjustmentForm(), "leave_enrollment_form": LeaveEnrollmentForm(),
+            })
         assignments = person.roster_assignments.select_related("client", "site__client").order_by("-active", "client__name", "site__name")
         scope = scope_for(request)
         if scope.restricted:
@@ -2873,6 +2884,15 @@ def my_time_off(request):
     if not person:
         return render(request, "core/my_time_off.html", {"person": None, "form": None, "requests": [], "collisions": 0})
     form = TimeOffRequestForm(request.POST or None)
+    from .leave import balance
+    from .models import LeaveAccount, LeavePolicy
+    account = LeaveAccount.objects.filter(person=person, organization=request.organization).first()
+    bank = balance(account) if account else None
+    bank_enabled = account is not None and LeavePolicy.objects.filter(organization=request.organization, enabled=True).exists()
+    if not bank_enabled:
+        form.fields["use_leave_bank"].disabled = True
+        if request.method == "POST" and request.POST.get("use_leave_bank"):
+            form.add_error("use_leave_bank", "HR must enroll you and enable the company bank before requesting bank hours.")
     if request.method == "POST" and form.is_valid():
         item = form.save(commit=False)
         item.organization = request.organization; item.person = person; item.requested_by = request.user
@@ -2892,6 +2912,7 @@ def my_time_off(request):
     return render(request, "core/my_time_off.html", {
         "person": person, "form": form, "requests": person.time_off_requests.all(),
         "collisions": len(collisions),
+        "leave_bank": bank,
     })
 
 
@@ -2931,11 +2952,27 @@ def time_off(request):
     else:
         items = items.filter(status=TimeOffRequest.Status.REQUESTED)
     rows = []
+    from .leave import balance, suggestion, HR_ROLES
+    from .leave_forms import LeaveApprovalForm
+    from .models import LeaveAccount
     for item in items.order_by("starts_at"):
-        rows.append({"request": item, "collisions": colliding_posts(item)})
+        bank = None
+        approval_form = None
+        bank_error = ""
+        if item.use_leave_bank and item.status == TimeOffRequest.Status.REQUESTED:
+            account = LeaveAccount.objects.filter(person=item.person, organization=request.organization).first()
+            bank = balance(account) if account else None
+            try:
+                proposed_hours = suggestion(item)
+            except ValidationError as exc:
+                bank_error = " ".join(exc.messages)
+                proposed_hours = None
+            approval_form = getattr(request, "leave_review_form", None) if getattr(request, "leave_review_id", None) == item.pk else LeaveApprovalForm(initial={"confirmed_hours": proposed_hours})
+        rows.append({"request": item, "collisions": colliding_posts(item), "bank": bank, "approval_form": approval_form, "bank_error": bank_error})
     return render(request, "core/time_off.html", {
         "rows": rows, "show": show, "decided_count": scope.filter_by_person(request.organization.time_off_requests).exclude(status=TimeOffRequest.Status.REQUESTED).count(),
         "authority_scope": scope if scope.restricted else None,
+        "can_cancel_leave": request.membership.role in HR_ROLES,
     })
 
 
@@ -2949,6 +2986,8 @@ def time_off_decide(request, request_id):
     and an approval that erased a published post would take coverage away from a client without
     an audit trail anyone chose.
     """
+    from .leave import lock_bank
+    lock_bank(request.organization)
     item = TimeOffRequest.objects.select_for_update().select_related("person").filter(
         pk=request_id, organization=request.organization, status=TimeOffRequest.Status.REQUESTED).first()
     if not item:
@@ -2960,9 +2999,26 @@ def time_off_decide(request, request_id):
         messages.error(request, "Approve or decline the request.")
         return redirect("time_off")
     note = request.POST.get("note", "").strip()
+    if action == TimeOffRequest.Status.APPROVED and item.use_leave_bank:
+        from .leave import reserve
+        from .leave_forms import LeaveApprovalForm
+        approval_form = LeaveApprovalForm(request.POST)
+        if approval_form.is_valid():
+            try:
+                reserve(item, approval_form.cleaned_data["confirmed_hours"], request.user)
+            except ValidationError as exc:
+                approval_form.add_error(None, exc)
+        if approval_form.errors:
+            request.leave_review_form = approval_form
+            request.leave_review_id = item.pk
+            return time_off(request)
     item.status = action
     item.decided_by = request.user; item.decided_at = timezone.now(); item.review_note = note[:255]
-    item.save(update_fields=["status", "decided_by", "decided_at", "review_note"])
+    item.save(update_fields=["status", "decided_by", "decided_at", "review_note", "confirmed_leave_hours"])
+    if item.use_leave_bank and action == TimeOffRequest.Status.APPROVED:
+        for run in request.organization.payroll_runs.filter(status="draft", period_start__lt=item.ends_at, period_end__gt=item.starts_at):
+            run.exceptions = [*run.exceptions, {"employee": item.person.full_name, "reason": "Approved bank leave changed; regenerate this draft before approval."}]
+            run.save(update_fields=["exceptions"])
     stamp = timezone.now().strftime("%Y%m%d%H%M")
     queue_notice(organization=request.organization, recipients=({item.person.user_id} if item.person.user_id else set()),
                  event_type=f"timeoff.{action}",
@@ -5041,6 +5097,7 @@ def payroll(request):
         "pending_correction_count":pending_correction_count,"open_segments":open_segments,
         "approval_blocked":approval_blocked,
         "preview_counts": preview_counts, "snapshot_summary": snapshot_summary,
+        "snapshot_notes": [row for row in snapshot if row.get("note")],
         "period_counts": period_counts, "period_punch_page": period_punch_page,
         "evidence_filter": evidence_filter, "evidence_person": evidence_person, "evidence_people": evidence_people,
         "by_pay_code":payroll_totals(snapshot,by="pay_code"),

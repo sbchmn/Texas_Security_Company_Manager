@@ -30,12 +30,12 @@ WORKSPACES = (
     ("People", "workspace_people", "MANAGERS", (
         "workspace_people", "people", "person_detail", "person_edit", "person_create", "person_access_invite", "person_access_link",
         "person_availability", "availability_remove", "person_credential_create", "person_training_create",
-        "person_document_upload", "document_acknowledge", "availability", "signing_queue", "private_personnel"
+        "person_document_upload", "document_acknowledge", "availability", "signing_queue", "private_personnel", "employee_leave"
     )),
     ("Schedule", "workspace_schedule", "MANAGERS", (
         "workspace_schedule", "schedule", "shift_create", "shift_edit", "shift_cancel", "shift_templates",
         "shift_template_create", "shift_template_edit", "shift_template_generate", "swaps", "swap_decide",
-        "exchange_decide", "time_off", "time_off_decide", "open_posts", "shift_requests", "shift_claim"
+        "exchange_decide", "time_off", "time_off_decide", "leave_cancel", "open_posts", "shift_requests", "shift_claim"
     )),
     ("Time & Payroll", "workspace_payroll", "TIME_REVIEWERS", (
         "workspace_payroll", "time_review", "punch_detail", "punch_review", "adjustment_review", "payroll", "payroll_approve",
@@ -80,7 +80,7 @@ SETTINGS_NAVIGATION = (
         "branding", "brand_rollback", "domains", "domain_verify"
     )),
     ("Security & policies", "security_settings", "PRIVILEGED", (
-        "security_settings", "time_policy", "messaging_settings", "messaging_rotate_token", "signing_settings",
+        "security_settings", "time_policy", "leave_policy", "messaging_settings", "messaging_rotate_token", "signing_settings",
         "sms_templates", "sms_templates_legacy", "sms_template_edit", "email_template_edit"
     )),
     ("Data & integrations", "imports", "RECORD_WRITERS", (

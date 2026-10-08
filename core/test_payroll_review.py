@@ -10,8 +10,8 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AuditEvent, Membership, Organization, PayrollRun, Person, Punch, PunchAdjustment
-from .services import create_payroll_run, payroll_snapshot_pdf, payroll_snapshot_summary
+from .models import AuditEvent, Client, Membership, Organization, PayCategory, PayrollRun, Person, Punch, PunchAdjustment, Shift, Site, TimeOffRequest
+from .services import approve_payroll_run, create_payroll_run, payroll_snapshot_csv, payroll_snapshot_pdf, payroll_snapshot_summary
 
 
 def pdf_streams(document):
@@ -213,3 +213,99 @@ class PayrollPdfTest(TestCase):
         document = payroll_snapshot_pdf([self.row(site="Long location detail " * 300 + "ENDOVERSIZEDROW")])
         self.assertGreater(len(re.findall(rb"/Type /Page\b", document)), 1)
         self.assertIn(b"ENDOVERSIZEDROW", pdf_streams(document))
+
+
+class LeavePayrollBlockerTest(TestCase):
+    def setUp(self):
+        self.org = Organization.objects.create(legal_name="Leave Payroll", slug="leave-payroll")
+        self.owner = get_user_model().objects.create_user(username="leave-payroll-owner")
+        Membership.objects.create(organization=self.org, user=self.owner, role=Membership.Role.OWNER)
+        self.person = Person.objects.create(organization=self.org, first_name="Leave", last_name="Officer")
+        customer = Client.objects.create(organization=self.org, name="Customer")
+        self.site = Site.objects.create(organization=self.org, client=customer, name="Gate")
+        self.start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
+        self.end = self.start + timedelta(days=2)
+        TimeOffRequest.objects.create(organization=self.org, person=self.person, status="approved",
+            starts_at=self.start, ends_at=self.end)
+        self.category = PayCategory.objects.create(organization=self.org, kind="leave", name="Leave", paid=True)
+        self.client.force_login(self.owner)
+
+    def generate(self):
+        return create_payroll_run(organization=self.org, start=self.start, end=self.end, actor=self.owner)
+
+    def shift(self, **kwargs):
+        return Shift.objects.create(organization=self.org, site=self.site, officer=self.person,
+            starts_at=self.start + timedelta(hours=8), ends_at=self.start + timedelta(hours=16),
+            status="published", **kwargs)
+
+    def test_no_scheduled_basis_is_note_and_draft_can_be_approved(self):
+        run = self.generate()
+        self.assertEqual([], run.exceptions)
+        self.assertEqual("", run.snapshot[0]["exception"])
+        self.assertIn("no post was scheduled", run.snapshot[0]["note"])
+        approve_payroll_run(run, self.owner)
+        self.assertEqual("approved", run.status)
+        page = self.client.get(reverse("payroll") + f"?run={run.pk}")
+        self.assertContains(page, "Snapshot notes")
+        self.assertIn(b"no post was scheduled", payroll_snapshot_csv(run.snapshot))
+        self.assertIn(b"no post was scheduled", pdf_streams(payroll_snapshot_pdf(run.snapshot)))
+
+    def test_priced_paid_and_explicit_unpaid_leave_do_not_block(self):
+        self.shift(pay_rate="20.00")
+        run = self.generate()
+        self.assertEqual([], run.exceptions)
+        self.assertEqual("160.00", run.snapshot[0]["estimated_pay"])
+        self.category.paid = False
+        self.category.save()
+        run = self.generate()
+        self.assertEqual([], run.exceptions)
+        self.assertEqual("0.00", run.snapshot[0]["estimated_pay"])
+        self.assertIn("unpaid", run.snapshot[0]["note"])
+
+    def test_missing_rule_only_blocks_displaced_leave(self):
+        self.category.delete()
+        self.assertEqual([], self.generate().exceptions)
+        self.shift(pay_rate="20.00")
+        run = self.generate()
+        self.assertIn("no leave pay rule", run.exceptions[0]["reason"])
+        self.assertEqual("", run.snapshot[0]["estimated_pay"])
+
+    def test_missing_rate_blocks_paid_leave_without_partial_success_total(self):
+        self.shift()
+        run = self.generate()
+        self.assertIn("missing a pay rate", run.exceptions[0]["reason"])
+        self.assertEqual("", run.snapshot[0]["estimated_pay"])
+        self.category.paid = False
+        self.category.save()
+        self.assertEqual([], self.generate().exceptions)
+
+    def test_refresh_existing_draft_clears_old_false_blocker(self):
+        run = PayrollRun.objects.create(organization=self.org, period_start=self.start, period_end=self.end,
+            created_by=self.owner, snapshot=[{"employee": self.person.full_name, "exception": "Approved leave note"}],
+            exceptions=[{"employee": self.person.full_name, "reason": "Approved leave note"}])
+        refreshed = self.generate()
+        self.assertEqual(run.pk, refreshed.pk)
+        self.assertEqual([], refreshed.exceptions)
+        self.assertIn("no post was scheduled", refreshed.snapshot[0]["note"])
+
+    def test_fully_worked_leave_is_note_not_blocker(self):
+        shift = self.shift(pay_rate="20.00")
+        for kind, at in (("in", shift.starts_at), ("out", shift.ends_at)):
+            Punch.objects.create(organization=self.org, person=self.person, shift=shift, kind=kind,
+                occurred_at=at, client_event_id=uuid.uuid4())
+        run = self.generate()
+        leave = next(row for row in run.snapshot if row["pay_category"] == "leave")
+        self.assertEqual("", leave["exception"])
+        self.assertIn("was worked", leave["note"])
+        self.assertEqual("0.00", leave["estimated_pay"])
+
+    def test_two_calendar_days_only_pay_two_eight_hour_shifts(self):
+        self.shift(pay_rate="20.00")
+        Shift.objects.create(organization=self.org, site=self.site, officer=self.person,
+            starts_at=self.start + timedelta(days=1, hours=8),
+            ends_at=self.start + timedelta(days=1, hours=16), status="published", pay_rate="20.00")
+        run = self.generate()
+        self.assertEqual([], run.exceptions)
+        self.assertEqual("16.00", run.snapshot[0]["total_hours"])
+        self.assertEqual("320.00", run.snapshot[0]["estimated_pay"])
+        self.assertIn("48.00 calendar hours", run.snapshot[0]["note"])

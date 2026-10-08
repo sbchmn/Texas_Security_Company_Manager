@@ -2310,6 +2310,8 @@ class TimeOffRequest(models.Model):
     decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="decided_time_off")
     decided_at = models.DateTimeField(null=True, blank=True)
     review_note = models.CharField(max_length=255, blank=True)
+    use_leave_bank = models.BooleanField(default=False)
+    confirmed_leave_hours = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -2327,6 +2329,94 @@ class TimeOffRequest(models.Model):
 
     def __str__(self):
         return f"{self.person} off {self.starts_at:%Y-%m-%d}–{self.ends_at:%Y-%m-%d}"
+
+
+class LeavePolicy(models.Model):
+    class GrantMethod(models.TextChoices):
+        ANNUAL = "annual", "Annual upfront grant (prorated at enrollment)"
+        ACCRUAL = "accrual", "Accrue after each completed pay period"
+        MANUAL = "manual", "Manual HR grants"
+
+    organization = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name="leave_policy")
+    enabled = models.BooleanField(default=False)
+    annual_hours = models.DecimalField(max_digits=9, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+    grant_method = models.CharField(max_length=12, choices=GrantMethod.choices, default=GrantMethod.MANUAL)
+    daily_hours = models.DecimalField(max_digits=5, decimal_places=2, default=8,
+                                     validators=[MinValueValidator(0), MaxValueValidator(24)])
+    carryover_cap = models.DecimalField(max_digits=9, decimal_places=2, default=0, validators=[MinValueValidator(0)],
+                                       help_text="Zero expires unused available hours; otherwise carry over up to this cap.")
+    fallback_pay_rate = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True,
+                                           validators=[MinValueValidator(0)])
+
+
+class LeaveAccount(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="leave_accounts")
+    person = models.OneToOneField(Person, on_delete=models.CASCADE, related_name="leave_account")
+    eligible_from = models.DateField()
+    enrolled_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        if self.person_id and self.person.organization_id != self.organization_id:
+            raise ValidationError("Employee must belong to this company.")
+
+
+class LeaveYear(models.Model):
+    account = models.ForeignKey(LeaveAccount, on_delete=models.CASCADE, related_name="years")
+    year = models.PositiveSmallIntegerField()
+    annual_hours = models.DecimalField(max_digits=9, decimal_places=2)
+    grant_method = models.CharField(max_length=12, choices=LeavePolicy.GrantMethod.choices)
+    carryover_cap = models.DecimalField(max_digits=9, decimal_places=2)
+    pay_period_weeks = models.PositiveSmallIntegerField()
+    pay_period_anchor = models.DateField()
+    timezone = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["account", "year"], name="unique_leave_account_year")]
+
+
+class LeaveEntry(models.Model):
+    account = models.ForeignKey(LeaveAccount, on_delete=models.CASCADE, related_name="entries")
+    key = models.CharField(max_length=100)
+    kind = models.CharField(max_length=16, choices=[
+        ("grant", "Annual grant"), ("accrual", "Earned accrual"), ("adjustment", "HR adjustment"),
+        ("expiry", "Year-end expiry"), ("reserve", "Approved reservation"), ("release", "Release / refund")])
+    hours = models.DecimalField(max_digits=9, decimal_places=2)
+    effective_on = models.DateField()
+    reason = models.CharField(max_length=255)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    request = models.ForeignKey(TimeOffRequest, on_delete=models.PROTECT, null=True, blank=True, related_name="bank_entries")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-effective_on", "-pk"]
+        constraints = [models.UniqueConstraint(fields=["account", "key"], name="unique_leave_entry_key")]
+
+
+class LeaveDay(models.Model):
+    request = models.ForeignKey(TimeOffRequest, on_delete=models.CASCADE, related_name="leave_days")
+    day = models.DateField()
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    hours = models.DecimalField(max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
+    pay_rate = models.DecimalField(max_digits=9, decimal_places=2, validators=[MinValueValidator(0)])
+    multiplier = models.DecimalField(max_digits=5, decimal_places=2)
+    policy_revision = models.PositiveIntegerField()
+    consumed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["day"]
+        constraints = [models.UniqueConstraint(fields=["request", "day"], name="unique_leave_request_day")]
+
+
+class LeaveUsage(models.Model):
+    day = models.ForeignKey(LeaveDay, on_delete=models.PROTECT, related_name="usages")
+    run = models.ForeignKey("PayrollRun", on_delete=models.PROTECT, related_name="leave_usages")
+    reserved_hours = models.DecimalField(max_digits=7, decimal_places=2)
+    paid_hours = models.DecimalField(max_digits=7, decimal_places=2)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["day", "run"], name="unique_leave_usage_run_day")]
 
 
 class PayCategory(models.Model):

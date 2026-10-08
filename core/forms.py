@@ -77,9 +77,10 @@ class AvailabilityRuleForm(WorkflowModelForm):
 class TimeOffRequestForm(WorkflowModelForm):
     class Meta:
         model = TimeOffRequest
-        fields = ["starts_at", "ends_at", "reason"]
+        fields = ["starts_at", "ends_at", "reason", "use_leave_bank"]
         widgets = {"starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}), "reason": forms.Textarea(attrs={"rows": 3})}
         help_texts = {
+            "use_leave_bank": "Request paid bank hours. A reviewer confirms the hours; insufficient available balance prevents approval.",
             "reason": "Optional. A manager deciding the request sees this, and the schedule warning names the posts it collides with.",
         }
 

@@ -1,7 +1,35 @@
 # Feature implementation status
 
+## Optional annual leave bank (2026-10-08)
+
+- Company policy supports prorated upfront annual grants, completed-period accrual and
+  manual HR grants, configurable capped carryover/expiry, no-shift daily suggestions,
+  and an optional fallback pay rate. HR explicitly enrolls eligible personnel and records
+  reasoned adjustments; employees see balances and opt into bank leave requests.
+- Scoped approval requires confirmed hours and an explicit confirmation checkbox. An
+  audited reservation immediately reduces available hours; insufficient balance, missing
+  paid category/rate, overlapping bank approvals and payroll locks refuse approval.
+  Published shifts supply the hour/day/rate basis; otherwise local days touched supply the
+  suggestion and personnel/company rates apply. Rates/multipliers are approval snapshots.
+- Payroll uses confirmed day allocations, clips them to period boundaries with cumulative
+  cent rounding, and deducts accepted worked time (including boundary/corrected tours).
+  Whole-period approval settles actual paid hours and refunds unused reserved hours.
+  Reopening reverses refunds without allowing negative balances; cancellation restores the
+  outstanding reservation only after all relevant payroll locks have been reopened.
+- Bank-year terms are fixed once materialized. Grants/accrual/expiry are idempotent and
+  audited; the worker runs `accrue_leave`. Migration 0072 adds opt-in fields and bank tables
+  without converting existing requests or rewriting approved snapshots. Bank leave
+  requires whole-period approval rather than a partial company-wide lock.
+
 ## Payroll evidence review and printable reports (2026-10-08)
 
+- Approved leave now separates informational `note` text from blocking `exception`.
+  No-basis/fully-worked leave, correctly priced paid leave, and explicitly unpaid leave
+  no longer block approval. Displaced leave missing a category, or paid leave missing a
+  resolved pay rate, remains blocking with an unset (not partial or zero) estimate.
+  Calendar spans never become paid hours. Refreshing a draft replaces legacy false
+  blockers; approved snapshots remain unchanged. Notes appear in payroll, PDFs, and an
+  additive CSV/XLSX `note` column.
 - Generation shows punch/pending-correction counts for its preset range. The selected run
   shows saved employee/line/hour/money summaries separately from live evidence counts,
   with an expandable employee breakdown. Unset estimates are counted, not silently priced.

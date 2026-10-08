@@ -1,0 +1,9 @@
+<section class="panel" id="leave-bank"><h2>Leave bank</h2>
+{% if leave_bank %}
+<p>Eligible from {{ leave_bank.account.eligible_from }}. Hours are a bank, not elapsed absence time.</p>
+<dl class="profile-list"><dt>Granted / earned / adjusted (lifetime)</dt><dd>{{ leave_bank.credited|floatformat:2 }} hours</dd><dt>Available</dt><dd><strong>{{ leave_bank.available|floatformat:2 }} hours</strong></dd><dt>Reserved for approved leave</dt><dd>{{ leave_bank.reserved|floatformat:2 }} hours</dd><dt>Paid leave in locked payroll</dt><dd>{{ leave_bank.used|floatformat:2 }} hours</dd></dl>
+<p class="helptext">Hours worked during approved leave are excluded from leave pay and returned to this bank when the full payroll period is locked.</p>
+{% if can_manage_leave %}<details><summary>Grant or adjust hours</summary><form method="post" action="{% url 'employee_leave' person.pk %}" class="stacked-form">{% csrf_token %}<input type="hidden" name="action" value="adjust">{{ leave_adjustment_form.as_div }}<button class="button button-small">Record audited adjustment</button></form></details>{% endif %}
+<details><summary>Recent bank activity</summary>{% for entry in leave_bank.entries %}<p>{{ entry.effective_on }} &middot; {{ entry.get_kind_display }}: {{ entry.hours|floatformat:2 }} hours<br>{{ entry.reason }}{% if entry.actor %} &middot; {{ entry.actor }}{% endif %}</p>{% empty %}<p>No bank activity yet.</p>{% endfor %}</details>
+{% else %}<p>Not enrolled in the leave bank.</p>{% if can_manage_leave %}<details><summary>Enroll employee</summary><form method="post" action="{% url 'employee_leave' person.pk %}" class="stacked-form">{% csrf_token %}<input type="hidden" name="action" value="enroll">{{ leave_enrollment_form.as_div }}<button class="button button-small">Enroll in company leave policy</button></form></details>{% endif %}{% endif %}
+</section>

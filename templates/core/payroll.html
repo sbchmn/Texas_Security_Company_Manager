@@ -62,6 +62,10 @@
         </ul>
         <p class="muted">After changing source records or resolving time evidence, refresh this draft for the selected period. The server will not approve a draft while its exception list is non-empty.</p>
       {% endif %}
+      {% if snapshot_notes %}<details>
+        <summary>Snapshot notes (informational, not approval blockers)</summary>
+        <ul>{% for item in snapshot_notes %}<li><strong>{{ item.employee }}:</strong> {{ item.note }}</li>{% endfor %}</ul>
+      </details>{% endif %}
       {% if selected_run.status == 'draft' %}
         <div class="form-actions">
           <form method="post" action="{% url 'payroll' %}?run={{ selected_run.pk }}">{% csrf_token %}

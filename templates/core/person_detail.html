@@ -53,6 +53,7 @@
     <form method="post" action="{% url 'person_detail' person.pk %}#roster-assignments" class="stacked-form">{% csrf_token %}<input type="hidden" name="action" value="roster_add">{{ assignment_form.as_div }}<button class="button button-small" type="submit">Save assignments</button></form></details>
     {% endif %}
   </section>
+  {% if show_leave_bank %}{% include 'core/_leave_bank.html' %}{% endif %}
   <section class="panel"><h2>Custom fields</h2><dl class="profile-list">
     {% for definition,value in custom %}<dt>{{ definition.name }}</dt><dd>{% if value %}{% if definition.kind == 'boolean' %}{{ value.value|yesno:'Yes,No,—' }}{% else %}{{ value.value|default_if_none:'—' }}{% endif %}{% else %}—{% endif %}</dd>
     {% empty %}<p class="muted">No custom fields configured.</p>{% endfor %}
