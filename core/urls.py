@@ -6,8 +6,11 @@ from . import attendance_views
 from . import personnel_private_views
 from . import timesheet_views
 from . import leave_views
+from . import pwa
 
 urlpatterns = [
+    path("install/", pwa.install_app, name="install_app"),
+    path(".well-known/assetlinks.json", pwa.asset_links, name="asset_links"),
     path("settings/leave/", leave_views.leave_policy, name="leave_policy"),
     path("people/<uuid:person_id>/leave/", leave_views.employee_leave, name="employee_leave"),
     path("time-off/<uuid:request_id>/cancel-approved/", leave_views.leave_cancel, name="leave_cancel"),

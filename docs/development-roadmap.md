@@ -1425,7 +1425,7 @@ and §13's SIG-0 bullet records the correction.
 | RB §HCRM record catalog | `DocumentType` audiences, per-type retention, legal hold, disposition approval |
 | RB §Payroll export baseline | `PAYROLL_EXPORT_FIELDS`, worked vs rounded columns, policy provenance (pay codes/categories still open → PAY-1/2) |
 | RB §Secure document upload defaults | MIME/extension/signature validation, malware scan, download-only serving |
-| RB §Mobile delivery options | installable PWA shell, offline punch queue, 12-hour sync gate (launch gap → CLK-5) |
+| RB §Mobile delivery options | installable PWA with Android/iOS installation help, offline clock root launch, 12-hour sync gate; Android TWA/iOS Xcode package sources prepared (store/device gates: [mobile rollout](mobile-rollout.md)) |
 | RB §Email and SMS providers | SES/Mailjet/Postmark + SNS/Twilio adapters, per-organization provider choice |
 | RB §Notification event catalog | event families now covered; the rest is NTF-3 |
 | E-signature tooling (§13) | Self-hosted DocuSeal plus per-step application signing, authenticated reconciliation and local signed PDF/audit filing implemented; manual templates/explicit sending selected; deployment phone ceremony and restore acceptance remain |

@@ -1,6 +1,7 @@
 """Django settings for the Texas Security Company Manager."""
 from pathlib import Path
 import os
+import re
 import sys
 
 from django.core.exceptions import ImproperlyConfigured
@@ -85,6 +86,17 @@ if not PLATFORM_HOSTS:
 CSRF_TRUSTED_ORIGINS = [u.strip() for u in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if u.strip()]
 # Where links in text messages point (core.sms.public_base_url); a verified company domain wins.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+PWA_NAME = os.getenv("PWA_NAME", APP_NAME).strip()
+PWA_SHORT_NAME = os.getenv("PWA_SHORT_NAME", "TSCM").strip()
+ANDROID_PACKAGE_ID = os.getenv("ANDROID_PACKAGE_ID", "com.texaslibertycoalition.tscm").strip()
+ANDROID_SHA256_FINGERPRINTS = [value.strip().upper() for value in
+                             os.getenv("ANDROID_SHA256_FINGERPRINTS", "").split(",") if value.strip()]
+if not PWA_NAME or not PWA_SHORT_NAME or len(PWA_SHORT_NAME) > 30:
+    raise ImproperlyConfigured("PWA_NAME is required and PWA_SHORT_NAME must contain 1-30 characters.")
+if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+", ANDROID_PACKAGE_ID):
+    raise ImproperlyConfigured("ANDROID_PACKAGE_ID must be a reverse-DNS Android application ID.")
+if any(not re.fullmatch(r"(?:[0-9A-F]{2}:){31}[0-9A-F]{2}", value) for value in ANDROID_SHA256_FINGERPRINTS):
+    raise ImproperlyConfigured("ANDROID_SHA256_FINGERPRINTS requires comma-separated colon-delimited SHA-256 fingerprints.")
 PERSONNEL_ENCRYPTION_KEYS = tuple(key.strip() for key in os.getenv("PERSONNEL_ENCRYPTION_KEYS", "").split(",") if key.strip())
 
 INSTALLED_APPS = [

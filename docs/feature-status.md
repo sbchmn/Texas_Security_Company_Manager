@@ -1,5 +1,21 @@
 # Feature implementation status
 
+## Mobile installation and package preparation (2026-10-08)
+
+- Stable deployment-level PWA identity, explicit scope/ID, PNG/maskable icons and Apple
+  touch metadata. My account links to Android/iPhone installation and offline help.
+- Build-aware hashed static worker assets; app-root offline launch uses only a previously
+  prepared clock. Stale markers survive navigation timing; logout/company switching clears
+  saved clock/theme documents without deleting queued evidence. Updates are not forced
+  over open forms, and cache cleanup is limited to TSCM-owned namespaces.
+- Android Gradle TWA sources, environment-only release signing and public Digital Asset
+  Links configuration. iOS SwiftUI/app-bound WKWebView XcodeGen sources include native
+  navigation/connectivity/error reporting and download sharing.
+- This is preparation, not store publication or physical-device certification. Android
+  SDK binary build, macOS/Xcode validation, native iOS SSO/storage-download compatibility,
+  account-deletion/privacy disclosures and store review remain explicit gates.
+  See [mobile-rollout.md](mobile-rollout.md).
+
 ## Optional annual leave bank (2026-10-08)
 
 - Company policy supports prorated upfront annual grants, completed-period accrual and
@@ -2613,4 +2629,6 @@ regulatory data, an operator must complete:
 The MySQL tenant-integrity and audit-immutability triggers are now exercised by CI, so the
 former "MySQL trigger verification" gate is automated rather than operator-performed.
 Texas compliance rules remain subject to owner-approved legal interpretation. Native
-iOS/Android packaging and subscription billing remain intentionally outside the PWA-first MVP.
+iOS/Android package sources are now prepared (see Mobile installation and package preparation
+above); signing, physical-device certification and store publication remain release gates.
+Subscription billing remains intentionally outside the PWA-first MVP.

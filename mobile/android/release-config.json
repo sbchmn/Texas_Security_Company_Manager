@@ -1,0 +1,12 @@
+{
+  "origin": "https://tscm.texaslibertycoalition.com",
+  "manifest": "https://tscm.texaslibertycoalition.com/manifest.webmanifest",
+  "packageId": "com.texaslibertycoalition.tscm",
+  "appName": "TSCM - Texas Liberty Coalition",
+  "launcherName": "TSCM",
+  "startUrl": "/?source=pwa",
+  "display": "standalone",
+  "themeColor": "#16324F",
+  "backgroundColor": "#F4F7FB",
+  "signing": "Use a private upload key; publish the Play App Signing certificate SHA-256 in ANDROID_SHA256_FINGERPRINTS."
+}

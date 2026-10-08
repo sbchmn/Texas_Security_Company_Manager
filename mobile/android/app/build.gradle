@@ -1,0 +1,49 @@
+plugins {
+    id "com.android.application"
+}
+
+def signingKeys = ["TSCM_UPLOAD_KEYSTORE", "TSCM_UPLOAD_STORE_PASSWORD",
+                   "TSCM_UPLOAD_KEY_ALIAS", "TSCM_UPLOAD_KEY_PASSWORD"]
+def hasSigning = signingKeys.every { System.getenv(it) }
+if (signingKeys.any { System.getenv(it) } && !hasSigning) {
+    throw new GradleException("Provide all four TSCM_UPLOAD_* signing environment variables, or none.")
+}
+
+android {
+    namespace "com.texaslibertycoalition.tscm"
+    compileSdk 36
+    defaultConfig {
+        applicationId "com.texaslibertycoalition.tscm"
+        minSdk 23
+        targetSdk 36
+        versionCode 1
+        versionName "1.0.0"
+    }
+    signingConfigs {
+        if (hasSigning) {
+            upload {
+                storeFile file(System.getenv("TSCM_UPLOAD_KEYSTORE"))
+                storePassword System.getenv("TSCM_UPLOAD_STORE_PASSWORD")
+                keyAlias System.getenv("TSCM_UPLOAD_KEY_ALIAS")
+                keyPassword System.getenv("TSCM_UPLOAD_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (hasSigning) signingConfig signingConfigs.upload
+        }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    if (!hasSigning && !providers.gradleProperty("allowUnsignedRelease").isPresent() &&
+        graph.allTasks.any { it.name in ["bundleRelease", "assembleRelease"] }) {
+        throw new GradleException("Release signing is not configured. Use private TSCM_UPLOAD_* environment variables. " +
+                                  "For non-distributable build validation only, pass -PallowUnsignedRelease=true.")
+    }
+}
+
+dependencies {
+    implementation "com.google.androidbrowserhelper:androidbrowserhelper:2.7.4"
+}

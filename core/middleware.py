@@ -150,7 +150,7 @@ class RequiredMfaMiddleware:
     # Background resource redirects also GET enrollment and replace the session secret
     # behind the visible QR. Exempt only these shell reads; their view guards still apply.
     ENROLLMENT_RESOURCE_PATHS = frozenset({
-        "/theme.css", "/logo", "/manifest.webmanifest", "/service-worker.js",
+        "/theme.css", "/logo", "/manifest.webmanifest", "/service-worker.js", "/.well-known/assetlinks.json",
     })
 
     def __init__(self, get_response): self.get_response=get_response

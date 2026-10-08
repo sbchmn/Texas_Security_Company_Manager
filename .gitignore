@@ -12,6 +12,23 @@ staticfiles/
 .pytest_cache/
 .DS_Store
 artifacts/
+node_modules/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/generated/
+mobile/ios/*.xcodeproj/
+mobile/ios/build/
+*.xcuserstate
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+*.apk
+*.aab
+*.ipa
+*.xcarchive/
 # Scratch space for one-off probes and diagnostic scripts while a session is working. The harnesses that
 # earned a permanent home live in scripts/verification/ instead; anything still here is disposable, and
 # a probe that has been copied into the repo tends to carry a throwaway container's password in it.

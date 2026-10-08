@@ -1,5 +1,19 @@
 # Texas Security Company Manager
 
+## Mobile installation and store preparation
+
+Android and iPhone/iPad home-screen installation is documented on the app's `/install/`
+page, also linked from My account. Stable manifests, PNG/Apple/maskable icons, build-aware
+worker caches and honest offline-clock launch support the website PWA.
+
+[Mobile rollout](docs/mobile-rollout.md) covers production setup, employee installation,
+offline/update limits, Android Gradle TWA signing/Digital Asset Links, the iOS XcodeGen
+project, and store privacy/reviewer/device-test gates. Package sources are in
+[mobile/android](mobile/android) and [mobile/ios](mobile/ios). They target
+`https://tscm.texaslibertycoalition.com` as **TSCM - Texas Liberty Coalition**.
+They are not signed, published or store-approved binaries; Android SDK build and macOS/Xcode
+certification, privacy/account-deletion handling and applicable store review remain release gates.
+
 This repository is in **active foundation development** for a Texas-only workforce and
 regulatory-compliance platform for private-security companies.
 

@@ -1,4 +1,3 @@
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js'));
 const menuButton = document.querySelector('[data-menu]');
 const menuClose = document.querySelector('[data-menu-close]');
 const setMenuOpen = open => {
@@ -172,7 +171,7 @@ if (clock) {
   // shows the posts as of the last online load and carries a session token that may no longer match,
   // so it has to say it is stale and reload itself the moment signal returns rather than let a
   // guard act on state nobody has confirmed.
-  let servedStale=!navigator.onLine;
+  let servedStale=!navigator.onLine||clock.hasAttribute('data-clock-stale');
   const banner=clock.querySelector('[data-clock-offline]');
   const admitStale=()=>{servedStale=true;if(banner)banner.hidden=false;};
   if(servedStale)admitStale();

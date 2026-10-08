@@ -3055,11 +3055,14 @@ def clock(request):
     # and keyed as a string because the template compares it against `shift.site_id`.
     selfie_sites = {str(site.pk): effective_clock_policy(request.organization, site).selfie["required"]
                     for site in {shift.site for shift in shifts if shift.site_id}}
-    return render(request,"core/clock.html",{"person":person,"shifts":shifts,"checkpoints":checkpoints,"recent":recent,
+    response = render(request,"core/clock.html",{"person":person,"shifts":shifts,"checkpoints":checkpoints,"recent":recent,
         "has_pin":bool(person and person.clock_pin),"kiosks":kiosks,
         "selfie_sites":selfie_sites,"selfie_sites_json":json.dumps(selfie_sites),
         "selfie_endpoint":reverse("clock_selfie_upload"),
         "any_selfie":any(selfie_sites.values())})
+    if person:
+        response["X-TSCM-Offline-Clock"] = "1"
+    return response
 
 @require_POST
 @membership_required()
@@ -5430,58 +5433,12 @@ def audit_seal_download(request, seal_id):
 
 @never_cache
 def manifest(request):
-    membership = request.user.organization_memberships.filter(active=True).select_related("organization").first() if request.user.is_authenticated else None
-    name = membership.organization.display_name if membership else "Texas Security Company Manager"
-    return JsonResponse({"name": name, "short_name": name[:24], "start_url": "/", "display": "standalone", "background_color": "#F4F7FB", "theme_color": membership.organization.primary_color if membership else "#16324F", "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"}]})
+    from .pwa import manifest as pwa_manifest
+    return pwa_manifest(request)
 
 def service_worker(request):
-    # CLK-5. The shell used to be the only thing cached, so a guard whose tab had closed could
-    # install the app and still get a browser error page at the gate — "installable" meant the
-    # icon worked. /clock/ is now cached as a document and refreshed on every online load, and the
-    # page is told through a message when what it is rendering came from cache rather than the
-    # server, because a stale page that looks live is worse than one that admits it is stale.
-    #
-    # Disclosed trade-off: the cached document is this officer's own schedule and patrol points, so
-    # on a shared kiosk an offline reopen can show the last person's roster. It is served only as a
-    # fallback when the network is unreachable and the sign-in cookie still applies to the reload,
-    # and the punch queue is encrypted per device — the page being visible never lets a punch be
-    # attributed to anyone but the device token that recorded it.
-    js = '''const SHELL="tscm-shell-v2",DOCS="tscm-docs-v2";
-const SHELL_ASSETS=["/static/css/app.css","/static/js/app.js","/static/icon.svg","/theme.css","/manifest.webmanifest"];
-const PAGES=["/clock/"];
-const put=(cache,key,response)=>response.ok?cache.put(key,response.clone()):null;
-self.addEventListener("install",event=>event.waitUntil((async()=>{
-  const shell=await caches.open(SHELL);
-  await Promise.all(SHELL_ASSETS.map(path=>fetch(path,{redirect:"error"}).then(response=>put(shell,path,response)).catch(()=>null)));
-  const docs=await caches.open(DOCS);
-  await Promise.all(PAGES.map(path=>fetch(path,{credentials:"same-origin",redirect:"error"}).then(response=>put(docs,path,response)).catch(()=>null)));
-})()));
-self.addEventListener("activate",event=>event.waitUntil((async()=>{
-  const names=await caches.keys();
-  await Promise.all(names.filter(name=>name!==SHELL&&name!==DOCS).map(name=>caches.delete(name)));
-  await self.clients.claim();
-})()));
-const announceStale=()=>self.clients.matchAll({type:"window"}).then(list=>list.forEach(client=>client.postMessage({type:"clock-served-from-cache"})));
-const offlineNotice=()=>new Response('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Time clock - offline</title><link rel="stylesheet" href="/static/css/app.css"></head><body><main class="page narrow"><h1>No saved clock page</h1><p>The clock could not be reached and this device has not opened it while online yet. Reopen it once you have signal; punches taken before that are not lost, they wait encrypted on this device.</p></main></body></html>',{status:200,headers:{"Content-Type":"text/html; charset=utf-8"}});
-self.addEventListener("fetch",event=>{
-  const request=event.request;
-  if(request.method!=="GET")return;
-  const url=new URL(request.url);
-  const path=url.pathname.endsWith("/")?url.pathname:url.pathname+"/";
-  if(PAGES.includes(path)){
-    event.respondWith(fetch(request).then(response=>{
-      if(response.ok)caches.open(DOCS).then(cache=>cache.put(request,response.clone()));
-      return response;
-    }).catch(()=>caches.open(DOCS).then(cache=>cache.match(request)).then(cached=>{
-      if(cached){announceStale();return cached;}
-      return offlineNotice();
-    })));
-    return;
-  }
-  if(url.origin!==self.location.origin)return;
-  event.respondWith(fetch(request).catch(()=>caches.match(request)));
-});'''
-    return HttpResponse(js, content_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
+    from .pwa import service_worker as pwa_worker
+    return pwa_worker(request)
 
 
 # ── Onboarding steps (roadmap §13, ONB-1) ────────────────────────────────────────

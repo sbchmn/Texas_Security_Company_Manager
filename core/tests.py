@@ -652,7 +652,7 @@ class MfaEnrollmentResourcesTest(TestCase):
         resources = (
             ("theme_css", "text/css"),
             ("brand_logo", "image/svg+xml"),
-            ("manifest", "application/json"),
+            ("manifest", "application/manifest+json"),
             ("service_worker", "application/javascript"),
         )
         for name, content_type in resources:
@@ -734,8 +734,9 @@ class MfaEnrollmentResourcesTest(TestCase):
         from .views import service_worker
 
         body = service_worker(RequestFactory().get(reverse("service_worker"))).content.decode()
-        self.assertIn('fetch(path,{redirect:"error"})', body)
-        self.assertIn('fetch(path,{credentials:"same-origin",redirect:"error"})', body)
+        self.assertIn('cache.addAll(SHELL_ASSETS)', body)
+        self.assertNotIn('fetch(path,{credentials:"same-origin"', body)
+        self.assertIn('fetch("/theme.css",{redirect:"error"})', body)
 
 
 class AllauthThemingTest(TestCase):
@@ -4595,8 +4596,8 @@ class OfflineClockLaunchTest(TestCase):
         # Bumped cache names are what flush the old shell-only cache. Without them an install that
         # predates this change keeps serving the previous worker, and the feature silently never
         # arrives on the devices that most need it.
-        self.assertIn("tscm-shell-v2",body)
-        self.assertIn("tscm-docs-v2",body)
+        self.assertIn("tscm-shell-v3-",body)
+        self.assertIn("tscm-docs-v3-",body)
         self.assertIn("caches.delete(name)",body)
         self.assertIn("clock-served-from-cache",body)
 

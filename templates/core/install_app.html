@@ -1,0 +1,18 @@
+{% extends 'base.html' %}{% block title %}Install TSCM{% endblock %}{% block content %}
+<div class="page narrow">
+  <div class="page-heading"><div><p class="eyebrow">Mobile app</p><h1>Install {{ install_name }}</h1><p>Add TSCM to your personal device for a home-screen shortcut and an app-sized workspace.</p></div></div>
+  <section class="panel">
+    <p data-pwa-status role="status" aria-live="polite">Checking installation support...</p>
+    <button class="button" type="button" data-pwa-install hidden>Install TSCM</button>
+    <p data-pwa-update hidden role="status">An update is ready. Finish forms and synchronize queued punches, then close all TSCM windows and reopen the app to apply it.</p>
+    <h2>Android</h2><p>Open this site's HTTPS address in Chrome. Tap <strong>Install TSCM</strong> when offered, or open Chrome's menu and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>. Browser wording varies.</p>
+    <h2>iPhone and iPad</h2><p>Open this site's HTTPS address in Safari. Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, and confirm <strong>Add</strong>. If offered, leave <strong>Open as Web App</strong> enabled. If you opened a link inside another app, open it in Safari first. iOS does not offer the Android install button.</p>
+    <p>Sign in and complete MFA inside the installed app; browser and app sessions may be separate.</p>
+  </section>
+  <section class="panel"><h2>Prepare the offline clock</h2>
+    <ol><li>Sign in while connected and open <a href="{% url 'clock' %}">Time clock</a>.</li><li>Wait for the secure clock to start before leaving coverage. The saved page contains your last-loaded posts, not live scheduling.</li><li>Reconnect and open Time clock within <strong>12 hours</strong> to synchronize punches. Keep the app open until it confirms synchronization.</li></ol>
+    <p>Only the time clock supports offline capture. Payroll, records, schedule changes and sign-in need connectivity. Location is requested when recording a punch; camera permission is requested only for an applicable selfie workflow. No background tracking or background-sync guarantee is provided.</p>
+    <p class="message warning">Use offline clocking only on your personal device, not a shared phone or kiosk. Sign-out and company switching remove the saved clock page, but do not erase queued punches. Synchronize before signing out, changing company, clearing browser data or uninstalling. Clearing app storage can permanently lose unsynchronized punches.</p>
+  </section>
+  <section class="panel"><h2>Updates and permissions</h2><p>Web changes arrive from the server. Offline assets update after the browser activates a new worker; close all app windows and reopen after syncing. If installation or offline preparation fails, stay online and report the visible error to your administrator.</p><p>If location or camera is denied, review this site's browser/app permissions. Missing evidence may send a punch to review; installation does not bypass payroll, geofence or MFA rules.</p></section>
+</div>{% endblock %}

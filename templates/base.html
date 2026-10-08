@@ -2,10 +2,14 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}Command Center{% endblock %} · {% if current_organization %}{{ current_organization.display_name }}{% else %}Texas Security Company Manager{% endif %}</title>
 <meta name="theme-color" content="{% if current_organization %}{{ current_organization.primary_color }}{% else %}#16324F{% endif %}">
-<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="{% static 'icon.svg' %}"><link rel="stylesheet" href="{% static 'css/app.css' %}">{% if current_organization %}<link rel="stylesheet" href="{% url 'theme_css' %}">{% endif %}</head>
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="TSCM">
+<link rel="apple-touch-icon" sizes="180x180" href="{% static 'icons/icon-180.png' %}">
+<link rel="manifest" href="{% url 'manifest' %}"><link rel="icon" href="{% static 'icon.svg' %}"><link rel="stylesheet" href="{% static 'css/app.css' %}">{% if current_organization %}<link rel="stylesheet" href="{% url 'theme_css' %}">{% endif %}</head>
 <body><a class="skip-link" href="#main-content">Skip to main content</a>{% if user.is_authenticated %}{% include '_sidebar.html' %}{% endif %}
 <main id="main-content" tabindex="-1" class="{% if not user.is_authenticated %}auth-main{% endif %}">{% if user.is_authenticated %}<header class="topbar"><button type="button" class="menu-button" data-menu aria-label="Open menu" aria-expanded="false" aria-controls="workspace-sidebar">☰</button><div><span class="status-dot" aria-hidden="true"></span> {{ active_workspace|default:"Workspace" }}</div><a href="{% url 'workspace_today' %}">Today</a></header>{% endif %}
 {% if messages %}<div class="messages">{% for message in messages %}<div class="message {{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</main>
 {% include 'core/_preview_modal.html' %}
 <link rel="stylesheet" href="{% static 'css/timesheets.css' %}">
+<script src="{% static 'js/pwa.js' %}" defer></script>
 <script src="{% static 'js/app.js' %}" defer></script></body></html>

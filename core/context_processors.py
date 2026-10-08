@@ -25,7 +25,7 @@ WORKSPACES = (
         "swap_withdraw", "exchange_respond", "exchange_withdraw", "my_onboarding", "document_acknowledge",
         "my_documents", "shift_claim", "open_posts", "shift_requests", "my_time_off", "my_time_off_cancel",
         "text_alerts", "notifications", "notification_read", "my_account", "my_contact_edit",
-        "attendance_queue", "attendance_detail"
+        "attendance_queue", "attendance_detail", "install_app"
     )),
     ("People", "workspace_people", "MANAGERS", (
         "workspace_people", "people", "person_detail", "person_edit", "person_create", "person_access_invite", "person_access_link",

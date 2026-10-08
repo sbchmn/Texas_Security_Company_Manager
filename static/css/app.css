@@ -138,6 +138,7 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
 .selfie-capture img{transform:none;background:#eef1f6}
 .selfie-capture .clock-actions{flex-wrap:wrap}
 .selfie-capture[hidden]{display:none}
+[data-pwa-install][hidden],[data-pwa-update][hidden]{display:none}
 
 /* Workspace navigation and layout */
 .page.narrow{max-width:1234px}

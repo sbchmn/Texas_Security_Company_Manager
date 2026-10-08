@@ -1,0 +1,45 @@
+name: TSCM
+options:
+  bundleIdPrefix: com.texaslibertycoalition
+  deploymentTarget:
+    iOS: "16.4"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+targets:
+  TSCM:
+    type: application
+    platform: iOS
+    sources:
+      - path: TSCM
+        excludes:
+          - Info.plist
+    info:
+      path: TSCM/Info.plist
+      properties:
+        CFBundleDisplayName: TSCM
+        UILaunchScreen: {}
+        NSCameraUsageDescription: Take a clock selfie or a document photo when you choose the capture workflow.
+        NSLocationWhenInUseUsageDescription: Capture your location when you record a punch or patrol checkpoint, not in the background.
+        WKAppBoundDomains:
+          - tscm.texaslibertycoalition.com
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.texaslibertycoalition.tscm
+        PRODUCT_NAME: TSCM
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+    scheme:
+      testTargets: []
