@@ -8,7 +8,7 @@ boto3==1.43.104
 requests==2.34.2
 django-allauth[mfa]==65.19.5
 cryptography==50.0.1
-redis==6.4.0
+redis==8.1.0
 django-storages[s3]==1.14.6
 dnspython==2.8.0
 reportlab==4.4.10
