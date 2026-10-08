@@ -721,9 +721,29 @@ class ClockPinForm(WorkflowForm):
             self.add_error("confirm", "The two PINs do not match.")
         return data
 
+class PersonnelAssignmentsForm(WorkflowForm):
+    clients = forms.ModelMultipleChoiceField(queryset=Client.objects.none(), required=False,
+        widget=forms.CheckboxSelectMultiple, label="Clients (all their sites)")
+    sites = forms.ModelMultipleChoiceField(queryset=Site.objects.none(), required=False,
+        widget=forms.CheckboxSelectMultiple, label="Individual sites")
+
+    def __init__(self, *args, organization, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["clients"].queryset = organization.clients.filter(active=True).order_by("name")
+        self.fields["sites"].queryset = organization.sites.filter(active=True, client__active=True).select_related(
+            "client").order_by("client__name", "name")
+        self.fields["sites"].label_from_instance = lambda site: f"{site.client.name} / {site.name}"
+
+    def clean(self):
+        data = super().clean()
+        if not self.errors and not data.get("clients") and not data.get("sites"):
+            raise forms.ValidationError("Choose at least one client or site.")
+        return data
+
+
 class TimePolicyForm(WorkflowModelForm):
     field_sections = (
-        ("Workweek and payroll", ("timezone", "workweek_start", "overtime_after_hours", "rounding_mode", "rounding_minutes", "allow_reopen")),
+        ("Workweek and payroll", ("timezone", "workweek_start", "pay_period_weeks", "pay_period_anchor", "overtime_after_hours", "rounding_mode", "rounding_minutes", "allow_reopen")),
         ("Clock evidence", ("require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie")),
         ("Live attendance", ("arrival_alert_enabled", "arrival_grace_minutes", "departure_alert_enabled", "departure_grace_minutes")),
     )
@@ -738,7 +758,9 @@ class TimePolicyForm(WorkflowModelForm):
     class Meta:
         model = TimePolicy
         fields = ["timezone", "workweek_start", "overtime_after_hours", "rounding_mode", "rounding_minutes", "require_geofence", "allow_kiosk", "flag_spoof_risk", "require_selfie", "allow_reopen",
-                  "arrival_alert_enabled", "arrival_grace_minutes", "departure_alert_enabled", "departure_grace_minutes"]
+                  "arrival_alert_enabled", "arrival_grace_minutes", "departure_alert_enabled", "departure_grace_minutes",
+                  "pay_period_weeks", "pay_period_anchor"]
+        widgets = {"pay_period_anchor": forms.DateInput(attrs={"type": "date"})}
         labels = {"arrival_alert_enabled": "Late-arrival alerts", "departure_alert_enabled": "Overdue-departure alerts",
                   "arrival_grace_minutes": "Arrival grace (minutes)", "departure_grace_minutes": "Departure grace (minutes)"}
         help_texts = {
@@ -758,6 +780,18 @@ class TimePolicyForm(WorkflowModelForm):
             "arrival_grace_minutes": "Minutes after scheduled start before raising a missing clock-in case: 0 through 240.",
             "departure_grace_minutes": "Minutes after scheduled or authorized hold-over end before raising a missing clock-out case: 0 through 240.",
         }
+
+    def __init__(self, *args, **kwargs):
+        # Existing API/form clients omitted this newly added default; preserve their weekly policy.
+        if args and args[0] is not None:
+            data = args[0].copy()
+            instance = kwargs.get("instance")
+            if "pay_period_weeks" not in data:
+                data["pay_period_weeks"] = str(instance.pay_period_weeks if instance else 1)
+            if "pay_period_anchor" not in data and instance and instance.pay_period_anchor:
+                data["pay_period_anchor"] = instance.pay_period_anchor.isoformat()
+            args = (data, *args[1:])
+        super().__init__(*args, **kwargs)
 
 class TimePolicyOverrideForm(WorkflowModelForm):
     """One contract's or property's deviation, stated as a delta rather than a copy.

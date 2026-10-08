@@ -34,10 +34,30 @@
     {% if can_private_personnel %}<dt>SSN and driver's license</dt><dd><a href="{% url 'private_personnel' person.pk %}">Open restricted personnel details</a></dd>{% endif %}
     <dt>Default pay rate</dt><dd>{% if person.hourly_rate is not None %}{{ person.hourly_rate|floatformat:2 }}/hr &middot; Used when a post, site, and contract set no rate.{% else %}—{% endif %}</dd>
   </dl></section>
+  <div class="person-profile-sidebar">
+  <section class="panel" id="roster-assignments"><h2>Client &amp; site assignments</h2>
+    <p class="helptext">Roster assignments are independent of shifts. A client assignment covers all its sites. Qualifications and availability are still checked when scheduling.</p>
+    {% if assignment_error %}<p class="message warning" role="alert">{{ assignment_error }}</p>{% endif %}
+    {% for assignment in roster_assignments %}
+      <div class="person-row"><div><strong>{{ assignment.label }}</strong>
+        {% if assignment.active %}<small>Active roster assignment</small>
+        {% else %}<small>Removed {{ assignment.removed_at|date:'M j, Y' }}. No new shifts through this assignment.</small>
+        {% if assignment.last_shift_end %}<small>Final scheduled shift ends {{ assignment.last_shift_end|date:'M j, Y, g:i A' }}.</small>{% endif %}
+        <small>{% if assignment.roster_access_until > roster_now %}Roster access retained until{% else %}Roster grace ended{% endif %} {{ assignment.roster_access_until|date:'M j, Y, g:i A' }}.</small>{% endif %}
+      </div>
+      {% if can_assign_roster and assignment.active %}<form method="post" action="{% url 'person_detail' person.pk %}#roster-assignments" class="inline-form" data-confirm="Remove this roster assignment? Existing shifts remain, but new shifts require another active covering assignment or reassignment.">{% csrf_token %}<input type="hidden" name="action" value="roster_remove"><input type="hidden" name="assignment_id" value="{{ assignment.pk }}"><button class="button secondary button-small" type="submit">Remove</button></form>{% endif %}
+      </div>
+    {% empty %}<p class="muted">No explicit client or site assignments.</p>{% endfor %}
+    <p class="helptext">Other active assignments or branch authority may still give a supervisor access. Removing a site does not override an active client-wide assignment. Existing shifts are never cancelled here.</p>
+    {% if can_assign_roster %}<details{% if assignment_form.errors %} open{% endif %}><summary>Add or restore assignments</summary>
+    <form method="post" action="{% url 'person_detail' person.pk %}#roster-assignments" class="stacked-form">{% csrf_token %}<input type="hidden" name="action" value="roster_add">{{ assignment_form.as_div }}<button class="button button-small" type="submit">Save assignments</button></form></details>
+    {% endif %}
+  </section>
   <section class="panel"><h2>Custom fields</h2><dl class="profile-list">
     {% for definition,value in custom %}<dt>{{ definition.name }}</dt><dd>{% if value %}{% if definition.kind == 'boolean' %}{{ value.value|yesno:'Yes,No,—' }}{% else %}{{ value.value|default_if_none:'—' }}{% endif %}{% else %}—{% endif %}</dd>
     {% empty %}<p class="muted">No custom fields configured.</p>{% endfor %}
   </dl></section>
+  </div>
 </div>
 {% endif %}
 {% if tab == 'onboarding' %}{% include 'core/_person_onboarding.html' %}{% endif %}

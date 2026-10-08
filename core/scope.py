@@ -9,11 +9,12 @@ view, per-object route, and approval decision passes through.
 Each grant expands to the records it actually covers:
 
 * **branch** — the personnel filed under it, and every post stood at a site belonging to it;
-* **contract** — every post at that client's sites, and the officers who stand them;
-* **site** — that post, and every officer assigned to it.
+* **contract** — every post at that client's sites, and its explicitly assigned roster;
+* **site** — that post, and its site/client-assigned roster.
 
-Contract and site grants reach people through the assignment rather than the personnel file,
-because a guard on someone else's payroll still has to be supervised where they stand.
+Legacy shift-derived personnel access remains where no explicit roster lifecycle exists.
+Removed roster assignments retain personnel visibility only until their saved payroll cutoff;
+historical shifts remain available through site authority.
 
 Resolution costs three queries for a bounded user (grants, sites, people), one for a field role
 that was never given a grant, and none for a company-level role; it is memoised on the request.
@@ -69,8 +70,10 @@ class ActorScope:
             ).values_list("id", flat=True))
         self.site_ids = frozenset(explicit_sites | derived_sites)
         if self.restricted:
+            from .rosters import roster_people
+            roster_ids = roster_people(organization_id, self.site_ids, self.client_ids).values_list("pk", flat=True)
             self.person_ids = frozenset(Person.objects.filter(organization_id=organization_id).filter(
-                Q(branch_id__in=self.branch_ids) | Q(shifts__site_id__in=self.site_ids)
+                Q(branch_id__in=self.branch_ids) | Q(pk__in=roster_ids)
             ).values_list("id", flat=True))
         else:
             self.person_ids = None

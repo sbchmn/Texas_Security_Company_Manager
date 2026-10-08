@@ -180,6 +180,9 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
 .search-row input{flex:1 1 220px;min-width:0}
 .table-wrap td{vertical-align:top}
 .dashboard-grid>*{min-width:0}
+.person-profile-sidebar{min-width:0;align-self:start}
+.person-profile-sidebar .person-row{gap:12px;align-items:flex-start;flex-wrap:wrap}
+.person-profile-sidebar details>form{margin-top:16px}
 .panel+.panel,.panel+.dashboard-grid,.dashboard-grid+.panel{margin-top:22px}
 input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,.button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sidebar{padding:18px 14px}
@@ -257,6 +260,17 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 /* Schedule: toolbar, week grid (officers down, days across), and the row cancel disclosure. */
 .schedule-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin:0 0 16px}
 .schedule-range{font-size:15px;margin-right:auto}
+.data-form>.payroll-period-toolbar{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.payroll-period-picker{align-items:center}
+.payroll-period-picker strong{padding:7px 10px;font-size:14px;text-align:center;border-right:1px solid var(--line)}
+.payroll-period-picker a,.payroll-period-picker>span{padding:9px 12px}
+.payroll-period-picker>span{color:var(--muted);border-right:1px solid var(--line)}
+.payroll-period-picker>span:last-child{border-right:0}
+.payroll-period-advanced{grid-column:1/-1;min-width:0;border-top:1px solid var(--line);padding-top:14px}
+.payroll-period-advanced>summary{cursor:pointer;font-weight:600}
+.payroll-period-advanced>div{display:grid;gap:6px;margin-top:14px}
+.payroll-period-metrics{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));margin-top:18px}
+.payroll-period-metrics strong{font-size:22px;overflow-wrap:anywhere}
 .schedule-queue-link{font-size:13px;font-weight:600}
 .segmented{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
 .segmented a{padding:7px 12px;font-size:13px;font-weight:600;color:var(--brand);text-decoration:none;border-right:1px solid var(--line);white-space:nowrap}

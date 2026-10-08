@@ -24,12 +24,23 @@
   <h2>Holdovers</h2>
   {% for hold in holdovers %}<p>Scheduled end: {{ hold.scheduled_ends_at }}<br>Expected release: {{ hold.expected_release_at|default:'Awaiting relief' }}<br>Recorded release: {{ hold.held_until|default:'Not recorded' }}<br>{{ hold.get_reason_display }} · Reliever: {{ hold.relief|default:'Not assigned' }}<br>{{ hold.note }}<br>Recorded by {{ hold.recorded_by }} at {{ hold.created_at }}</p>{% empty %}<p>No holdover recorded for this officer on this shift.</p>{% endfor %}
   <h2>Correct time</h2><p>Requires a reason; the original time remains unchanged. Payroll locks apply.</p>
-  <form method="post" action="{% url 'punch_detail' punch.pk %}{% if request.GET.modal %}?modal=1{% endif %}">{% csrf_token %}{{ correction_form.as_p }}<button class="button" type="submit" name="action" value="correct">Save audited correction</button></form>
+  {% if detail_locked %}<p class="message warning">This punch is in a locked payroll period. An authorized owner or administrator must reopen it before changes can be made.</p>{% endif %}
+  <form method="post" action="{% url 'punch_detail' punch.pk %}{% if request.GET.modal %}?modal=1{% endif %}">{% csrf_token %}{{ correction_form.as_p }}<button class="button" type="submit" name="action" value="correct"{% if detail_locked %} disabled{% endif %}>Save audited correction</button></form>
   {% if punch.kind == 'break_start' %}<h2>Break pay classification</h2><form method="post" action="{% url 'punch_detail' punch.pk %}{% if request.GET.modal %}?modal=1{% endif %}">{% csrf_token %}
     <label>Break pay<select name="paid"><option value="yes"{% if punch.break_paid %} selected{% endif %}>Paid</option><option value="no"{% if not punch.break_paid %} selected{% endif %}>Unpaid</option></select></label>
-    <label>Classification reason<input name="reason" minlength="5" maxlength="255" required></label><button class="button" name="action" value="break_pay" type="submit">Save break classification</button>
+    <label>Classification reason<input name="reason" minlength="5" maxlength="255" required></label><button class="button" name="action" value="break_pay" type="submit"{% if detail_locked %} disabled{% endif %}>Save break classification</button>
   </form>{% endif %}
-  <h2>Corrections</h2>{% for item in punch.adjustments.all %}<p>{{ item.get_status_display }}: {{ item.proposed_at }} — {{ item.reason }} · Requested by {{ item.requested_by }}{% if item.reviewed_by %} · Reviewed by {{ item.reviewed_by }} at {{ item.reviewed_at }} — {{ item.review_note }}{% endif %}</p>{% empty %}<p>No corrections.</p>{% endfor %}
+  <h2>Review punch</h2>
+  <p>Accept or reject captured evidence. This does not supply a missing punch or resolve an incomplete tour. Locked-period rules apply.</p>
+  <form method="post" action="{% url 'punch_review' punch.pk %}{% if request.GET.modal %}?modal=1{% endif %}">{% csrf_token %}
+    <label>Review reason (required for rejection)<input name="reason" maxlength="255"></label>
+    <div class="actions"><button class="button" name="action" value="accepted" type="submit"{% if detail_locked %} disabled{% endif %}>Accept punch</button><button class="button secondary" name="action" value="rejected" type="submit"{% if detail_locked %} disabled{% endif %}>Reject punch</button></div>
+  </form>
+  <h2>Corrections</h2>{% for item in punch.adjustments.all %}<p>{{ item.get_status_display }}: {{ item.proposed_at }} — {{ item.reason }} · Requested by {{ item.requested_by }}{% if item.reviewed_by %} · Reviewed by {{ item.reviewed_by }} at {{ item.reviewed_at }} — {{ item.review_note }}{% endif %}</p>
+    {% if item.status == 'requested' %}<form method="post" action="{% url 'adjustment_review' item.pk %}{% if request.GET.modal %}?modal=1{% endif %}">{% csrf_token %}
+      <label>Review note<input name="note" maxlength="500"></label><div class="actions"><button class="button" name="action" value="approved" type="submit"{% if detail_locked %} disabled{% endif %}>Approve correction</button><button class="button secondary" name="action" value="rejected" type="submit"{% if detail_locked %} disabled{% endif %}>Reject correction</button></div>
+    </form>{% endif %}
+  {% empty %}<p>No corrections.</p>{% endfor %}
   <h2>Review history</h2>{% for event in history %}<p>{{ event.occurred_at }} · {{ event.actor|default:'System' }} · {{ event.action }}{% if event.metadata.reason %} — {{ event.metadata.reason }}{% endif %}{% if event.metadata.note %} — {{ event.metadata.note }}{% endif %}{% if event.metadata.before %}<br>{{ event.metadata.before }} → {{ event.metadata.after }}{% endif %}{% if event.metadata.status %} · {{ event.metadata.status }}{% endif %}{% if event.action == 'break.classified' %} · {% if event.metadata.before_paid %}Paid{% else %}Unpaid{% endif %} → {% if event.metadata.paid %}Paid{% else %}Unpaid{% endif %}{% endif %}</p>{% empty %}<p>No additional review history.</p>{% endfor %}
 </section></div>
 <script src="{% static 'js/punch-map.js' %}" defer></script>

@@ -224,6 +224,8 @@ def punch_detail(request, punch_id):
         target_type__in=("punch", "punch_adjustment"),
         target_id__in=[str(punch.pk), *[str(item.pk) for item in PunchAdjustment.objects.filter(punch=punch)]],
     ).exclude(action="punch.recorded").select_related("actor").order_by("-occurred_at")
+    detail_locked = any(payroll_lock_state(request.organization, at, *lock_subject(punch))["locked"]
+                        for at in (punch.occurred_at, current_time))
     response = render(request, "core/punch_detail.html", {
         "punch": punch, "effective_at": current_time, "correction_form": form, "location": location,
         "kiosk_name": evidence.get("kiosk_name"), "site": site, "map_data": map_data,
@@ -233,6 +235,7 @@ def punch_detail(request, punch_id):
         "holdovers": HoldOver.objects.filter(organization=request.organization, shift=shift).filter(
             Q(officer=punch.person) | Q(officer__isnull=True)).select_related("relief", "recorded_by") if shift is not None else [],
         "history": history,
+        "detail_locked": detail_locked,
         "detail_base": "core/punch_modal_base.html" if request.GET.get("modal") else "base.html",
     })
     if map_data and settings.TIMESHEET_MAP_PROVIDER == "osm":

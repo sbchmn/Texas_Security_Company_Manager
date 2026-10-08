@@ -63,6 +63,20 @@ exceptions. An oldest-first, paginated draft-period queue keeps unfinished runs 
 beyond the recent-run preview. Partial lock controls are secondary to the selected-period workflow; open slices
 continue to prevent export.
 
+The payroll page separates saved snapshot totals (employees, payroll lines, regular/overtime
+hours and recorded pay/bill estimates) from current captured-punch and correction counts.
+Its paginated punch evidence opens the same Timesheets modal for location, breaks,
+holdovers, audited corrections and review decisions without leaving payroll. Corrections
+invalidate drafts; use **Refresh this period's draft** before approval. Missing punches are
+not invented, and policy/rate/schedule issues still require their corresponding settings
+or scheduling workflow. Locked periods retain their existing reopening/authority rules.
+Counts use original capture times, matching payroll's period selection.
+
+Payroll PDFs use ReportLab to produce landscape, paginated snapshot reports with company,
+period, run and approval information, wrapped text, repeated table headers, totals, notes,
+and numbered confidential footers. Unset amounts are explicit and excluded from estimate
+totals rather than presented as zero. CSV/XLSX and export authorization/auditing are unchanged.
+
 Workspace summary cards share equal heights across desktop rows and a bottom-aligned primary
 action. Secondary links appear above that action in a dedicated footer; inline preview
 actions remain beside their records. On narrow screens cards stack with content-driven
@@ -82,6 +96,44 @@ configuration contract; worker and supporting services should only be added when
 measured workload requires them.
 
 ## Compliance note
+
+### Employee client/site rosters and calculated pay periods
+
+On an employee's Profile tab, the **Client & site assignments** card is on the right,
+above Custom fields. Owners, Administrators and HR can add multiple clients/sites from
+the inline **Add or restore assignments** editor and remove them on the same card.
+Client assignments cover every site under that client; individual site assignments are
+narrower. These are roster links, not shift creation or qualification overrides. Scoped
+supervisors/schedulers can see assigned employees before their first shift, including in
+personnel, scheduling and related scoped queues.
+
+Removing an assignment preserves existing shifts but blocks new draft/published shifts,
+claims, trades and recurring generation at its covered target unless another active
+client/site assignment covers it. Existing shifts can be managed or shortened, but cannot
+be extended, moved to later dates, or restored from cancellation to bypass removal.
+Re-add the same client/site to restore scheduling and roster access; removals/restorations
+are audited. Roster assignment editing is reserved for company personnel managers so
+scoped managers cannot widen their own access.
+
+Personnel visibility from the removed assignment expires at the **end of the calculated
+pay period following the final non-cancelled shift**. A shift ending exactly at midnight
+on a period boundary belongs to the period just completed. With no shifts, use the
+removal period. An already-past final shift can produce immediate expiry. Cutoffs are
+saved at removal and do not move when shifts are shortened/cancelled or calendar settings
+change. Other active rosters or branch authority can independently retain visibility;
+historical shifts remain reviewable through site authority. Untouched legacy sites still
+derive personnel visibility from shifts until given an explicit roster lifecycle.
+
+Configure **Pay period weeks** and **Pay period anchor** beside **Workweek starts on**
+under Time and payroll policy. Periods are whole weeks (1-52); multi-week periods require
+an actual starting date on that weekday to identify their phase. Existing companies default
+to weekly periods on their configured weekday. Calendar calculations use company time-policy
+timezone and local midnight, including daylight-saving changes, without changing weekly
+overtime rules. Payroll runs offer compact previous/current/next period navigation with
+the covered dates prominently displayed. Manual date ranges for exceptional transition
+periods are under **Advanced**, which opens for validation errors and custom-range drafts.
+Calculation never auto-approves,
+locks or exports payroll. Migration `0071_personnel_rosters_and_pay_periods` is required.
 
 The application can administer a compliance program but must not claim to guarantee
 legal compliance. Regulatory controls must be based on current primary sources,

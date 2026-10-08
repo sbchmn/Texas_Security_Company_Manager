@@ -194,6 +194,10 @@ def shift_eligibility(shift, officer=None, purpose="schedule", requirements=None
             # than a dead end for a dispatcher who can only see the post.
             reasons.append(f"{required.name}: {state}." + ("" if origin=="post" else f" Required by the {origin}."))
     if purpose == "schedule":
+        from .rosters import roster_scheduling_refusal
+        refusal = roster_scheduling_refusal(shift, officer)
+        if refusal:
+            reasons.append(refusal)
         # Approved leave blocks the *assignment*. It never blocks the clock: a guard called back
         # in on their own day off produced time that was worked, and the punch is the evidence.
         leave=officer.time_off_requests.filter(status=TimeOffRequest.Status.APPROVED,starts_at__lt=shift.ends_at,ends_at__gt=shift.starts_at).first()
@@ -1238,6 +1242,7 @@ RULE_WATCHED = {
     # with every rounding field in it and no multiple in it — the one number the stamp was there to
     # protect. A watched-but-unstored value is worse than an unwatched one, because it is promised.
     RuleRevision.Kind.CLOCK_POLICY: ("timezone", "workweek_start", "overtime_after_hours", "overtime_premium",
+        "pay_period_weeks", "pay_period_anchor",
         "rounding_mode", "rounding_minutes", "require_geofence", "allow_kiosk", "flag_spoof_risk",
         "require_selfie", "allow_reopen", "arrival_alert_enabled", "arrival_grace_minutes",
         "departure_alert_enabled", "departure_grace_minutes"),
@@ -2201,6 +2206,34 @@ def payroll_totals(rows, by="pay_code"):
                     "employee_count": len(item[1]["people"])} for item in totals.items()),
                   key=lambda entry: -entry["total_hours"])
 
+def payroll_snapshot_summary(rows):
+    fields = ("regular_hours", "overtime_hours", "total_hours", "estimated_pay", "estimated_bill", "margin")
+    totals = {field: Decimal("0.00") for field in fields}
+    missing = {field: 0 for field in fields}
+    employees = {}
+    for row in rows:
+        key = row.get("employee_id") or row.get("employee", "")
+        employee = employees.setdefault(key, {
+            "employee_id": row.get("employee_id", ""), "employee": row.get("employee", ""),
+            "rows": 0, **{field: Decimal("0.00") for field in fields},
+            "missing_pay": 0, "missing_bill": 0,
+        })
+        employee["rows"] += 1
+        for field in fields:
+            value = row.get(field)
+            if value in ("", None):
+                missing[field] += 1
+                if field == "estimated_pay":
+                    employee["missing_pay"] += 1
+                elif field == "estimated_bill":
+                    employee["missing_bill"] += 1
+            else:
+                amount = Decimal(str(value))
+                totals[field] += amount
+                employee[field] += amount
+    return {**totals, "missing": missing, "employee_count": len(employees), "row_count": len(rows),
+            "employees": sorted(employees.values(), key=lambda item: item["employee"].casefold())}
+
 @transaction.atomic
 def create_payroll_run(*,organization,start,end,actor):
     from .models import AuditEvent, PayrollRun, Punch
@@ -2213,7 +2246,8 @@ def create_payroll_run(*,organization,start,end,actor):
         review_status=Punch.Review.REJECTED).select_related("person").prefetch_related("adjustments"))
     for tour in pair_tours(events):
         for issue in tour["issues"]:
-            entry = {"employee": tour["start"].person.full_name, "reason": issue}
+            entry = {"employee": tour["start"].person.full_name, "reason": issue,
+                     "employee_id": str(tour["start"].person_id), "punch_id": str(tour["start"].pk)}
             if entry not in exceptions:
                 exceptions.append(entry)
     if break_conflicts(organization, events):
@@ -2422,25 +2456,9 @@ def payroll_snapshot_xlsx(rows):
         for name,content in files.items():archive.writestr(name,content)
     return output.getvalue()
 
-def payroll_snapshot_pdf(rows):
-    """Render a portable, dependency-free text PDF for payroll handoff.
-
-    The PDF carries the money view rather than all sixteen export columns: a fixed-width text
-    page cannot fit them legibly, and the columns that matter on paper are who worked where and
-    what it paid against what it billed.
-    """
-    lines=["Payroll report"," | ".join(PAYROLL_PDF_FIELDS)]
-    lines.extend(" | ".join(str(row.get(field,"")) for field in PAYROLL_PDF_FIELDS) for row in rows)
-    def pdf_escape(value): return value.replace("\\","\\\\").replace("(","\\(").replace(")","\\)")
-    commands=["BT /F1 9 Tf 36 756 Td"]
-    for index,line in enumerate(lines): commands.append(f"{'0 -14 Td ' if index else ''}({pdf_escape(line[:150])}) Tj")
-    commands.append("ET");stream="\n".join(commands).encode()
-    objects=[b"<< /Type /Catalog /Pages 2 0 R >>",b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",f"<< /Length {len(stream)} >>\nstream\n".encode()+stream+b"\nendstream",b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
-    output=bytearray(b"%PDF-1.4\n");offsets=[0]
-    for number,obj in enumerate(objects,1):offsets.append(len(output));output.extend(f"{number} 0 obj\n".encode()+obj+b"\nendobj\n")
-    xref=len(output);output.extend(f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n".encode())
-    for offset in offsets[1:]:output.extend(f"{offset:010d} 00000 n \n".encode())
-    output.extend(f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode());return bytes(output)
+def payroll_snapshot_pdf(rows, *, run=None):
+    from .payroll_pdf import render_payroll_pdf
+    return render_payroll_pdf(rows, run=run)
 
 ALLOWED_DOCUMENT_SIGNATURES = {
     ".pdf": (b"%PDF-",), ".png": (b"\x89PNG\r\n\x1a\n",),

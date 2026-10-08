@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core import signing
 from django.core.paginator import Paginator
 from django.db import transaction
@@ -732,7 +732,11 @@ def _workforce_documents():
 
 
 @membership_required()
+@transaction.atomic
 def person_detail(request, person_id):
+    from .forms import PersonnelAssignmentsForm
+    from .models import PersonnelAssignment
+    from .rosters import add_roster_assignments, remove_roster_assignment
     person = _profile_person(request, person_id)
     manager = request.membership.role in MANAGERS
     is_self = person.user_id == request.user.id
@@ -740,10 +744,39 @@ def person_detail(request, person_id):
     tab = request.GET.get("tab", "profile")
     if tab not in PERSON_TABS:
         tab = "profile"
+    can_assign = request.membership.role in RECORD_WRITERS
+    assignment_form = PersonnelAssignmentsForm(
+        request.POST if request.method == "POST" and request.POST.get("action") == "roster_add" else None,
+        organization=request.organization)
+    assignment_error = ""
+    if request.method == "POST":
+        if not can_assign:
+            raise PermissionDenied
+        tab = "profile"
+        action = request.POST.get("action")
+        if action == "roster_add" and assignment_form.is_valid():
+            changes = add_roster_assignments(person, assignment_form.cleaned_data["clients"],
+                assignment_form.cleaned_data["sites"], request.user)
+            messages.success(request, f"{len(changes)} roster assignment(s) added or restored." if changes else "Those roster assignments are already active.")
+            return redirect(reverse("person_detail", args=[person.pk]) + "#roster-assignments")
+        elif action == "roster_remove":
+            try:
+                row = remove_roster_assignment(person, int(request.POST.get("assignment_id", "")), request.user)
+            except (ValueError, PersonnelAssignment.DoesNotExist):
+                assignment_error = "Choose an assignment on this employee's file."
+            except ValidationError as exc:
+                assignment_error = " ".join(exc.messages)
+            else:
+                messages.success(request, f"{row.label} removed. Existing shifts are preserved; roster access ends {row.roster_access_until:%b %d, %Y}.")
+                return redirect(reverse("person_detail", args=[person.pk]) + "#roster-assignments")
+        elif action != "roster_add":
+            assignment_error = "Choose Add assignments or Remove from this roster."
     context = {
         "person": person, "manager": manager, "is_self": is_self,
         "can_private_personnel": request.membership.role in (Membership.Role.OWNER, Membership.Role.ADMIN, Membership.Role.HR),
         "can_read_records": can_read_records,
+        "can_assign_roster": can_assign, "assignment_form": assignment_form,
+        "assignment_error": assignment_error,
         "can_write_credentials": manager,
         "can_write_records": request.membership.role in RECORD_WRITERS,
         "availability_url": (reverse("person_availability", args=[person.pk]) if manager
@@ -763,6 +796,13 @@ def person_detail(request, person_id):
     if tab == "history" and not manager:
         raise Http404
     if tab == "profile":
+        assignments = person.roster_assignments.select_related("client", "site__client").order_by("-active", "client__name", "site__name")
+        scope = scope_for(request)
+        if scope.restricted:
+            assignments = assignments.filter(Q(site_id__in=scope.site_ids)
+                | Q(client_id__in=scope.client_ids) | Q(client__sites__id__in=scope.site_ids)).distinct()
+        context["roster_assignments"] = assignments
+        context["roster_now"] = timezone.now()
         current_post = person.shifts.filter(status=Shift.Status.PUBLISHED,
             starts_at__lte=timezone.now(), ends_at__gt=timezone.now()).select_related("site__client").order_by("starts_at").first()
         context["current_post"] = current_post
@@ -4738,7 +4778,12 @@ def punch_review(request,punch_id):
         # Reviewing a punch is the one place where an out-of-scope approval would quietly
         # accept time evidence the actor's own company does not answer for.
         raise Http404
+    if request.GET.get("modal") == "1":
+        return_url = reverse("punch_detail", args=[punch.pk]) + "?modal=1"
     state = payroll_lock_state(request.organization, punch.occurred_at, *lock_subject(punch))
+    from .timekeeping import effective_time
+    if not state["locked"]:
+        state = payroll_lock_state(request.organization, effective_time(punch), *lock_subject(punch))
     if state["locked"]:
         messages.error(request, f"This payroll period is locked — {state['by']}.")
         return redirect(return_url)
@@ -4794,11 +4839,16 @@ def adjustment_review(request,adjustment_id):
     item=request.organization.punch_adjustments.select_related("punch__person","punch__shift__site").filter(pk=adjustment_id,status=PunchAdjustment.Status.REQUESTED).first()
     if not item: raise Http404
     if not scope_for(request).permits_punch(item.punch): raise Http404
+    if request.GET.get("modal") == "1":
+        return_url = reverse("punch_detail", args=[item.punch_id]) + "?modal=1"
     status=request.POST.get("action"); note=request.POST.get("note","").strip()
     if status not in (PunchAdjustment.Status.APPROVED,PunchAdjustment.Status.REJECTED):
         messages.error(request,"Invalid review action.")
         return redirect(return_url)
     state = payroll_lock_state(request.organization, item.punch.occurred_at, *lock_subject(item.punch))
+    from .timekeeping import effective_time
+    if not state["locked"]:
+        state = payroll_lock_state(request.organization, effective_time(item.punch), *lock_subject(item.punch))
     if state["locked"]:
         messages.error(request,f"This payroll period is locked — {state['by']}.")
         return redirect(return_url)
@@ -4826,6 +4876,7 @@ def adjustment_review(request,adjustment_id):
 
 @membership_required(*PAYROLL)
 def payroll(request):
+    from .rosters import pay_period_bounds
     organization = request.organization
     requested_run_id = request.GET.get("run")
     run_queryset = organization.payroll_runs.select_related(
@@ -4844,12 +4895,18 @@ def payroll(request):
     else:
         selected_run = run_queryset.first()
 
-    initial = {}
-    if selected_run and selected_run.status == PayrollRun.Status.DRAFT:
+    try:
+        period_offset = max(-26, min(26, int(request.GET.get("period", "0"))))
+    except ValueError:
+        raise Http404("Invalid pay period.")
+    period_start, period_end = pay_period_bounds(organization, offset=period_offset)
+    initial = {"period_start": timezone.localtime(period_start), "period_end": timezone.localtime(period_end)}
+    if selected_run and selected_run.status == PayrollRun.Status.DRAFT and "period" not in request.GET:
         initial = {
             "period_start": timezone.localtime(selected_run.period_start),
             "period_end": timezone.localtime(selected_run.period_end),
         }
+    custom_period = initial["period_start"] != period_start or initial["period_end"] != period_end
     form=PayrollPeriodForm(request.POST or None, initial=initial)
     if request.method=="POST" and form.is_valid():
         run=create_payroll_run(organization=organization,start=form.cleaned_data["period_start"],end=form.cleaned_data["period_end"],actor=request.user)
@@ -4865,13 +4922,42 @@ def payroll(request):
     elif all(run.pk != selected_run.pk for run in runs):
         runs.insert(0, selected_run)
     snapshot = selected_run.snapshot if selected_run else []
+    from .services import payroll_snapshot_summary
+    from .timekeeping import effective_time
+    scope = scope_for(request)
+    preview_punches = scope.filter_punches(organization.punches.filter(
+        occurred_at__gte=initial["period_start"], occurred_at__lt=initial["period_end"],
+    ))
+    preview_counts = preview_punches.aggregate(
+        total=Count("pk"), pending=Count("pk", filter=Q(review_status=Punch.Review.PENDING)),
+    )
+    preview_counts["corrections"] = scope.filter_adjustments(organization.punch_adjustments.filter(
+        punch_id__in=preview_punches.values("pk"), status=PunchAdjustment.Status.REQUESTED,
+    )).count()
+    snapshot_summary = payroll_snapshot_summary(snapshot)
+    period_counts = {}
+    period_punch_page = None
+    evidence_filter = request.GET.get("evidence", "all")
+    if evidence_filter not in ("all", "attention"):
+        raise Http404("Choose a valid payroll evidence filter.")
+    evidence_person = request.GET.get("employee", "")
+    evidence_people = []
     pending_punch_count = pending_correction_count = 0
     exception_rows = []
     open_segments = []
     if selected_run:
-        period_punches = organization.punches.filter(
+        period_punches = scope.filter_punches(organization.punches.filter(
             occurred_at__gte=selected_run.period_start,
             occurred_at__lt=selected_run.period_end,
+        ))
+        evidence_people = list(scope.filter_people(organization.people.filter(
+            pk__in=period_punches.values("person_id"),
+        )).order_by("last_name", "first_name"))
+        period_counts = period_punches.aggregate(
+            total=Count("pk"),
+            accepted=Count("pk", filter=Q(review_status=Punch.Review.ACCEPTED)),
+            rejected=Count("pk", filter=Q(review_status=Punch.Review.REJECTED)),
+            breaks=Count("pk", filter=Q(kind__in=(Punch.Kind.BREAK_START, Punch.Kind.BREAK_END))),
         )
         pending_punch_count = period_punches.filter(
             review_status=Punch.Review.PENDING
@@ -4881,13 +4967,29 @@ def payroll(request):
             punch__occurred_at__lt=selected_run.period_end,
             status=PunchAdjustment.Status.REQUESTED,
         ).count()
+        evidence = period_punches.select_related("person", "shift__site__client").prefetch_related("adjustments")
+        if evidence_filter == "attention":
+            evidence = evidence.filter(Q(review_status=Punch.Review.PENDING) | Q(
+                adjustments__status=PunchAdjustment.Status.REQUESTED) | ~Q(exception_reason="")).distinct()
+        if evidence_person:
+            try:
+                person_id = uuid.UUID(evidence_person)
+            except ValueError:
+                raise Http404("Choose a valid employee.")
+            if not any(person.pk == person_id for person in evidence_people):
+                raise Http404
+            evidence = evidence.filter(person_id=person_id)
+        period_punch_page = Paginator(evidence.order_by("occurred_at", "pk"), 25).get_page(request.GET.get("evidence_page"))
+        for punch in period_punch_page.object_list:
+            punch.effective_at = effective_time(punch)
+            punch.pending_requests = sum(item.status == PunchAdjustment.Status.REQUESTED for item in punch.adjustments.all())
         open_segments = open_lock_segments(selected_run)
         for exception in selected_run.exceptions or []:
             reason = str(exception.get("reason", ""))
             lower_reason = reason.lower()
             if "await review" in lower_reason:
-                destination = f"{reverse('time_review')}?punches=pending&adjustments=pending&run={selected_run.pk}"
-                destination_label = "Review pending time"
+                destination = f"{reverse('payroll')}?run={selected_run.pk}&evidence=attention#period-evidence"
+                destination_label = "Review flagged evidence here"
             elif "reopen" in lower_reason or "regenerate" in lower_reason:
                 destination = "#generate-draft"
                 destination_label = "Regenerate this period"
@@ -4898,13 +5000,16 @@ def payroll(request):
                 destination = reverse("schedule")
                 destination_label = "Review the schedule"
             else:
-                destination = f"{reverse('time_review')}?punches=all&adjustments=all&run={selected_run.pk}"
-                destination_label = "Review time evidence"
+                matches = [person for person in evidence_people if person.full_name == exception.get("employee")]
+                employee_filter = f"&employee={matches[0].pk}" if len(matches) == 1 else ""
+                destination = f"{reverse('payroll')}?run={selected_run.pk}{employee_filter}#period-evidence"
+                destination_label = "Review time evidence here"
             exception_rows.append({
                 "employee": exception.get("employee", ""),
                 "reason": reason,
                 "destination": destination,
                 "destination_label": destination_label,
+                "punch_id": exception.get("punch_id"),
             })
     approval_blocked = bool(
         selected_run
@@ -4916,6 +5021,15 @@ def payroll(request):
     # The selected run's generated snapshot is the source for both the page and its export.
     return render(request,"core/payroll.html",{
         "form":form,"runs":runs,
+        "calculated_start": period_start, "calculated_end": period_end,
+        "display_period_start": initial["period_start"],
+        "display_period_last": initial["period_end"] - timedelta(microseconds=1),
+        "advanced_period_open": form.is_bound or custom_period,
+        "custom_period": custom_period,
+        "current_period": period_offset == 0 and not custom_period,
+        "previous_period": period_offset - 1 if period_offset > -26 else None,
+        "next_period": period_offset + 1 if period_offset < 26 else None,
+        "calendar_selected": "period" in request.GET,
         # The picker for a lock slice: whoever decides "which part is agreed" chooses from the same two
         # axes the rest of the product divides work by, rather than typing a name.
         "lock_branches": organization.branches.filter(active=True).order_by("name"),
@@ -4926,6 +5040,9 @@ def payroll(request):
         "exception_rows":exception_rows,"pending_punch_count":pending_punch_count,
         "pending_correction_count":pending_correction_count,"open_segments":open_segments,
         "approval_blocked":approval_blocked,
+        "preview_counts": preview_counts, "snapshot_summary": snapshot_summary,
+        "period_counts": period_counts, "period_punch_page": period_punch_page,
+        "evidence_filter": evidence_filter, "evidence_person": evidence_person, "evidence_people": evidence_people,
         "by_pay_code":payroll_totals(snapshot,by="pay_code"),
         "by_category":payroll_totals(snapshot,by="pay_category"),
     })
@@ -5039,7 +5156,8 @@ def payroll_run_export(request,run_id):
     format=request.GET.get("format","csv").lower()
     exporters={"csv":(payroll_snapshot_csv,"text/csv"),"xlsx":(payroll_snapshot_xlsx,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),"pdf":(payroll_snapshot_pdf,"application/pdf")}
     if format not in exporters: raise Http404
-    exporter,content_type=exporters[format];output=exporter(run.snapshot)
+    exporter,content_type=exporters[format]
+    output = payroll_snapshot_pdf(run.snapshot, run=run) if format == "pdf" else exporter(run.snapshot)
     run.status=PayrollRun.Status.EXPORTED;run.exported_at=timezone.now();run.save(update_fields=["status","exported_at"])
     AuditEvent.objects.create(organization=request.organization,actor=request.user,action="payroll.exported",target_type="payroll_run",target_id=str(run.pk),metadata={"rows":len(run.snapshot),"format":format})
     # NTF-3 "payroll-export readiness": the file leaving this system is the fact the client's

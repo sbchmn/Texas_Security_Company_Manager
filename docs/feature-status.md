@@ -1,5 +1,49 @@
 # Feature implementation status
 
+## Payroll evidence review and printable reports (2026-10-08)
+
+- Generation shows punch/pending-correction counts for its preset range. The selected run
+  shows saved employee/line/hour/money summaries separately from live evidence counts,
+  with an expandable employee breakdown. Unset estimates are counted, not silently priced.
+- Paginated/filterable captured punches open the existing same-origin Timesheets modal.
+  It now also exposes existing audited punch-review and correction-review actions; modal
+  submissions return to punch details and closing returns to the same payroll period.
+  Original evidence is preserved, draft invalidation remains mandatory, and an explicit
+  same-period refresh action is available. Locked and out-of-scope actions remain blocked,
+  including punches whose approved effective time falls in a locked period.
+- Paired-tour snapshot issues carry an affected punch link on newly generated drafts.
+  Legacy exceptions retain evidence/configuration/schedule destinations. Incomplete
+  tours cannot be cured by inventing punches or dismissing exceptions; configuration
+  and schedule changes remain in their authoritative workflows.
+- ReportLab replaces the clipped one-page text PDF with landscape, wrapped, paginated
+  reports, repeated headers, company/period/run/approval metadata, numeric totals,
+  explicit unset amounts, snapshot notes and page numbers. It reads the saved snapshot
+  only; CSV/XLSX and the export gates/audit/notice lifecycle are unchanged.
+
+## Explicit employee rosters and pay-period calendar (2026-10-08)
+
+- The personnel Profile tab has a right-hand Client & site assignments card above Custom
+  fields. Owners/Admins/HR add or restore multiple client/site links inline and remove them
+  on the same card. Client links cover all that client's sites; scoped managers see only
+  assignments within their authority and cannot edit their own roster access.
+- Roster links grant scoped personnel/scheduling visibility before the first shift.
+  Removal blocks new assignments across draft/published shift saves, eligibility checks,
+  claims/trades, imports and recurring generation, but preserves existing shifts.
+  Existing shifts may be managed/shortened, not extended, moved or restored from cancellation.
+  Another active covering roster overrides the removal; reactivation reuses the link and
+  records an audit event.
+- Removed rosters expire at the end of the following calculated period after the last
+  non-cancelled shift. Cutoffs are snapshotted at removal; midnight shift ends use the period
+  just completed. No-shift removals use the current period. Branch and other roster grants
+  remain independent, as does site-based access to historical shifts. Legacy shift-derived
+  personnel visibility is retained only on targets without an explicit roster lifecycle.
+- Time/payroll policy now configures pay-period length in weeks and an anchor date on the
+  workweek starting weekday. Weekly is the backwards-compatible default; multi-week periods
+  require an anchor. Payroll offers compact calculated period navigation/prefill with
+  covered dates and an Advanced foldout for manual calendar-transition ranges. It opens
+  for validation errors and custom-range drafts. Company time-policy timezone/DST is respected;
+  overtime remains weekly. Migration 0071 adds the calendar and assignment table.
+
 ## SMS program disclosures (2026-10-07)
 
 - Migration 0070 adds company-specific public HTTPS privacy/terms URLs. Settings ->
@@ -2161,8 +2205,10 @@ cover, a client-agreed premium).
   otherwise.
 - **Exports carry the money columns.** CSV and XLSX gained `client`, `site`, `post`, `pay_rate`,
   `pay_rate_source`, `bill_rate`, `bill_rate_source`, `estimated_pay`, `estimated_bill`, and
-  `margin`; the PDF carries the reduced money view (`PAYROLL_PDF_FIELDS`) because sixteen
-  columns do not fit a fixed-width text page. A payroll run generated before this change exports
+  `margin`; the PDF carries a compact money view with employee/category/code, client/site,
+  hours/overtime, rates and estimates rather than every provenance column. It now uses a
+  wrapped landscape report (see Payroll evidence review and printable reports above).
+  A payroll run generated before this change exports
   with those cells blank rather than failing — the snapshot rows are read with `.get`.
 
 `estimated_pay` and `estimated_bill` are labelled *estimated* on purpose: this product does not run

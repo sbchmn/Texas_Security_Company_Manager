@@ -7,7 +7,7 @@ from pathlib import Path
 from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator, RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models, transaction
 from django.utils import timezone
 
@@ -1766,6 +1766,54 @@ class Shift(PostOrdersMixin, models.Model):
             if self.starts_at and not (parent.starts_at <= self.starts_at <= parent.ends_at):
                 raise ValidationError(
                     f"This post starts outside the tour it relieves ({parent.starts_at:%H:%M}–{parent.ends_at:%H:%M}).")
+        if self.officer_id and self.site_id and self.status != self.Status.CANCELLED:
+            from .rosters import roster_scheduling_refusal
+            refusal = roster_scheduling_refusal(self, self.officer)
+            if refusal:
+                raise ValidationError({"officer": refusal})
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        if self.officer_id and self.site_id and self.status != self.Status.CANCELLED:
+            from .rosters import roster_scheduling_refusal
+            officer = Person.objects.select_for_update().get(pk=self.officer_id)
+            refusal = roster_scheduling_refusal(self, officer)
+            if refusal:
+                raise ValidationError({"officer": refusal})
+        return super().save(*args, **kwargs)
+
+class PersonnelAssignment(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="personnel_assignments")
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="roster_assignments")
+    client = models.ForeignKey(Client, on_delete=models.PROTECT, null=True, blank=True, related_name="roster_assignments")
+    site = models.ForeignKey(Site, on_delete=models.PROTECT, null=True, blank=True, related_name="roster_assignments")
+    active = models.BooleanField(default=True)
+    assigned_at = models.DateTimeField(default=timezone.now)
+    removed_at = models.DateTimeField(null=True, blank=True)
+    last_shift_end = models.DateTimeField(null=True, blank=True)
+    roster_access_until = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=(models.Q(client__isnull=False, site__isnull=True)
+                | models.Q(client__isnull=True, site__isnull=False)), name="personnel_assignment_one_target"),
+            models.UniqueConstraint(fields=["person", "client"], name="unique_personnel_client_assignment"),
+            models.UniqueConstraint(fields=["person", "site"], name="unique_personnel_site_assignment"),
+        ]
+
+    @property
+    def label(self):
+        return f"Client: {self.client.name} (all sites)" if self.client_id else f"Site: {self.site.name} / {self.site.client.name}"
+
+    def clean(self):
+        if bool(self.client_id) == bool(self.site_id):
+            raise ValidationError("Choose either a client or a site.")
+        for target in (self.person, self.client if self.client_id else self.site):
+            if target.organization_id != self.organization_id:
+                raise ValidationError("Employee and assignment target must belong to the same company.")
+        if not self.active and (self.removed_at is None or self.roster_access_until is None):
+            raise ValidationError("Removed assignments require a removal time and roster access cutoff.")
+
 
 class ShiftClaim(models.Model):
     """An officer's request to take a published post that nobody is assigned to.
@@ -2405,6 +2453,11 @@ class TimePolicy(models.Model):
     organization = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name="time_policy")
     timezone = models.CharField(max_length=64, default="America/Chicago")
     workweek_start = models.PositiveSmallIntegerField(default=0, help_text="Monday is 0; Sunday is 6")
+    pay_period_weeks = models.PositiveSmallIntegerField(default=1,
+        validators=[MinValueValidator(1), MaxValueValidator(52)],
+        help_text="Length of a calculated pay period in whole weeks. Does not change weekly overtime.")
+    pay_period_anchor = models.DateField(null=True, blank=True,
+        help_text="An actual pay-period start date on the workweek starting weekday. Required for multi-week periods.")
     overtime_after_hours = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("40.00"))
     # PAY-5. The threshold was already configuration and the 1.5× multiple was not, which is
     # backwards: a firm whose contracts pay double time after the eighth hour, or a municipal
@@ -2449,6 +2502,10 @@ class TimePolicy(models.Model):
     revision = models.PositiveIntegerField(default=1)
     updated_at = models.DateTimeField(auto_now=True)
     def clean(self):
+        if self.pay_period_weeks and self.pay_period_weeks > 1 and self.pay_period_anchor is None:
+            raise ValidationError({"pay_period_anchor": "Enter a start date to identify which week begins the pay period."})
+        if self.pay_period_anchor and self.pay_period_anchor.weekday() != self.workweek_start:
+            raise ValidationError({"pay_period_anchor": "The anchor must fall on the workweek starting weekday."})
         if self.rounding_minutes not in (1, 5, 6, 10, 15, 30):
             raise ValidationError({"rounding_minutes": "Choose 1, 5, 6, 10, 15, or 30 minutes."})
 
