@@ -619,6 +619,7 @@ still allow the same-tenant case. `document_id` is `NOT NULL` under `on_delete=P
 | AUTH-1 | ~~Scope inherited from the person's own `Person.branch`~~ **Done 2026-10-03** | `AuthorityScope`, `ActorScope.for_membership` |
 | AUTH-2 | Client portals | `Client`, `AuthorityScope.client` |
 | AUTH-3 | ~~Per-organization approved-identity-domain rules~~ **Done 2026-10-03** (domains; tenant ids still owed) | global `MICROSOFT_OIDC_TENANT` env only |
+| AUTH-4 | Passkey quick sign-in for the PWA -- **Planned 2026-10-09; not implemented** | Existing login/MFA, account settings, [mobile rollout](mobile-rollout.md) |
 
 **DD §Authentication and authorization** states "Authorization can be scoped by organization,
 branch, client, and site" and "A company may restrict organizational roles to an approved Entra
@@ -671,6 +672,27 @@ its side effects.
   invoices and post orders for their own sites and nothing else. It needs `AuthorityScope`-like
   bounding for a non-employee principal, which does not exist yet — no Membership shape for an
   external viewer. Sequence it after §9 reporting, since a portal is largely reports with a fence.
+- **AUTH-4 -- passkey quick sign-in.** After normal sign-in and any required MFA, let a user
+  opt into quick sign-in by enrolling a WebAuthn passkey from account settings. On subsequent
+  online visits, offer "Unlock / Sign in" using the device's biometric or device-PIN prompt.
+  The OS/browser verifies the user; the application never receives the device PIN or biometric
+  data. The server verifies the signed challenge before establishing a session, rather than
+  accepting an app PIN that unlocks a stored bearer token. Feasibility is high on compatible
+  devices/browsers; estimated implementation complexity is moderate, subject to confirming
+  support in the installed authentication stack.
+  - Define how a user-verified passkey satisfies the existing MFA policy, including admin
+    access, without weakening required assurance or unnecessarily repeating TOTP.
+  - Keep normal login/MFA and an authorized recovery path for unsupported devices or lost
+    credentials. Account settings must support viewing and removing enrolled credentials;
+    removal must prevent their subsequent use.
+  - Treat reauthentication after inactivity as a separate, server-enforced policy decision.
+    Do not promise an unlock prompt on every PWA launch/resume: browser lifecycle behavior
+    varies. Offline authentication/unlock is outside this item's scope.
+  - **Done when:** enrollment and quick sign-in work on supported Android and iOS PWA
+    surfaces over the production HTTPS origin; user verification is required; invalid,
+    replayed, and revoked credentials are refused; existing account/company authorization,
+    MFA requirements, fallback login, and recovery remain enforced. Verify physical-device
+    behavior and document browser support and any native-wrapper limitations before rollout.
 - Scope choices on `/open-posts/` stay deliberately firm-wide (a guard may offer for any post they
   lawfully stand); that is a ruling, not a gap.
 

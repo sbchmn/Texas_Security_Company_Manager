@@ -146,7 +146,10 @@ class RequiredMfaMiddleware:
     # Gating that page back to enrollment closes the loop -- activate redirects to reauthenticate
     # which redirects to activate -- and the browser ends on the enrollment page with a fresh,
     # different secret on every load, so the factor could never be added.
-    ENROLLMENT_PATHS = ("/accounts/2fa/", "/accounts/reauthenticate/", "/accounts/logout/", "/static/")
+    ENROLLMENT_PATHS = (
+        "/accounts/2fa/", "/accounts/reauthenticate/",
+        "/accounts/logout/", "/static/",
+    )
     # Background resource redirects also GET enrollment and replace the session secret
     # behind the visible QR. Exempt only these shell reads; their view guards still apply.
     ENROLLMENT_RESOURCE_PATHS = frozenset({
@@ -168,6 +171,26 @@ class RequiredMfaMiddleware:
             if required:
                 from allauth.mfa.utils import is_mfa_enabled
                 if not is_mfa_enabled(request.user): return redirect(reverse("mfa_activate_totp"))
+                # Enrollment is not proof that this session completed a second-factor
+                # challenge. Django's admin login form authenticates passwords directly,
+                # outside allauth's MFA login stages. Require allauth's supported MFA
+                # reauthentication flow on every admin request until its authenticator
+                # records an MFA step in this session.
+                if (
+                    privileged
+                    and (request.path == "/admin" or request.path.startswith("/admin/"))
+                ):
+                    from allauth.account.authentication import get_authentication_records
+                    records = get_authentication_records(request)
+                    if not records or records[-1].get("method") != "mfa":
+                        from urllib.parse import urlencode
+
+                        next_url = request.get_full_path()
+                        challenge_url = (
+                            f"{reverse('mfa_reauthenticate')}?"
+                            f"{urlencode({'next': next_url})}"
+                        )
+                        return redirect(challenge_url)
         return self.get_response(request)
 
 

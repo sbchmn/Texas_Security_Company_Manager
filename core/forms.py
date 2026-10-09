@@ -10,6 +10,14 @@ class MembershipInvitationForm(WorkflowForm):
     email = forms.EmailField(help_text="The invitation is valid for 72 hours.")
     role = forms.ChoiceField(choices=((Membership.Role.OWNER, "Owner"), (Membership.Role.ADMIN, "Administrator")))
 
+    def __init__(self, *args, actor_role=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if actor_role != Membership.Role.OWNER:
+            self.fields["role"].choices = [
+                choice for choice in self.fields["role"].choices
+                if choice[0] != Membership.Role.OWNER
+            ]
+
     def clean_email(self):
         return self.cleaned_data["email"].strip().casefold()
 

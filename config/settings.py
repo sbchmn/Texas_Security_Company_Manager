@@ -37,9 +37,11 @@ LOGGING = {
     "disable_existing_loggers": False,
     "filters": {
         "require_debug_false": {"()": "django.utils.log.RequireDebugFalse"},
+        "credential_paths": {"()": "core.logging.CredentialPathRedactionFilter"},
     },
     "formatters": {
-        "standard": {"format": "{asctime} {levelname} {name}: {message}", "style": "{"},
+        "standard": {"()": "core.logging.CredentialPathRedactionFormatter",
+                     "format": "{asctime} {levelname} {name}: {message}", "style": "{"},
     },
     "handlers": {
         "console": {
@@ -47,11 +49,12 @@ LOGGING = {
             "stream": "ext://sys.stderr",
             "level": "WARNING",
             "formatter": "standard",
+            "filters": ["credential_paths"],
         },
         "mail_admins": {
-            "class": "django.utils.log.AdminEmailHandler",
+            "class": "core.logging.CredentialPathRedactionEmailHandler",
             "level": "ERROR",
-            "filters": ["require_debug_false"],
+            "filters": ["require_debug_false", "credential_paths"],
         },
     },
     "loggers": {
@@ -221,7 +224,8 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 SITE_ID = 1
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend", "allauth.account.auth_backends.AuthenticationBackend"]
-ACCOUNT_SIGNUP_ENABLED = False
+ACCOUNT_ADAPTER = "core.auth_adapters.InvitationOnlyAccountAdapter"
+SOCIALACCOUNT_ADAPTER = "core.auth_adapters.InvitationOnlySocialAccountAdapter"
 ACCOUNT_LOGIN_METHODS = {"email", "username"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "username*", "password1*", "password2*"]
 MFA_SUPPORTED_TYPES = ["totp", "recovery_codes"]

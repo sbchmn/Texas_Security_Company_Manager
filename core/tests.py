@@ -3,7 +3,7 @@ import uuid
 from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from .models import AuditEvent, AuditRedaction, AuditSeal, AuthorityScope, AvailabilityRule, Branch, Checkpoint, Client, ClockKiosk, ComplianceRule, Credential, CredentialRegistryCheck, CredentialType, CustomFieldDefinition, DeliveryEvent, DispositionRequest, DocumentType, HoldOver, ImportBatch, Membership, MembershipInvitation, MessageConsent, Notification, Suppression, OfflineClockDevice, OnboardingItem, OnboardingTask, Organization, OrganizationDomain, PayCategory, PayCode, PayrollLockSegment, PayrollRun, Person, PersonCustomValue, PersonDocument, Punch, PunchAdjustment, ShiftHourDesignation, ReportSnapshot, RuleRevision, Shift, ShiftClaim, ShiftExchange, ShiftSwap, ShiftTemplate, Site, TimeOffRequest, TimePolicy, TimePolicyOverride, TrainingRecord
 
@@ -101,6 +101,71 @@ class FirstVerticalSliceTest(TestCase):
     def test_officer_cannot_manage_team_access(self):
         self.client.force_login(self.officer)
         self.assertEqual(self.client.get(reverse("team")).status_code,403)
+
+    def test_administrator_cannot_issue_owner_even_with_a_forged_role_post(self):
+        administrator = get_user_model().objects.create_user(
+            username="team-admin@example.com", password="a sufficiently long password",
+        )
+        Membership.objects.create(
+            user=administrator, organization=self.org, role=Membership.Role.ADMIN,
+        )
+        self.client.force_login(administrator)
+        response = self.client.post(reverse("team"), {
+            "email": "forged-owner@example.com", "role": Membership.Role.OWNER,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(MembershipInvitation.objects.filter(
+            organization=self.org, email="forged-owner@example.com",
+        ).exists())
+        self.assertIn("role", response.context["form"].errors)
+
+    def test_owner_can_issue_and_grant_an_owner_invitation(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(reverse("team"), {
+            "email": "new-owner@example.com", "role": Membership.Role.OWNER,
+        }, follow=True)
+        self.assertEqual(response.status_code, 200)
+        token = response.context["invitation_url"].rstrip("/").rsplit("/", 1)[-1]
+        self.client.logout()
+        accepted = self.client.post(reverse("invitation_accept", args=[token]), {
+            "first_name": "New", "last_name": "Owner",
+            "password": "a sufficiently long passphrase",
+            "password_confirmation": "a sufficiently long passphrase",
+        })
+        self.assertRedirects(accepted, reverse("dashboard"))
+        self.assertTrue(Membership.objects.filter(
+            organization=self.org, user__email="new-owner@example.com",
+            role=Membership.Role.OWNER, active=True,
+        ).exists())
+
+    def test_owner_invitation_is_invalidated_if_issuer_loses_owner_authority(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(reverse("team"), {
+            "email": "stale-owner@example.com", "role": Membership.Role.OWNER,
+        }, follow=True)
+        token = response.context["invitation_url"].rstrip("/").rsplit("/", 1)[-1]
+        inviter_membership = Membership.objects.get(
+            organization=self.org, user=self.owner,
+        )
+        inviter_membership.role = Membership.Role.ADMIN
+        inviter_membership.save(update_fields=["role"])
+        self.client.logout()
+
+        rejected = self.client.post(reverse("invitation_accept", args=[token]), {
+            "first_name": "Stale", "last_name": "Owner",
+            "password": "a sufficiently long passphrase",
+            "password_confirmation": "a sufficiently long passphrase",
+        })
+        self.assertEqual(rejected.status_code, 410)
+        invitation = MembershipInvitation.objects.get(email="stale-owner@example.com")
+        self.assertIsNotNone(invitation.accepted_at)
+        self.assertFalse(Membership.objects.filter(
+            organization=self.org, user__email="stale-owner@example.com",
+        ).exists())
+        self.assertTrue(AuditEvent.objects.filter(
+            action="membership.invitation_invalidated",
+            target_id=str(invitation.pk),
+        ).exists())
 
     def test_authenticated_shell_has_accessibility_landmarks(self):
         self.client.force_login(self.owner)
@@ -1228,6 +1293,109 @@ class StaffMfaTest(TestCase):
         self.assertEqual(health.status_code,302)
         staff.is_staff=False; staff.save(update_fields=["is_staff"])
         self.assertEqual(self.client.get(reverse("health")).status_code,200)
+
+
+@override_settings(ADMIN_ALLOWED_IPS=["127.0.0.1/32"])
+class AdminMfaChallengeTest(TestCase):
+    def setUp(self):
+        from allauth.mfa.models import Authenticator
+        from allauth.mfa.utils import encrypt
+
+        self.secret = "JBSWY3DPEHPK3PXP"
+        self.user = get_user_model().objects.create_user(
+            username="admin-mfa@example.com", email="admin-mfa@example.com",
+            password="correct horse battery staple", is_staff=True,
+        )
+        Authenticator.objects.create(
+            user=self.user,
+            type=Authenticator.Type.TOTP,
+            data={"secret": encrypt(self.secret)},
+        )
+
+    def test_password_only_admin_login_is_stopped_at_a_real_mfa_challenge(self):
+        response = self.client.post("/admin/login/", {
+            "username": self.user.username,
+            "password": "correct horse battery staple",
+        })
+        self.assertEqual(response.status_code, 302)
+        admin = self.client.get("/admin/")
+        self.assertEqual(admin.status_code, 302)
+        self.assertIn(reverse("mfa_reauthenticate"), admin["Location"])
+        self.assertIn("next=%2Fadmin%2F", admin["Location"])
+
+    def test_valid_allauth_totp_reauthentication_unlocks_admin(self):
+        from unittest.mock import patch
+
+        from allauth.mfa import app_settings
+        from allauth.mfa.totp.internal.auth import format_hotp_value, hotp_value
+
+        self.client.force_login(self.user)
+        challenge = self.client.get("/admin/")
+        self.assertEqual(challenge.status_code, 302)
+        self.assertIn(reverse("mfa_reauthenticate"), challenge["Location"])
+        self.client.get(challenge["Location"])
+
+        now = 1_800_000_000
+        code = format_hotp_value(
+            hotp_value(self.secret, now // app_settings.TOTP_PERIOD)
+        )
+        with patch("allauth.mfa.totp.internal.auth.time.time", return_value=now):
+            response = self.client.post(reverse("mfa_reauthenticate"), {
+                "code": code, "next": "/admin/",
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/admin/")
+        self.assertEqual(self.client.get("/admin/").status_code, 200)
+
+
+class MyDocumentsTenantIsolationTest(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.linked_user = User.objects.create_user(
+            username="linked-worker@example.com", password="a sufficiently long password",
+        )
+        self.unlinked_user = User.objects.create_user(
+            username="unlinked-worker@example.com", password="a sufficiently long password",
+        )
+        self.organization = Organization.objects.create(
+            legal_name="Local records LLC", display_name="Local records", slug="local-records",
+        )
+        self.foreign_organization = Organization.objects.create(
+            legal_name="Foreign records LLC", display_name="Foreign records", slug="foreign-records",
+        )
+        for user in (self.linked_user, self.unlinked_user):
+            Membership.objects.create(
+                user=user, organization=self.organization, role=Membership.Role.OFFICER,
+            )
+        Person.objects.create(
+            organization=self.organization, user=self.linked_user,
+            first_name="Local", last_name="Worker",
+        )
+        document_type = DocumentType.objects.create(
+            organization=self.foreign_organization,
+            name="Foreign confidential handbook", code="foreign-handbook",
+            audience=DocumentType.Audience.WORKFORCE,
+        )
+        self.foreign_document = PersonDocument.objects.create(
+            organization=self.foreign_organization, person=None,
+            document_type=document_type, file="private/foreign-handbook.pdf",
+            original_name="FOREIGN_WORKFORCE_SECRET.pdf",
+            content_type="application/pdf", size=128, sha256="f" * 64,
+            scan_status=PersonDocument.ScanStatus.CLEAN,
+        )
+
+    def test_foreign_workforce_metadata_and_links_are_hidden_for_linked_and_unlinked_members(self):
+        for user in (self.linked_user, self.unlinked_user):
+            with self.subTest(linked=bool(user.person_profiles.exists())):
+                self.client.force_login(user)
+                response = self.client.get(reverse("my_documents"))
+                self.assertEqual(response.status_code, 200)
+                self.assertNotContains(response, "Foreign confidential handbook")
+                self.assertNotContains(response, "FOREIGN_WORKFORCE_SECRET.pdf")
+                self.assertNotContains(response, str(self.foreign_document.pk))
+                self.assertNotContains(
+                    response, reverse("document_download", args=[self.foreign_document.pk]),
+                )
 
 
 class PeopleCentricRecordsTest(TestCase):

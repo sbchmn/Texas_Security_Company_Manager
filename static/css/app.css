@@ -405,3 +405,49 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .sms-bubble{background:#e9e9eb;color:#111;border-radius:18px 18px 18px 4px;padding:12px 16px;max-width:340px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.4}
 .sms-meter{margin:12px 0}.sms-meter.over{color:#986500}
 .sms-placeholders{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0}.sms-placeholders dd{margin:0;color:#475569}
+
+/* Phone tables keep every value and action in a labeled, vertically readable row. */
+.mobile-cell-label,.schedule-mobile-hint{display:none}
+@media(max-width:1050px){
+  .panel{padding:16px;min-width:0}
+  .panel-head,.clock-header,.preview-head{flex-wrap:wrap;gap:10px}
+  .page-heading>*,.panel-head>*,.card-grid>*,.metric-grid>*,.settings-grid>*{min-width:0;max-width:100%}
+  .page,.panel,.card,.message,.profile-list dd,.authority-list dd{overflow-wrap:anywhere}
+  .card-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))}
+  .about-facts{grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr))}
+  input,select,textarea{min-width:0;max-width:100%}
+  select{overflow:hidden;text-overflow:ellipsis}
+  /* WebKit's native menu decoration can overflow even a correctly sized select. */
+  select:not([multiple]):not([size]){-webkit-appearance:none;appearance:none;background-image:url('../icons/chevron-down.svg');background-repeat:no-repeat;background-position:right 12px center;background-size:12px;padding-right:34px}
+  .button{max-width:100%;white-space:normal;text-align:center}
+  .person-row{flex-wrap:wrap}
+  .person-row>div{min-width:0}
+  .form-actions{flex-wrap:wrap}
+  .notification-filters>*,.filter-bar>*{min-width:0;max-width:100%}
+  .search-row>.tags{min-width:0;width:100%}
+  .search-row select{width:100%}
+  .segmented{max-width:100%;flex-wrap:wrap}
+  .segmented a,.segmented span,.payroll-period-picker strong{white-space:normal;overflow-wrap:anywhere;min-width:0}
+  .segmented a,.segmented>span{flex:1 1 0;text-align:center}
+  .payroll-period-picker strong{flex:2 1 0}
+  .qr-img{max-width:100%;height:auto;aspect-ratio:1}
+  .sms-placeholders{grid-template-columns:minmax(0,1fr)}
+  .sms-placeholders dd{margin-bottom:10px}
+  .figure{white-space:normal;overflow-wrap:anywhere}
+  .table-wrap{min-width:0;max-width:100%}
+  .mobile-table{display:block;min-width:0;width:100%;max-width:100%}
+  .mobile-table thead{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .mobile-table tbody,.mobile-table tfoot{display:block;width:100%}
+  .mobile-table tbody>tr:not([hidden]),.mobile-table tfoot>tr:not([hidden]){display:block;padding:12px 0;border-bottom:1px solid var(--line)}
+  .mobile-table tr[hidden]{display:none}
+  .mobile-table tbody>tr:last-child{border-bottom:0}
+  .mobile-table tbody>tr>td,.mobile-table tbody>tr>th,.mobile-table tfoot>tr>td{display:block;width:100%;min-width:0;max-width:none;padding:7px 0;border:0;white-space:normal;overflow-wrap:anywhere}
+  .mobile-table .mobile-cell-label{display:block;margin-bottom:4px;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+  .mobile-table .decide-form{min-width:0;width:100%}
+  .mobile-table .inline-form{width:100%}
+  .mobile-table .inline-form label{width:100%;min-width:0}
+  .mobile-table input,.mobile-table select,.mobile-table textarea{max-width:100%}
+  .schedule-mobile-hint{display:block;margin:0;padding:12px 14px;font-size:13px}
+  .schedule-grid-panel{padding:0}
+  .preview-head .muted{min-width:0;overflow-wrap:anywhere}
+}

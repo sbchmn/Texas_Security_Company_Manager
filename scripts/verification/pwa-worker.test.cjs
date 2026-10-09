@@ -54,6 +54,8 @@ test('installation caches only static assets, not business pages or login', asyn
   assert.equal(h.stores.size, 1);
   const assets = [...h.stores.values()][0];
   assert.ok([...assets.keys()].some(path => /^\/static\/js\/pwa(?:\.[a-f0-9]+)?\.js$/.test(path)));
+  assert.ok([...assets.keys()].some(path => /^\/static\/js\/mobile-layout(?:\.[a-f0-9]+)?\.js$/.test(path)));
+  assert.ok([...assets.keys()].some(path => /^\/static\/icons\/chevron-down(?:\.[a-f0-9]+)?\.svg$/.test(path)));
   assert.ok(!assets.has('/clock/'));
   assert.ok(!assets.has('/accounts/login/'));
 });

@@ -36,8 +36,9 @@ def manifest(request):
 @require_safe
 def service_worker(request):
     assets = [static(name) for name in (
-        "css/app.css", "css/timesheets.css", "js/app.js", "js/pwa.js",
+        "css/app.css", "css/timesheets.css", "js/app.js", "js/pwa.js", "js/mobile-layout.js",
         "icon.svg", "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png",
+        "icons/chevron-down.svg",
     )]
     revision = hashlib.sha256(json.dumps(assets).encode()).hexdigest()[:12]
     body = render_to_string("core/service_worker.js", {

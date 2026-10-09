@@ -19,5 +19,6 @@ exec gunicorn config.wsgi:application \
   --workers "${WEB_CONCURRENCY:-3}" \
   --timeout "${GUNICORN_TIMEOUT:-120}" \
   --graceful-timeout "${GUNICORN_GRACEFUL_TIMEOUT:-30}" \
+  --access-logformat '%(h)s %(t)s "%(m)s [path redacted] %(H)s" %(s)s %(b)s' \
   --access-logfile - \
   --error-logfile -

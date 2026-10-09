@@ -29,7 +29,9 @@ infrastructure is reviewed.
   Redis configuration fails closed at startup.
 - The Django admin is a platform surface and is restricted by source range
   (`ADMIN_ALLOWED_IPS`), which fails closed when production declares no range. Both the
-  tenant login form and `/admin/login/` are rate limited.
+  tenant login form and `/admin/login/` are rate limited. Admin access for an enrolled
+  staff account also requires an allauth-recorded MFA challenge in the current session;
+  enrollment alone is not accepted as proof.
 - Client identification is proxy-aware: `X-Forwarded-For` is honoured only from peers in
   `TRUSTED_PROXIES`, so a direct client cannot forge the address that keys its throttle
   bucket, and visitors behind one proxy do not share a bucket.
@@ -41,6 +43,17 @@ infrastructure is reviewed.
   to enrollment: each enrollment GET replaces the pending session secret and would
   invalidate the QR already displayed. Service-worker installation preloads refuse redirects
   so a gated clock request cannot rotate that secret or cache an enrollment page as the clock.
+- Public local and social-account creation is closed by the configured allauth adapters.
+  New application accounts are created through valid company invitations; existing linked
+  social accounts retain their normal sign-in path. Owner invitations can be issued only
+  by an active Owner and are rejected if the issuer loses that authority before acceptance.
+- Bootstrap provisioning refuses preexisting accounts unless their identity, verified
+  email, staff status, active Owner membership, and bootstrap audit history establish
+  provenance. A proven rerun does not reset passwords or silently repair account state.
+- Caddy access and proxy-error logs redact invitation and provider-webhook bearer path
+  segments on both configured hosts. Django redacts formatted exception tracebacks and
+  completed administrator error emails as well as request messages. Gunicorn access
+  lines omit request URIs entirely.
 - A restrictive Content Security Policy, Referrer Policy, Permissions Policy, and
   Cross-Origin-Opener Policy are applied by the application. Tenant theme variables are
   served through an authenticated CSS resource and the brand logo through an authenticated

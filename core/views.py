@@ -343,18 +343,39 @@ def brand_logo(request):
 @membership_required(*PRIVILEGED)
 @transaction.atomic
 def team(request):
-    form = MembershipInvitationForm(request.POST or None)
+    form = MembershipInvitationForm(
+        request.POST or None, actor_role=request.membership.role,
+    )
     invitation_url = request.session.pop("new_invitation_url", None)
     if request.method == "POST" and form.is_valid():
         email = form.cleaned_data["email"]
-        if request.organization.memberships.filter(user__email__iexact=email, active=True).exists():
+        role = form.cleaned_data["role"]
+        # Keep lock order consistent with invitation_accept: invitation first, issuer
+        # membership second. Otherwise replacement and acceptance can deadlock while
+        # waiting on each other's row locks.
+        replaced = list(MembershipInvitation.objects.select_for_update().filter(
+            organization=request.organization,
+            email__iexact=email,
+            accepted_at__isnull=True,
+        ))
+        # UI choices are not an authorization boundary; keep the invariant explicit at
+        # the grant point too, so a forged/stale form cannot let an Administrator confer
+        # ownership. Lock the current grant as well, so a concurrent demotion/deactivation
+        # cannot race issuance based on the membership resolved at request start.
+        issuer = Membership.objects.select_for_update().filter(
+            organization=request.organization, user=request.user, active=True,
+        ).first()
+        if not issuer or issuer.role not in PRIVILEGED:
+            form.add_error("role", "Your active membership no longer permits invitations.")
+        elif role == Membership.Role.OWNER and issuer.role != Membership.Role.OWNER:
+            form.add_error("role", "Only an Owner may invite another Owner.")
+        elif request.organization.memberships.filter(user__email__iexact=email, active=True).exists():
             form.add_error("email", "This person is already an active member.")
         else:
-            replaced = list(MembershipInvitation.objects.filter(organization=request.organization, email__iexact=email, accepted_at__isnull=True))
             for previous in replaced:
                 AuditEvent.objects.create(organization=request.organization, actor=request.user, action="membership.invitation_replaced", target_type="membership_invitation", target_id=str(previous.pk), metadata={"email": email})
                 previous.delete()
-            invitation, token = MembershipInvitation.issue(organization=request.organization, email=email, role=form.cleaned_data["role"], invited_by=request.user, expires_at=timezone.now() + timedelta(hours=72))
+            invitation, token = MembershipInvitation.issue(organization=request.organization, email=email, role=role, invited_by=request.user, expires_at=timezone.now() + timedelta(hours=72))
             AuditEvent.objects.create(organization=request.organization, actor=request.user, action="membership.invited", target_type="membership_invitation", target_id=str(invitation.pk), metadata={"email": email, "role": invitation.role})
             invitation_url=request.build_absolute_uri(reverse("invitation_accept", args=[token]))
             from .email_wording import render_email
@@ -498,9 +519,39 @@ def membership_access(request, membership_id):
 
 @transaction.atomic
 def invitation_accept(request, token):
-    invitation = MembershipInvitation.objects.select_for_update().select_related("organization", "person").filter(token_hash=MembershipInvitation.digest_token(token)).first()
+    invitation = MembershipInvitation.objects.select_for_update().select_related(
+        "organization", "person", "invited_by",
+    ).filter(token_hash=MembershipInvitation.digest_token(token)).first()
     if not invitation or invitation.accepted_at or invitation.expires_at <= timezone.now():
         return render(request, "core/invitation_accept.html", {"invalid": True}, status=410)
+    # Team invitations can grant platform-level company authority. Recheck that their
+    # issuer still holds the authority to make that particular grant; in particular an
+    # Owner invitation stays invalid if the issuer was removed or demoted after issuance.
+    # Lock the issuer grant to serialize acceptance with a concurrent role change.
+    if invitation.role in (Membership.Role.OWNER, Membership.Role.ADMIN):
+        issuer = Membership.objects.select_for_update().filter(
+            organization=invitation.organization,
+            user_id=invitation.invited_by_id,
+            active=True,
+        ).first()
+        issuer_role = issuer.role if issuer else None
+        may_issue = issuer_role in PRIVILEGED
+        if invitation.role == Membership.Role.OWNER:
+            may_issue = issuer_role == Membership.Role.OWNER
+        if not may_issue:
+            invitation.accepted_at = timezone.now()
+            invitation.save(update_fields=["accepted_at"])
+            AuditEvent.objects.create(
+                organization=invitation.organization,
+                actor=invitation.invited_by,
+                action="membership.invitation_invalidated",
+                target_type="membership_invitation",
+                target_id=str(invitation.pk),
+                metadata={"role": invitation.role, "reason": "issuer-no-longer-authorized"},
+            )
+            return render(
+                request, "core/invitation_accept.html", {"invalid": True}, status=410,
+            )
     User = get_user_model()
     existing = User.objects.filter(email__iexact=invitation.email).first() or User.objects.filter(username__iexact=invitation.email).first()
     if existing and (not request.user.is_authenticated or request.user.pk != existing.pk):
@@ -3846,7 +3897,12 @@ def my_documents(request):
         scope=Q(person=person)|_workforce_documents()
     else:
         scope=_workforce_documents()
-    records=PersonDocument.objects.filter(scope,deleted_at__isnull=True,archived_at__isnull=True,scan_status=PersonDocument.ScanStatus.CLEAN).filter(_record_visibility(request)).select_related("document_type").distinct()
+    records=PersonDocument.objects.filter(
+        organization=request.organization,
+    ).filter(
+        scope, deleted_at__isnull=True, archived_at__isnull=True,
+        scan_status=PersonDocument.ScanStatus.CLEAN,
+    ).filter(_record_visibility(request)).select_related("document_type").distinct()
     # Per-signer state, never the shared column: PersonDocument.acknowledged_at says someone
     # signed, so showing it here hid the Review action from every worker after the first one.
     acknowledged=set(DocumentAcknowledgment.objects.filter(

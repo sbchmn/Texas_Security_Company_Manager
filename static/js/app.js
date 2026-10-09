@@ -68,7 +68,14 @@ if (ordersDefaults) {
   });
   describe();
 }
-search?.addEventListener('input', () => { const q=search.value.toLowerCase(); document.querySelectorAll('[data-search-row]').forEach(row => row.hidden=!row.textContent.toLowerCase().includes(q)); });
+search?.addEventListener('input', () => {
+  const query = search.value.toLowerCase();
+  document.querySelectorAll('[data-search-row]').forEach(row => {
+    const content = row.cloneNode(true);
+    content.querySelectorAll('.mobile-cell-label').forEach(label => label.remove());
+    row.hidden = !content.textContent.toLowerCase().includes(query);
+  });
+});
 // Inline onsubmit handlers are blocked by the CSP (script-src 'self'), so destructive forms carry
 // their question in data-confirm instead.
 document.addEventListener('submit', event => {

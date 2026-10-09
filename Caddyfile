@@ -2,6 +2,16 @@
 	# Log rotation is left to the Docker json-file driver configured in compose.yaml.
 	admin off
 	skip_install_trust
+	# Proxy error logs also contain request URIs, independently of access logs.
+	log default {
+		format filter {
+			wrap console
+			fields {
+				request>uri regexp "^(/invitations/)[^/?]+" "$1[redacted]"
+				request>uri regexp "^(/webhooks/[^/]+/)[^/?]+" "$1[redacted]"
+			}
+		}
+	}
 	# Set CADDY_ACME_EMAIL_LINE to a full directive line, e.g.
 	#   CADDY_ACME_EMAIL_LINE=email ops@example.com
 	# to register the ACME account contact. Left unset, Caddy still issues certificates.
@@ -38,7 +48,15 @@
 	# this the failure was invisible from the container side.
 	log {
 		output stderr
-		format console
+		# Credentials appear as path segments in invitation and provider webhook URLs.
+		# Keep access details while replacing those bearer values before emission.
+		format filter {
+			wrap console
+			fields {
+				request>uri regexp "^(/invitations/)[^/?]+" "$1[redacted]"
+				request>uri regexp "^(/webhooks/[^/]+/)[^/?]+" "$1[redacted]"
+			}
+		}
 	}
 }
 
@@ -72,6 +90,12 @@
 
 	log {
 		output stderr
-		format console
+		format filter {
+			wrap console
+			fields {
+				request>uri regexp "^(/invitations/)[^/?]+" "$1[redacted]"
+				request>uri regexp "^(/webhooks/[^/]+/)[^/?]+" "$1[redacted]"
+			}
+		}
 	}
 }

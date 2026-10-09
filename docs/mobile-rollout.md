@@ -79,6 +79,18 @@ Point employees to `/install/` or **My account -> Install / mobile help**.
 
 Native packages are optional; home-screen installation is the lowest-friction first rollout.
 
+### Phone and narrow-tablet layouts
+
+Ordinary tables become labeled vertical rows at widths up to 1050px; every value and
+action remains available without sideways scrolling. This is a JavaScript enhancement;
+without JavaScript, the original table remains usable in its scroll container. Desktop
+tables keep their normal column layout. Long single-choice selections use a constrained
+field with the normal native option picker, not a replacement dropdown widget.
+
+The seven-day scheduling grid intentionally scrolls horizontally. Its phone/tablet hint
+offers **Day list** on the same schedule page for a vertically readable alternative.
+PDF/image preview surfaces remain document viewers rather than reformatted business pages.
+
 ## 2. Offline and update contract
 
 Only a **personnel-linked personal-device clock** is cached as a business document, after an
@@ -259,6 +271,15 @@ Automated web checks:
 
 The client lifecycle checks can be run with Node 22:
 `node --test scripts/verification/pwa-client.test.cjs`.
+
+Responsive-table mapping tests:
+`node --test scripts/verification/mobile-layout.test.cjs`.
+The browser regression suite, `scripts/verification/mobile-layout-browser.test.cjs`,
+requires Playwright 1.56.1 and its Chromium/WebKit engines (the official
+`mcr.microsoft.com/playwright:v1.56.1-noble` image provides the browser prerequisites).
+It checks long values and decision controls at 320/390/760/820/1050px, desktop table
+restoration at 1366px, and search filtering without counting decorative cell labels.
+Playwright is isolated verification tooling, not an application runtime dependency.
 
 `scripts/verification/pwa-worker.test.cjs` additionally executes the rendered worker with Node's
 built-in test runner. Set `TSCM_WORKER_FILE` to a locally downloaded worker response and run

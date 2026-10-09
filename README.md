@@ -257,6 +257,14 @@ environment variables, local development uses SQLite. This convenience fallback 
 the production database configuration. `config/settings.py` reads `.env` from the repository
 root unless `DOTENV_PATH` names another file.
 
+`bootstrap_admin` is an initial-provisioning command. It creates a new account only when
+no existing account matches the configured email. An existing account is accepted on rerun
+only when its exact identity, verified primary email, active Owner membership, staff status,
+and prior bootstrap audit event all match. A verified rerun does not change its password or
+repair account state. If any provenance check fails, the command stops without elevating
+or verifying the existing account; resolve that situation through a separately authorized
+operator recovery process rather than changing the bootstrap email to take ownership.
+
 ### Docker Compose
 
 ```bash
@@ -271,7 +279,8 @@ docker compose -f compose.yaml exec web python manage.py test
 ```
 
 Sign in with the bootstrap account. It is a Django staff user, so the first request
-redirects to TOTP enrollment before any screen is usable.
+redirects to TOTP enrollment before any screen is usable. Enrollment alone does not unlock
+the Django admin: every admin session must complete allauth's actual MFA challenge.
 
 `docker-compose.yml` is not part of this repository; `-f compose.yaml` is written out
 anyway so the commands behave the same on a host that has other stacks checked out nearby.

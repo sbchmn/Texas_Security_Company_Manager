@@ -1,5 +1,27 @@
 # Feature implementation status
 
+## Mobile layout review (2026-10-08)
+
+- Ordinary single-header tables become vertically readable, labeled rows through the
+  existing 1050px narrow-layout breakpoint. Values, forms and actions stay on the same
+  surface; desktop table layout and client-side search behavior are preserved.
+- Narrow headings, action groups, period navigation, report selectors and QR images stay
+  within the viewport. Single-choice selects keep their native picker, with a local
+  chevron replacing WebKit's overflowing native decoration. The worker caches both the
+  responsive enhancement and its chevron for the offline clock.
+- The seven-day schedule grid deliberately remains horizontally scrollable and keyboard
+  focusable. Its narrow-screen hint links to the existing Day list, which needs no sideways
+  scrolling. No page-wide overflow is hidden to mask a layout defect.
+- Browser measurements covered 88 owner-accessible page/tab variants at 320, 390, 760,
+  820 and 1366px, including expanded disclosures and punch-detail content. Anonymous
+  sign-in, signup, password reset and installation help also passed narrow-screen checks.
+  Twelve linked-officer/leave-review pages rendered in an isolated test database passed
+  120 additional Chromium/WebKit layout checks; all real application writes were blocked.
+  Synthetic Chromium/WebKit regressions cover long values, decision controls, hidden
+  search rows, semantic roles and desktop restoration. This is browser-layout validation,
+  not physical-device or screen-reader certification; data/role-specific states absent
+  from the local company still require the mobile rollout acceptance checklist.
+
 ## Mobile installation and package preparation (2026-10-08)
 
 - Stable deployment-level PWA identity, explicit scope/ID, PNG/maskable icons and Apple
@@ -669,8 +691,9 @@ liability with an API key attached.
   opt-out that *overwrites* its opt-in destroys the pair of facts a complaint defence is made of: asked,
   agreed, later withdrew. `wording` holds the disclosure as shown, because a recorded "yes" to a sentence
   nobody can reproduce is not evidence of anything.
-- **Captured where the account actually begins.** `ACCOUNT_SIGNUP_ENABLED = False`, so "sign-up" in this
-  product is `invitation_accept` — which now carries an optional number and tick and writes consent with
+- **Captured where the account actually begins.** The configured allauth account and social adapters
+  deny public account creation, so "sign-up" in this product is `invitation_accept` — which carries an
+  optional number and tick and writes consent with
   `source=signup`, the surface and IP in `evidence`. A number with no tick stores the number and writes
   **no row**: silence is not a refusal, and inventing a "no" would make a later real "yes" read as the
   reversal of something the person never declined. First sign-in asks once, on the dashboard, with the

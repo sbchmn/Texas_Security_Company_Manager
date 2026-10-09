@@ -40,7 +40,8 @@
   {% if site %}<div class="message">Filtered to {{ site.client.name }} &mdash; {{ site.name }}. <a href="?week={{ offset }}&amp;show={{ show }}{% if layout == 'list' %}&amp;layout=list{% endif %}">Show every site</a></div>{% endif %}
   {% if layout == 'grid' %}
     <section class="panel schedule-grid-panel" aria-label="Week grid">
-      <div class="schedule-grid-wrap">
+      <p class="schedule-mobile-hint">The week grid scrolls across all seven days. <a href="?week={{ offset }}&amp;show={{ show }}{% if site %}&amp;site={{ site.pk }}{% endif %}&amp;layout=list">Use Day list without sideways scrolling</a>.</p>
+      <div class="schedule-grid-wrap" tabindex="0" role="region" aria-label="Seven-day schedule; scroll horizontally or use Day list">
         <table class="schedule-grid">
           <thead><tr>
             <th scope="col" class="grid-corner">Officer</th>

@@ -51,6 +51,7 @@ class PwaRolloutTest(TestCase):
         self.assertContains(page, 'rel="apple-touch-icon"')
         self.assertContains(page, "apple-mobile-web-app-capable")
         self.assertContains(page, "js/pwa.js")
+        self.assertContains(page, "js/mobile-layout.js")
         help_page = self.client.get(reverse("install_app"))
         for text in ("Android", "iPhone", "Add to Home Screen", "12 hours", "personal device",
                      "clearing browser data", "data-pwa-install"):
@@ -86,6 +87,7 @@ class PwaRolloutTest(TestCase):
         body = response.content.decode()
         self.assertNotIn("{{", body)
         self.assertIn("X-TSCM-Offline-Clock", body)
+        self.assertIn("/static/js/mobile-layout", body)
         self.assertIn('url.pathname==="/"', body)
         self.assertIn("data-clock-stale", body)
         self.assertIn('name.startsWith("tscm-shell-")', body)
