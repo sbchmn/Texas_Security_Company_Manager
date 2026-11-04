@@ -114,7 +114,7 @@ jobs:
           exit 1
       - name: Remove the smoke container before scanning
         run: docker rm -f smoke
-      - uses: aquasecurity/trivy-action@0.33.1
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: tscm:${{ github.sha }}
           format: table
